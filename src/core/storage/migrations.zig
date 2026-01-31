@@ -77,8 +77,8 @@ pub const migrations = [_]Migration{
         \\    priority INTEGER NOT NULL DEFAULT 0,
         \\    app_pattern VARCHAR,
         \\    title_pattern VARCHAR,
-        \\    activity_id INTEGER REFERENCES activities(activity_id),
-        \\    kind_id INTEGER REFERENCES kinds(kind_id),
+        \\    activity_id INTEGER,
+        \\    kind_id INTEGER,
         \\    created_at TIMESTAMP DEFAULT current_timestamp
         \\)
         ,

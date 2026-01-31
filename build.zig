@@ -62,6 +62,17 @@ pub fn build(b: *std.Build) void {
     hierarchy_module.addIncludePath(duckdb_include_path);
     hierarchy_module.addLibraryPath(duckdb_lib_path);
 
+    const rules_module = b.createModule(.{
+        .root_source_file = b.path("src/core/mapping/rules.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "migrations", .module = migrations_module },
+        },
+    });
+    rules_module.addIncludePath(duckdb_include_path);
+    rules_module.addLibraryPath(duckdb_lib_path);
+
     // --- 1. Compile Zig to object file ---
     const zig_obj = b.addObject(.{
         .name = "main",
@@ -217,6 +228,23 @@ pub fn build(b: *std.Build) void {
     hierarchy_tests.root_module.addLibraryPath(duckdb_lib_path);
     linkDuckDbStatic(hierarchy_tests);
     test_step.dependOn(&b.addRunArtifact(hierarchy_tests).step);
+
+    // Rules engine tests
+    const rules_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/mapping/rules_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "migrations", .module = migrations_module },
+                .{ .name = "rules", .module = rules_module },
+            },
+        }),
+    });
+    rules_tests.root_module.addIncludePath(duckdb_include_path);
+    rules_tests.root_module.addLibraryPath(duckdb_lib_path);
+    linkDuckDbStatic(rules_tests);
+    test_step.dependOn(&b.addRunArtifact(rules_tests).step);
 }
 
 fn linkDuckDbStatic(compile: *std.Build.Step.Compile) void {
