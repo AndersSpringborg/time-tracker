@@ -43,6 +43,25 @@ pub fn build(b: *std.Build) void {
     query_module.addIncludePath(duckdb_include_path);
     query_module.addLibraryPath(duckdb_lib_path);
 
+    const migrations_module = b.createModule(.{
+        .root_source_file = b.path("src/core/storage/migrations.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    migrations_module.addIncludePath(duckdb_include_path);
+    migrations_module.addLibraryPath(duckdb_lib_path);
+
+    const hierarchy_module = b.createModule(.{
+        .root_source_file = b.path("src/core/import/hierarchy.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "migrations", .module = migrations_module },
+        },
+    });
+    hierarchy_module.addIncludePath(duckdb_include_path);
+    hierarchy_module.addLibraryPath(duckdb_lib_path);
+
     // --- 1. Compile Zig to object file ---
     const zig_obj = b.addObject(.{
         .name = "main",
@@ -181,6 +200,23 @@ pub fn build(b: *std.Build) void {
     migrations_tests.root_module.addLibraryPath(duckdb_lib_path);
     linkDuckDbStatic(migrations_tests);
     test_step.dependOn(&b.addRunArtifact(migrations_tests).step);
+
+    // Hierarchy import tests
+    const hierarchy_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/import/hierarchy_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "migrations", .module = migrations_module },
+                .{ .name = "hierarchy", .module = hierarchy_module },
+            },
+        }),
+    });
+    hierarchy_tests.root_module.addIncludePath(duckdb_include_path);
+    hierarchy_tests.root_module.addLibraryPath(duckdb_lib_path);
+    linkDuckDbStatic(hierarchy_tests);
+    test_step.dependOn(&b.addRunArtifact(hierarchy_tests).step);
 }
 
 fn linkDuckDbStatic(compile: *std.Build.Step.Compile) void {
