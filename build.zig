@@ -4,9 +4,9 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // DuckDB paths for development (dynamic linking)
-    const duckdb_include_path: std.Build.LazyPath = .{ .cwd_relative = "/opt/homebrew/opt/duckdb/include" };
-    const duckdb_lib_path: std.Build.LazyPath = .{ .cwd_relative = "/opt/homebrew/opt/duckdb/lib" };
+    // Always use vendored DuckDB
+    const duckdb_include_path: std.Build.LazyPath = .{ .cwd_relative = "vendor/duckdb/include" };
+    const duckdb_lib_path: std.Build.LazyPath = .{ .cwd_relative = "vendor/duckdb/lib" };
 
     // --- Shared modules ---
     const event_module = b.createModule(.{
@@ -35,6 +35,14 @@ pub fn build(b: *std.Build) void {
     duckdb_repo_module.addIncludePath(duckdb_include_path);
     duckdb_repo_module.addLibraryPath(duckdb_lib_path);
 
+    const query_module = b.createModule(.{
+        .root_source_file = b.path("src/core/cli/query.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    query_module.addIncludePath(duckdb_include_path);
+    query_module.addLibraryPath(duckdb_lib_path);
+
     // --- 1. Compile Zig to object file ---
     const zig_obj = b.addObject(.{
         .name = "main",
@@ -46,6 +54,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "event", .module = event_module },
                 .{ .name = "tracker", .module = tracker_module },
                 .{ .name = "duckdb_repository", .module = duckdb_repo_module },
+                .{ .name = "query", .module = query_module },
             },
         }),
     });
@@ -63,7 +72,7 @@ pub fn build(b: *std.Build) void {
     const swift_obj = swift_cmd.addOutputFileArg("macos_bridge.o");
     swift_cmd.addFileArg(b.path("src/bridge/macos_bridge.swift"));
 
-    // --- 3. Link everything with swiftc (it knows how to find Swift runtime) ---
+    // --- 3. Link everything with swiftc ---
     const link_cmd = b.addSystemCommand(&.{"swiftc"});
 
     // Add Zig object file
@@ -72,13 +81,27 @@ pub fn build(b: *std.Build) void {
     // Add Swift object file
     link_cmd.addFileArg(swift_obj);
 
-    // Link frameworks
+    // Link frameworks and vendored DuckDB static libraries
     link_cmd.addArgs(&.{
-        "-framework", "Foundation",
-        "-framework", "Cocoa",
-        "-framework", "ApplicationServices",
-        "-L",         "/opt/homebrew/opt/duckdb/lib",
-        "-lduckdb",   "-lc++",
+        "-framework",           "Foundation",
+        "-framework",           "Cocoa",
+        "-framework",           "ApplicationServices",
+        "-framework",           "CoreWLAN",
+        "-L",                   "vendor/duckdb/lib",
+        // DuckDB core static library
+        "-lduckdb_static",
+        // DuckDB extensions (required by static build)
+             "-lcore_functions_extension",
+        "-licu_extension",      "-ljson_extension",
+        "-lparquet_extension",  "-lautocomplete_extension",
+        // DuckDB dependencies
+        "-lduckdb_fastpforlib", "-lduckdb_fmt",
+        "-lduckdb_fsst",        "-lduckdb_hyperloglog",
+        "-lduckdb_mbedtls",     "-lduckdb_miniz",
+        "-lduckdb_pg_query",    "-lduckdb_re2",
+        "-lduckdb_skiplistlib", "-lduckdb_utf8proc",
+        "-lduckdb_yyjson",      "-lduckdb_zstd",
+        "-lc++",
     });
 
     // Output binary
@@ -90,7 +113,7 @@ pub fn build(b: *std.Build) void {
     b.getInstallStep().dependOn(&install.step);
 
     // --- Run step ---
-    const run_step = b.step("run", "Run the tracker demo");
+    const run_step = b.step("run", "Run the tracker");
     const run_cmd = std.Build.Step.Run.create(b, &.{});
     run_cmd.addFileArg(exe_output);
     run_step.dependOn(&run_cmd.step);
@@ -143,7 +166,41 @@ pub fn build(b: *std.Build) void {
     });
     duckdb_repo_tests.root_module.addIncludePath(duckdb_include_path);
     duckdb_repo_tests.root_module.addLibraryPath(duckdb_lib_path);
-    duckdb_repo_tests.linkSystemLibrary2("duckdb", .{ .preferred_link_mode = .dynamic });
-    duckdb_repo_tests.linkLibCpp();
+    linkDuckDbStatic(duckdb_repo_tests);
     test_step.dependOn(&b.addRunArtifact(duckdb_repo_tests).step);
+
+    // Migrations tests
+    const migrations_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/storage/migrations_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    migrations_tests.root_module.addIncludePath(duckdb_include_path);
+    migrations_tests.root_module.addLibraryPath(duckdb_lib_path);
+    linkDuckDbStatic(migrations_tests);
+    test_step.dependOn(&b.addRunArtifact(migrations_tests).step);
+}
+
+fn linkDuckDbStatic(compile: *std.Build.Step.Compile) void {
+    compile.addObjectFile(.{ .cwd_relative = "vendor/duckdb/lib/libduckdb_static.a" });
+    compile.addObjectFile(.{ .cwd_relative = "vendor/duckdb/lib/libcore_functions_extension.a" });
+    compile.addObjectFile(.{ .cwd_relative = "vendor/duckdb/lib/libicu_extension.a" });
+    compile.addObjectFile(.{ .cwd_relative = "vendor/duckdb/lib/libjson_extension.a" });
+    compile.addObjectFile(.{ .cwd_relative = "vendor/duckdb/lib/libparquet_extension.a" });
+    compile.addObjectFile(.{ .cwd_relative = "vendor/duckdb/lib/libautocomplete_extension.a" });
+    compile.addObjectFile(.{ .cwd_relative = "vendor/duckdb/lib/libduckdb_fastpforlib.a" });
+    compile.addObjectFile(.{ .cwd_relative = "vendor/duckdb/lib/libduckdb_fmt.a" });
+    compile.addObjectFile(.{ .cwd_relative = "vendor/duckdb/lib/libduckdb_fsst.a" });
+    compile.addObjectFile(.{ .cwd_relative = "vendor/duckdb/lib/libduckdb_hyperloglog.a" });
+    compile.addObjectFile(.{ .cwd_relative = "vendor/duckdb/lib/libduckdb_mbedtls.a" });
+    compile.addObjectFile(.{ .cwd_relative = "vendor/duckdb/lib/libduckdb_miniz.a" });
+    compile.addObjectFile(.{ .cwd_relative = "vendor/duckdb/lib/libduckdb_pg_query.a" });
+    compile.addObjectFile(.{ .cwd_relative = "vendor/duckdb/lib/libduckdb_re2.a" });
+    compile.addObjectFile(.{ .cwd_relative = "vendor/duckdb/lib/libduckdb_skiplistlib.a" });
+    compile.addObjectFile(.{ .cwd_relative = "vendor/duckdb/lib/libduckdb_utf8proc.a" });
+    compile.addObjectFile(.{ .cwd_relative = "vendor/duckdb/lib/libduckdb_yyjson.a" });
+    compile.addObjectFile(.{ .cwd_relative = "vendor/duckdb/lib/libduckdb_zstd.a" });
+    compile.linkLibCpp();
 }

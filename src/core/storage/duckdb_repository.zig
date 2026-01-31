@@ -1,8 +1,8 @@
 const std = @import("std");
 const Event = @import("event").Event;
-const c = @cImport({
-    @cInclude("duckdb.h");
-});
+const migrations = @import("migrations.zig");
+const Migrator = migrations.Migrator;
+const c = migrations.c;
 
 pub const DuckDbError = error{
     OpenFailed,
@@ -14,28 +14,18 @@ pub const DuckDbError = error{
 pub const StoredEvent = struct {
     app_name: []const u8,
     window_title: []const u8,
+    wifi_ssid: []const u8,
     duration_ms: i64,
 
     // Buffers for storing string data
     app_name_buf: [256]u8 = undefined,
     window_title_buf: [512]u8 = undefined,
+    wifi_ssid_buf: [64]u8 = undefined,
 };
 
 pub const DuckDbRepository = struct {
     db: c.duckdb_database,
     conn: c.duckdb_connection,
-
-    const create_table_sql =
-        \\CREATE SEQUENCE IF NOT EXISTS events_seq;
-        \\CREATE TABLE IF NOT EXISTS events (
-        \\    id INTEGER PRIMARY KEY DEFAULT nextval('events_seq'),
-        \\    timestamp_ms BIGINT NOT NULL,
-        \\    app_name VARCHAR NOT NULL,
-        \\    window_title VARCHAR NOT NULL,
-        \\    duration_ms BIGINT NOT NULL,
-        \\    created_at TIMESTAMP DEFAULT current_timestamp
-        \\)
-    ;
 
     pub fn initInMemory() DuckDbError!DuckDbRepository {
         return init(":memory:");
@@ -54,18 +44,22 @@ pub const DuckDbRepository = struct {
             return DuckDbError.ConnectFailed;
         }
 
-        var repo = DuckDbRepository{
-            .db = db,
-            .conn = conn,
+        // Run migrations
+        var migrator = Migrator.init(conn) catch {
+            c.duckdb_disconnect(&conn);
+            c.duckdb_close(&db);
+            return DuckDbError.QueryFailed;
         };
-
-        // Create events table
-        repo.execQuery(create_table_sql) catch {
-            repo.deinit();
+        migrator.run() catch {
+            c.duckdb_disconnect(&conn);
+            c.duckdb_close(&db);
             return DuckDbError.QueryFailed;
         };
 
-        return repo;
+        return DuckDbRepository{
+            .db = db,
+            .conn = conn,
+        };
     }
 
     pub fn deinit(self: *DuckDbRepository) void {
@@ -77,7 +71,7 @@ pub const DuckDbRepository = struct {
         // Use prepared statement to avoid SQL injection
         var stmt: c.duckdb_prepared_statement = undefined;
 
-        const insert_sql = "INSERT INTO events (timestamp_ms, app_name, window_title, duration_ms) VALUES (?, ?, ?, ?)";
+        const insert_sql = "INSERT INTO events (timestamp_ms, app_name, window_title, wifi_ssid, duration_ms) VALUES (?, ?, ?, ?, ?)";
 
         if (c.duckdb_prepare(self.conn, insert_sql, &stmt) == c.DuckDBError) {
             std.debug.print("Failed to prepare insert statement\n", .{});
@@ -89,7 +83,8 @@ pub const DuckDbRepository = struct {
         _ = c.duckdb_bind_int64(stmt, 1, event.timestamp_ms);
         _ = c.duckdb_bind_varchar_length(stmt, 2, event.app_name.ptr, event.app_name.len);
         _ = c.duckdb_bind_varchar_length(stmt, 3, event.window_title.ptr, event.window_title.len);
-        _ = c.duckdb_bind_int64(stmt, 4, duration_ms);
+        _ = c.duckdb_bind_varchar_length(stmt, 4, event.wifi_ssid.ptr, event.wifi_ssid.len);
+        _ = c.duckdb_bind_int64(stmt, 5, duration_ms);
 
         // Execute
         var result: c.duckdb_result = undefined;
@@ -114,7 +109,7 @@ pub const DuckDbRepository = struct {
     pub fn getLastEvent(self: *DuckDbRepository) DuckDbError!StoredEvent {
         var result: c.duckdb_result = undefined;
 
-        const query = "SELECT app_name, window_title, duration_ms FROM events ORDER BY id DESC LIMIT 1";
+        const query = "SELECT app_name, window_title, wifi_ssid, duration_ms FROM events ORDER BY id DESC LIMIT 1";
         if (c.duckdb_query(self.conn, query, &result) == c.DuckDBError) {
             return DuckDbError.QueryFailed;
         }
@@ -128,6 +123,7 @@ pub const DuckDbRepository = struct {
         var stored = StoredEvent{
             .app_name = undefined,
             .window_title = undefined,
+            .wifi_ssid = undefined,
             .duration_ms = 0,
         };
 
@@ -149,8 +145,17 @@ pub const DuckDbRepository = struct {
             c.duckdb_free(title_ptr);
         }
 
-        // Get duration_ms (column 2)
-        stored.duration_ms = c.duckdb_value_int64(&result, 2, 0);
+        // Get wifi_ssid (column 2)
+        const wifi_ptr = c.duckdb_value_varchar(&result, 2, 0);
+        if (wifi_ptr != null) {
+            const wifi_len = std.mem.len(wifi_ptr);
+            @memcpy(stored.wifi_ssid_buf[0..wifi_len], wifi_ptr[0..wifi_len]);
+            stored.wifi_ssid = stored.wifi_ssid_buf[0..wifi_len];
+            c.duckdb_free(wifi_ptr);
+        }
+
+        // Get duration_ms (column 3)
+        stored.duration_ms = c.duckdb_value_int64(&result, 3, 0);
 
         return stored;
     }
