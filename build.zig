@@ -74,6 +74,17 @@ pub fn build(b: *std.Build) void {
     rules_module.addIncludePath(duckdb_include_path);
     rules_module.addLibraryPath(duckdb_lib_path);
 
+    const review_module = b.createModule(.{
+        .root_source_file = b.path("src/core/cli/review.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "migrations", .module = migrations_module },
+        },
+    });
+    review_module.addIncludePath(duckdb_include_path);
+    review_module.addLibraryPath(duckdb_lib_path);
+
     // --- 1. Compile Zig to object file ---
     const zig_obj = b.addObject(.{
         .name = "main",
@@ -89,6 +100,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "migrations", .module = migrations_module },
                 .{ .name = "hierarchy", .module = hierarchy_module },
                 .{ .name = "rules", .module = rules_module },
+                .{ .name = "review", .module = review_module },
             },
         }),
     });
@@ -251,6 +263,23 @@ pub fn build(b: *std.Build) void {
     rules_tests.root_module.addLibraryPath(duckdb_lib_path);
     linkDuckDbStatic(rules_tests);
     test_step.dependOn(&b.addRunArtifact(rules_tests).step);
+
+    // Review tests
+    const review_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/cli/review_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "migrations", .module = migrations_module },
+                .{ .name = "review", .module = review_module },
+            },
+        }),
+    });
+    review_tests.root_module.addIncludePath(duckdb_include_path);
+    review_tests.root_module.addLibraryPath(duckdb_lib_path);
+    linkDuckDbStatic(review_tests);
+    test_step.dependOn(&b.addRunArtifact(review_tests).step);
 }
 
 fn linkDuckDbStatic(compile: *std.Build.Step.Compile) void {

@@ -5,6 +5,7 @@ const query = @import("query");
 const migrations = @import("migrations");
 const hierarchy = @import("hierarchy");
 const rules = @import("rules");
+const review = @import("review");
 
 // Import functions from Swift bridge (only used in daemon mode)
 extern fn check_accessibility() bool;
@@ -280,6 +281,19 @@ fn parseTimeRange(args: []const [:0]const u8) query.TimeRange {
         if (std.mem.eql(u8, arg, "--today")) return .today;
     }
     return .today; // default
+}
+
+/// Read a line from stdin into the provided buffer, returning a slice of the data read.
+fn readLine(buf: []u8) ![]u8 {
+    const bytes_read = std.posix.read(std.posix.STDIN_FILENO, buf) catch |err| {
+        return err;
+    };
+
+    if (bytes_read == 0) {
+        return error.EndOfStream;
+    }
+
+    return buf[0..bytes_read];
 }
 
 fn runImport(allocator: std.mem.Allocator, args: []const [:0]const u8) void {
@@ -578,6 +592,211 @@ fn runApplyRules(allocator: std.mem.Allocator) void {
     std.debug.print("Applied rules to {d} events (out of {d} unmapped).\n", .{ matched, row_count });
 }
 
+fn runReview(allocator: std.mem.Allocator) void {
+    const db_path = getDbPath(allocator) catch |err| {
+        std.debug.print("Failed to determine database path: {}\n", .{err});
+        return;
+    };
+    defer allocator.free(db_path);
+
+    const c = migrations.c;
+    var db: c.duckdb_database = undefined;
+    var conn: c.duckdb_connection = undefined;
+
+    if (c.duckdb_open(db_path.ptr, &db) == c.DuckDBError) {
+        std.debug.print("Failed to open database\n", .{});
+        return;
+    }
+    defer c.duckdb_close(&db);
+
+    if (c.duckdb_connect(db, &conn) == c.DuckDBError) {
+        std.debug.print("Failed to connect to database\n", .{});
+        return;
+    }
+    defer c.duckdb_disconnect(&conn);
+
+    // Run migrations first
+    var migrator = migrations.Migrator.init(conn) catch |err| {
+        std.debug.print("Failed to init migrator: {}\n", .{err});
+        return;
+    };
+    migrator.run() catch |err| {
+        std.debug.print("Failed to run migrations: {}\n", .{err});
+        return;
+    };
+
+    var reviewer = review.Reviewer.init(conn, allocator);
+
+    // Get unmapped events
+    const events = reviewer.getUnmappedEvents() catch |err| {
+        std.debug.print("Failed to get unmapped events: {}\n", .{err});
+        return;
+    };
+    defer allocator.free(events);
+
+    if (events.len == 0) {
+        std.debug.print("No unmapped events to review.\n", .{});
+        return;
+    }
+
+    std.debug.print("\n=== Interactive Event Review ===\n", .{});
+    std.debug.print("Found {d} unmapped events.\n\n", .{events.len});
+
+    var input_buf: [512]u8 = undefined;
+
+    var i: usize = 0;
+    while (i < events.len) {
+        const event = events[i];
+
+        // Format duration
+        var dur_buf: [32]u8 = undefined;
+        const duration = query.formatDuration(event.duration_ms, &dur_buf);
+
+        std.debug.print("--- Event {d}/{d} ---\n", .{ i + 1, events.len });
+        std.debug.print("App:      {s}\n", .{event.app_name});
+        std.debug.print("Title:    {s}\n", .{event.window_title});
+        std.debug.print("Duration: {s}\n", .{duration});
+        std.debug.print("\nActions: [s]earch, [n]ext, [q]uit\n", .{});
+        std.debug.print("> ", .{});
+
+        const line = readLine(&input_buf) catch {
+            std.debug.print("\nGoodbye!\n", .{});
+            return;
+        };
+
+        const trimmed = std.mem.trim(u8, line, " \t\r\n");
+
+        if (trimmed.len == 0 or std.mem.eql(u8, trimmed, "n")) {
+            i += 1;
+            continue;
+        }
+
+        if (std.mem.eql(u8, trimmed, "q")) {
+            std.debug.print("\nExiting review.\n", .{});
+            return;
+        }
+
+        if (std.mem.eql(u8, trimmed, "s") or std.mem.startsWith(u8, trimmed, "s ")) {
+            // Search mode - prompt for search term
+            var search_term: []const u8 = undefined;
+
+            if (trimmed.len > 2) {
+                search_term = trimmed[2..];
+            } else {
+                std.debug.print("Enter search term: ", .{});
+                const search_line = readLine(&input_buf) catch {
+                    continue;
+                };
+                search_term = std.mem.trim(u8, search_line, " \t\r\n");
+            }
+
+            if (search_term.len == 0) {
+                continue;
+            }
+
+            // Search the hierarchy
+            const matches = reviewer.searchFullHierarchy(search_term) catch |err| {
+                std.debug.print("Search failed: {}\n", .{err});
+                continue;
+            };
+            defer {
+                for (matches) |m| {
+                    allocator.free(m.display_path);
+                }
+                allocator.free(matches);
+            }
+
+            if (matches.len == 0) {
+                std.debug.print("No matches found for '{s}'.\n\n", .{search_term});
+                continue;
+            }
+
+            std.debug.print("\nSearch results:\n", .{});
+            for (matches, 0..) |m, idx| {
+                std.debug.print("  [{d}] {s}\n", .{ idx + 1, m.display_path });
+            }
+            std.debug.print("  [0] Cancel\n", .{});
+            std.debug.print("\nSelect (1-{d}): ", .{matches.len});
+
+            const select_line = readLine(&input_buf) catch {
+                continue;
+            };
+            const select_trimmed = std.mem.trim(u8, select_line, " \t\r\n");
+            const selection = std.fmt.parseInt(usize, select_trimmed, 10) catch {
+                std.debug.print("Invalid selection.\n\n", .{});
+                continue;
+            };
+
+            if (selection == 0 or selection > matches.len) {
+                std.debug.print("Cancelled.\n\n", .{});
+                continue;
+            }
+
+            const selected = matches[selection - 1];
+
+            // Map the event
+            reviewer.mapEvent(event.id, selected.activity_id, selected.kind_id, true) catch |err| {
+                std.debug.print("Failed to map event: {}\n", .{err});
+                continue;
+            };
+
+            std.debug.print("Event mapped to: {s}\n", .{selected.display_path});
+
+            // Ask if they want to create a rule
+            std.debug.print("\nCreate rule for similar events? [y/N]: ", .{});
+            const rule_line = readLine(&input_buf) catch {
+                i += 1;
+                continue;
+            };
+            const rule_trimmed = std.mem.trim(u8, rule_line, " \t\r\n");
+
+            if (std.mem.eql(u8, rule_trimmed, "y") or std.mem.eql(u8, rule_trimmed, "Y")) {
+                // Ask for patterns
+                std.debug.print("App pattern (default: '{s}'): ", .{event.app_name});
+                const app_line = readLine(&input_buf) catch {
+                    i += 1;
+                    continue;
+                };
+                var app_pattern = std.mem.trim(u8, app_line, " \t\r\n");
+                if (app_pattern.len == 0) {
+                    app_pattern = event.app_name;
+                }
+
+                std.debug.print("Title pattern (default: '*', current: '{s}'): ", .{event.window_title});
+                const title_line = readLine(&input_buf) catch {
+                    i += 1;
+                    continue;
+                };
+                var title_pattern = std.mem.trim(u8, title_line, " \t\r\n");
+                if (title_pattern.len == 0) {
+                    title_pattern = "*";
+                }
+
+                // Create the rule
+                var engine = rules.RulesEngine.init(conn, allocator);
+                engine.addRule(.{
+                    .app_pattern = app_pattern,
+                    .title_pattern = if (std.mem.eql(u8, title_pattern, "*")) null else title_pattern,
+                    .activity_id = selected.activity_id,
+                    .kind_id = selected.kind_id,
+                    .priority = 0,
+                }) catch |err| {
+                    std.debug.print("Failed to create rule: {}\n", .{err});
+                    i += 1;
+                    continue;
+                };
+
+                std.debug.print("Rule created: app='{s}', title='{s}'\n", .{ app_pattern, title_pattern });
+            }
+
+            i += 1;
+            std.debug.print("\n", .{});
+        }
+    }
+
+    std.debug.print("\nReview complete!\n", .{});
+}
+
 pub fn main() void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -610,6 +829,8 @@ pub fn main() void {
         runRules(allocator, args[2..]);
     } else if (std.mem.eql(u8, command, "apply-rules")) {
         runApplyRules(allocator);
+    } else if (std.mem.eql(u8, command, "review")) {
+        runReview(allocator);
     } else if (std.mem.eql(u8, command, "--help") or std.mem.eql(u8, command, "-h")) {
         printUsage();
     } else {
