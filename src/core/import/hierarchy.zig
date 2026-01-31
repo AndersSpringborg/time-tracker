@@ -57,10 +57,19 @@ pub const HierarchyImporter = struct {
         };
         defer file.close();
 
-        const content = file.readToEndAlloc(self.allocator, 10 * 1024 * 1024) catch {
+        // Get file size and read all content
+        const stat = file.stat() catch {
             return ImportError.FileReadError;
         };
+        const content = self.allocator.alloc(u8, stat.size) catch {
+            return ImportError.OutOfMemory;
+        };
         defer self.allocator.free(content);
+
+        // Use pread to read all content
+        _ = file.preadAll(content, 0) catch {
+            return ImportError.FileReadError;
+        };
 
         return self.importFromJson(content);
     }

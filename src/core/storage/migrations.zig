@@ -21,7 +21,7 @@ pub const migrations = [_]Migration{
         .name = "create_events_table",
         .up =
         \\CREATE SEQUENCE IF NOT EXISTS events_seq;
-        \\CREATE TABLE events (
+        \\CREATE TABLE IF NOT EXISTS events (
         \\    id INTEGER PRIMARY KEY DEFAULT nextval('events_seq'),
         \\    timestamp_ms BIGINT NOT NULL,
         \\    app_name VARCHAR NOT NULL,
@@ -34,32 +34,32 @@ pub const migrations = [_]Migration{
     .{
         .version = 2,
         .name = "add_wifi_ssid",
-        .up = "ALTER TABLE events ADD COLUMN wifi_ssid VARCHAR DEFAULT ''",
+        .up = "ALTER TABLE events ADD COLUMN IF NOT EXISTS wifi_ssid VARCHAR DEFAULT ''",
     },
     .{
         .version = 3,
         .name = "create_hierarchy_tables",
         .up =
-        \\CREATE TABLE customers (
+        \\CREATE TABLE IF NOT EXISTS customers (
         \\    customer_id INTEGER PRIMARY KEY,
         \\    name VARCHAR NOT NULL
         \\);
-        \\CREATE TABLE projects (
+        \\CREATE TABLE IF NOT EXISTS projects (
         \\    project_id INTEGER PRIMARY KEY,
         \\    customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
         \\    name VARCHAR NOT NULL
         \\);
-        \\CREATE TABLE phases (
+        \\CREATE TABLE IF NOT EXISTS phases (
         \\    phase_id INTEGER PRIMARY KEY,
         \\    project_id INTEGER NOT NULL REFERENCES projects(project_id),
         \\    name VARCHAR NOT NULL
         \\);
-        \\CREATE TABLE activities (
+        \\CREATE TABLE IF NOT EXISTS activities (
         \\    activity_id INTEGER PRIMARY KEY,
         \\    phase_id INTEGER NOT NULL REFERENCES phases(phase_id),
         \\    name VARCHAR NOT NULL
         \\);
-        \\CREATE TABLE kinds (
+        \\CREATE TABLE IF NOT EXISTS kinds (
         \\    kind_id INTEGER PRIMARY KEY,
         \\    activity_id INTEGER NOT NULL REFERENCES activities(activity_id),
         \\    name VARCHAR NOT NULL,
@@ -72,7 +72,7 @@ pub const migrations = [_]Migration{
         .name = "create_mapping_rules",
         .up =
         \\CREATE SEQUENCE IF NOT EXISTS mapping_rules_seq;
-        \\CREATE TABLE mapping_rules (
+        \\CREATE TABLE IF NOT EXISTS mapping_rules (
         \\    id INTEGER PRIMARY KEY DEFAULT nextval('mapping_rules_seq'),
         \\    priority INTEGER NOT NULL DEFAULT 0,
         \\    app_pattern VARCHAR,
@@ -87,9 +87,9 @@ pub const migrations = [_]Migration{
         .version = 5,
         .name = "add_event_mapping_columns",
         .up =
-        \\ALTER TABLE events ADD COLUMN activity_id INTEGER;
-        \\ALTER TABLE events ADD COLUMN kind_id INTEGER;
-        \\ALTER TABLE events ADD COLUMN manually_mapped BOOLEAN DEFAULT false
+        \\ALTER TABLE events ADD COLUMN IF NOT EXISTS activity_id INTEGER;
+        \\ALTER TABLE events ADD COLUMN IF NOT EXISTS kind_id INTEGER;
+        \\ALTER TABLE events ADD COLUMN IF NOT EXISTS manually_mapped BOOLEAN DEFAULT false
         ,
     },
 };

@@ -2,6 +2,9 @@ const std = @import("std");
 const Tracker = @import("tracker").Tracker;
 const DuckDbRepository = @import("duckdb_repository").DuckDbRepository;
 const query = @import("query");
+const migrations = @import("migrations");
+const hierarchy = @import("hierarchy");
+const rules = @import("rules");
 
 // Import functions from Swift bridge (only used in daemon mode)
 extern fn check_accessibility() bool;
@@ -85,19 +88,31 @@ fn printUsage() void {
         \\Usage: time_tracker <command> [options]
         \\
         \\Commands:
-        \\  daemon      Start the time tracking daemon
-        \\  summary     Show time spent per application
-        \\  report      Show detailed report with window titles
+        \\  daemon         Start the time tracking daemon
+        \\  summary        Show time spent per application
+        \\  report         Show detailed report with window titles
+        \\  import         Import customer hierarchy from JSON file
+        \\  rules          Manage mapping rules
+        \\  apply-rules    Apply rules to unmapped events
+        \\  review         Interactively review and map unmapped events
         \\
         \\Options for summary/report:
-        \\  --today     Show only today's data (default)
-        \\  --week      Show last 7 days
-        \\  --all       Show all time
+        \\  --today        Show only today's data (default)
+        \\  --week         Show last 7 days
+        \\  --all          Show all time
+        \\
+        \\Rules subcommands:
+        \\  rules list     List all mapping rules
+        \\  rules add      Add a new rule (interactive)
+        \\  rules delete   Delete a rule by ID
         \\
         \\Examples:
         \\  time_tracker daemon
         \\  time_tracker summary --today
         \\  time_tracker report --week
+        \\  time_tracker import customers.json
+        \\  time_tracker rules list
+        \\  time_tracker review
         \\
     ;
     std.debug.print("{s}", .{usage});
@@ -267,6 +282,302 @@ fn parseTimeRange(args: []const [:0]const u8) query.TimeRange {
     return .today; // default
 }
 
+fn runImport(allocator: std.mem.Allocator, args: []const [:0]const u8) void {
+    if (args.len < 1) {
+        std.debug.print("Usage: time_tracker import <customers.json>\n", .{});
+        return;
+    }
+
+    const file_path = args[0];
+    std.debug.print("Importing hierarchy from: {s}\n", .{file_path});
+
+    const db_path = getDbPath(allocator) catch |err| {
+        std.debug.print("Failed to determine database path: {}\n", .{err});
+        return;
+    };
+    defer allocator.free(db_path);
+
+    // Open database connection
+    const c = migrations.c;
+    var db: c.duckdb_database = undefined;
+    var conn: c.duckdb_connection = undefined;
+
+    if (c.duckdb_open(db_path.ptr, &db) == c.DuckDBError) {
+        std.debug.print("Failed to open database\n", .{});
+        return;
+    }
+    defer c.duckdb_close(&db);
+
+    if (c.duckdb_connect(db, &conn) == c.DuckDBError) {
+        std.debug.print("Failed to connect to database\n", .{});
+        return;
+    }
+    defer c.duckdb_disconnect(&conn);
+
+    // Run migrations first
+    var migrator = migrations.Migrator.init(conn) catch |err| {
+        std.debug.print("Failed to init migrator: {}\n", .{err});
+        return;
+    };
+    migrator.run() catch |err| {
+        std.debug.print("Failed to run migrations: {}\n", .{err});
+        return;
+    };
+
+    // Import hierarchy
+    var importer = hierarchy.HierarchyImporter.init(conn, allocator);
+    const stats = importer.importFromFile(file_path) catch |err| {
+        std.debug.print("Import failed: {}\n", .{err});
+        return;
+    };
+
+    std.debug.print("\nImport successful!\n", .{});
+    std.debug.print("  Customers:  {d}\n", .{stats.customers});
+    std.debug.print("  Projects:   {d}\n", .{stats.projects});
+    std.debug.print("  Phases:     {d}\n", .{stats.phases});
+    std.debug.print("  Activities: {d}\n", .{stats.activities});
+    std.debug.print("  Kinds:      {d}\n", .{stats.kinds});
+}
+
+fn runRules(allocator: std.mem.Allocator, args: []const [:0]const u8) void {
+    const db_path = getDbPath(allocator) catch |err| {
+        std.debug.print("Failed to determine database path: {}\n", .{err});
+        return;
+    };
+    defer allocator.free(db_path);
+
+    const c = migrations.c;
+    var db: c.duckdb_database = undefined;
+    var conn: c.duckdb_connection = undefined;
+
+    if (c.duckdb_open(db_path.ptr, &db) == c.DuckDBError) {
+        std.debug.print("Failed to open database\n", .{});
+        return;
+    }
+    defer c.duckdb_close(&db);
+
+    if (c.duckdb_connect(db, &conn) == c.DuckDBError) {
+        std.debug.print("Failed to connect to database\n", .{});
+        return;
+    }
+    defer c.duckdb_disconnect(&conn);
+
+    // Run migrations first
+    var migrator = migrations.Migrator.init(conn) catch |err| {
+        std.debug.print("Failed to init migrator: {}\n", .{err});
+        return;
+    };
+    migrator.run() catch |err| {
+        std.debug.print("Failed to run migrations: {}\n", .{err});
+        return;
+    };
+
+    var engine = rules.RulesEngine.init(conn, allocator);
+
+    if (args.len < 1) {
+        std.debug.print("Usage: time_tracker rules <list|add|delete>\n", .{});
+        return;
+    }
+
+    const subcommand = args[0];
+
+    if (std.mem.eql(u8, subcommand, "list")) {
+        runRulesList(&engine);
+    } else if (std.mem.eql(u8, subcommand, "add")) {
+        runRulesAdd(&engine, args[1..]);
+    } else if (std.mem.eql(u8, subcommand, "delete")) {
+        runRulesDelete(&engine, args[1..]);
+    } else {
+        std.debug.print("Unknown rules subcommand: {s}\n", .{subcommand});
+    }
+}
+
+fn runRulesList(engine: *rules.RulesEngine) void {
+    const fetched_rules = engine.listRules() catch |err| {
+        std.debug.print("Failed to list rules: {}\n", .{err});
+        return;
+    };
+    defer engine.allocator.free(fetched_rules);
+
+    if (fetched_rules.len == 0) {
+        std.debug.print("No mapping rules defined.\n", .{});
+        std.debug.print("Use 'time_tracker rules add' to create one.\n", .{});
+        return;
+    }
+
+    std.debug.print("\n{s:<6} {s:<8} {s:<20} {s:<25} {s:<12} {s:<8}\n", .{ "ID", "Priority", "App Pattern", "Title Pattern", "Activity ID", "Kind ID" });
+    std.debug.print("{s:-<6} {s:-<8} {s:-<20} {s:-<25} {s:-<12} {s:-<8}\n", .{ "", "", "", "", "", "" });
+
+    for (fetched_rules) |rule| {
+        const app = rule.app_pattern orelse "(any)";
+        const title = rule.title_pattern orelse "(any)";
+        std.debug.print("{d:<6} {d:<8} {s:<20} {s:<25} {d:<12} {d:<8}\n", .{
+            rule.id,
+            rule.priority,
+            app,
+            title,
+            rule.activity_id,
+            rule.kind_id,
+        });
+    }
+    std.debug.print("\n", .{});
+}
+
+fn runRulesAdd(engine: *rules.RulesEngine, args: []const [:0]const u8) void {
+    // Parse args: --app <pattern> --title <pattern> --activity <id> --kind <id> --priority <n>
+    var app_pattern: ?[]const u8 = null;
+    var title_pattern: ?[]const u8 = null;
+    var activity_id: ?i64 = null;
+    var kind_id: ?i64 = null;
+    var priority: i32 = 0;
+
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--app") and i + 1 < args.len) {
+            i += 1;
+            app_pattern = args[i];
+        } else if (std.mem.eql(u8, arg, "--title") and i + 1 < args.len) {
+            i += 1;
+            title_pattern = args[i];
+        } else if (std.mem.eql(u8, arg, "--activity") and i + 1 < args.len) {
+            i += 1;
+            activity_id = std.fmt.parseInt(i64, args[i], 10) catch null;
+        } else if (std.mem.eql(u8, arg, "--kind") and i + 1 < args.len) {
+            i += 1;
+            kind_id = std.fmt.parseInt(i64, args[i], 10) catch null;
+        } else if (std.mem.eql(u8, arg, "--priority") and i + 1 < args.len) {
+            i += 1;
+            priority = std.fmt.parseInt(i32, args[i], 10) catch 0;
+        }
+    }
+
+    if (activity_id == null or kind_id == null) {
+        std.debug.print("Usage: time_tracker rules add --app <pattern> --title <pattern> --activity <id> --kind <id> [--priority <n>]\n", .{});
+        std.debug.print("\nRequired: --activity and --kind\n", .{});
+        std.debug.print("Patterns support * wildcards (e.g., 'IntelliJ*', '*money*')\n", .{});
+        return;
+    }
+
+    engine.addRule(.{
+        .app_pattern = app_pattern,
+        .title_pattern = title_pattern,
+        .activity_id = activity_id.?,
+        .kind_id = kind_id.?,
+        .priority = priority,
+    }) catch |err| {
+        std.debug.print("Failed to add rule: {}\n", .{err});
+        return;
+    };
+
+    std.debug.print("Rule added successfully.\n", .{});
+}
+
+fn runRulesDelete(engine: *rules.RulesEngine, args: []const [:0]const u8) void {
+    if (args.len < 1) {
+        std.debug.print("Usage: time_tracker rules delete <rule_id>\n", .{});
+        return;
+    }
+
+    const rule_id = std.fmt.parseInt(i64, args[0], 10) catch {
+        std.debug.print("Invalid rule ID: {s}\n", .{args[0]});
+        return;
+    };
+
+    engine.deleteRule(rule_id) catch |err| {
+        std.debug.print("Failed to delete rule: {}\n", .{err});
+        return;
+    };
+
+    std.debug.print("Rule {d} deleted.\n", .{rule_id});
+}
+
+fn runApplyRules(allocator: std.mem.Allocator) void {
+    const db_path = getDbPath(allocator) catch |err| {
+        std.debug.print("Failed to determine database path: {}\n", .{err});
+        return;
+    };
+    defer allocator.free(db_path);
+
+    const c = migrations.c;
+    var db: c.duckdb_database = undefined;
+    var conn: c.duckdb_connection = undefined;
+
+    if (c.duckdb_open(db_path.ptr, &db) == c.DuckDBError) {
+        std.debug.print("Failed to open database\n", .{});
+        return;
+    }
+    defer c.duckdb_close(&db);
+
+    if (c.duckdb_connect(db, &conn) == c.DuckDBError) {
+        std.debug.print("Failed to connect to database\n", .{});
+        return;
+    }
+    defer c.duckdb_disconnect(&conn);
+
+    // Run migrations first
+    var migrator = migrations.Migrator.init(conn) catch |err| {
+        std.debug.print("Failed to init migrator: {}\n", .{err});
+        return;
+    };
+    migrator.run() catch |err| {
+        std.debug.print("Failed to run migrations: {}\n", .{err});
+        return;
+    };
+
+    var engine = rules.RulesEngine.init(conn, allocator);
+
+    // Get unmapped events
+    var result: c.duckdb_result = undefined;
+    const query_sql = "SELECT id, app_name, window_title FROM events WHERE activity_id IS NULL AND manually_mapped = false";
+
+    if (c.duckdb_query(conn, query_sql, &result) == c.DuckDBError) {
+        std.debug.print("Failed to query events\n", .{});
+        return;
+    }
+    defer c.duckdb_destroy_result(&result);
+
+    const row_count = c.duckdb_row_count(&result);
+    var matched: u64 = 0;
+
+    for (0..row_count) |i| {
+        const row: c.idx_t = @intCast(i);
+        const event_id = c.duckdb_value_int64(&result, 0, row);
+        const app_name_ptr = c.duckdb_value_varchar(&result, 1, row);
+        const title_ptr = c.duckdb_value_varchar(&result, 2, row);
+
+        if (app_name_ptr == null or title_ptr == null) continue;
+
+        const app_name = std.mem.sliceTo(app_name_ptr, 0);
+        const title = std.mem.sliceTo(title_ptr, 0);
+
+        const match = engine.findMatch(app_name, title) catch continue;
+        if (match) |m| {
+            // Update the event
+            var update_stmt: c.duckdb_prepared_statement = undefined;
+            const update_sql = "UPDATE events SET activity_id = ?, kind_id = ? WHERE id = ?";
+
+            if (c.duckdb_prepare(conn, update_sql, &update_stmt) == c.DuckDBError) continue;
+            defer c.duckdb_destroy_prepare(&update_stmt);
+
+            _ = c.duckdb_bind_int64(update_stmt, 1, m.activity_id);
+            _ = c.duckdb_bind_int64(update_stmt, 2, m.kind_id);
+            _ = c.duckdb_bind_int64(update_stmt, 3, event_id);
+
+            var update_result: c.duckdb_result = undefined;
+            if (c.duckdb_execute_prepared(update_stmt, &update_result) == c.DuckDBError) {
+                c.duckdb_destroy_result(&update_result);
+                continue;
+            }
+            c.duckdb_destroy_result(&update_result);
+
+            matched += 1;
+        }
+    }
+
+    std.debug.print("Applied rules to {d} events (out of {d} unmapped).\n", .{ matched, row_count });
+}
+
 pub fn main() void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -293,6 +604,12 @@ pub fn main() void {
     } else if (std.mem.eql(u8, command, "report")) {
         const range = parseTimeRange(args[2..]);
         runReport(allocator, range);
+    } else if (std.mem.eql(u8, command, "import")) {
+        runImport(allocator, args[2..]);
+    } else if (std.mem.eql(u8, command, "rules")) {
+        runRules(allocator, args[2..]);
+    } else if (std.mem.eql(u8, command, "apply-rules")) {
+        runApplyRules(allocator);
     } else if (std.mem.eql(u8, command, "--help") or std.mem.eql(u8, command, "-h")) {
         printUsage();
     } else {

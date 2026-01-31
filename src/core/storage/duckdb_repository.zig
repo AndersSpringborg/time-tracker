@@ -1,6 +1,6 @@
 const std = @import("std");
 const Event = @import("event").Event;
-const migrations = @import("migrations.zig");
+const migrations = @import("migrations");
 const Migrator = migrations.Migrator;
 const c = migrations.c;
 

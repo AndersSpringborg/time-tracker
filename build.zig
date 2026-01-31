@@ -24,12 +24,21 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    const migrations_module = b.createModule(.{
+        .root_source_file = b.path("src/core/storage/migrations.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    migrations_module.addIncludePath(duckdb_include_path);
+    migrations_module.addLibraryPath(duckdb_lib_path);
+
     const duckdb_repo_module = b.createModule(.{
         .root_source_file = b.path("src/core/storage/duckdb_repository.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "event", .module = event_module },
+            .{ .name = "migrations", .module = migrations_module },
         },
     });
     duckdb_repo_module.addIncludePath(duckdb_include_path);
@@ -42,14 +51,6 @@ pub fn build(b: *std.Build) void {
     });
     query_module.addIncludePath(duckdb_include_path);
     query_module.addLibraryPath(duckdb_lib_path);
-
-    const migrations_module = b.createModule(.{
-        .root_source_file = b.path("src/core/storage/migrations.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    migrations_module.addIncludePath(duckdb_include_path);
-    migrations_module.addLibraryPath(duckdb_lib_path);
 
     const hierarchy_module = b.createModule(.{
         .root_source_file = b.path("src/core/import/hierarchy.zig"),
@@ -85,6 +86,9 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "tracker", .module = tracker_module },
                 .{ .name = "duckdb_repository", .module = duckdb_repo_module },
                 .{ .name = "query", .module = query_module },
+                .{ .name = "migrations", .module = migrations_module },
+                .{ .name = "hierarchy", .module = hierarchy_module },
+                .{ .name = "rules", .module = rules_module },
             },
         }),
     });
@@ -191,6 +195,8 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "event", .module = event_module },
+                .{ .name = "migrations", .module = migrations_module },
+                .{ .name = "duckdb_repository", .module = duckdb_repo_module },
             },
         }),
     });
