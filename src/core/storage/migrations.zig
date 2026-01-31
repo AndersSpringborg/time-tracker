@@ -36,6 +36,62 @@ pub const migrations = [_]Migration{
         .name = "add_wifi_ssid",
         .up = "ALTER TABLE events ADD COLUMN wifi_ssid VARCHAR DEFAULT ''",
     },
+    .{
+        .version = 3,
+        .name = "create_hierarchy_tables",
+        .up =
+        \\CREATE TABLE customers (
+        \\    customer_id INTEGER PRIMARY KEY,
+        \\    name VARCHAR NOT NULL
+        \\);
+        \\CREATE TABLE projects (
+        \\    project_id INTEGER PRIMARY KEY,
+        \\    customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
+        \\    name VARCHAR NOT NULL
+        \\);
+        \\CREATE TABLE phases (
+        \\    phase_id INTEGER PRIMARY KEY,
+        \\    project_id INTEGER NOT NULL REFERENCES projects(project_id),
+        \\    name VARCHAR NOT NULL
+        \\);
+        \\CREATE TABLE activities (
+        \\    activity_id INTEGER PRIMARY KEY,
+        \\    phase_id INTEGER NOT NULL REFERENCES phases(phase_id),
+        \\    name VARCHAR NOT NULL
+        \\);
+        \\CREATE TABLE kinds (
+        \\    kind_id INTEGER PRIMARY KEY,
+        \\    activity_id INTEGER NOT NULL REFERENCES activities(activity_id),
+        \\    name VARCHAR NOT NULL,
+        \\    billable BOOLEAN NOT NULL DEFAULT true
+        \\)
+        ,
+    },
+    .{
+        .version = 4,
+        .name = "create_mapping_rules",
+        .up =
+        \\CREATE SEQUENCE IF NOT EXISTS mapping_rules_seq;
+        \\CREATE TABLE mapping_rules (
+        \\    id INTEGER PRIMARY KEY DEFAULT nextval('mapping_rules_seq'),
+        \\    priority INTEGER NOT NULL DEFAULT 0,
+        \\    app_pattern VARCHAR,
+        \\    title_pattern VARCHAR,
+        \\    activity_id INTEGER REFERENCES activities(activity_id),
+        \\    kind_id INTEGER REFERENCES kinds(kind_id),
+        \\    created_at TIMESTAMP DEFAULT current_timestamp
+        \\)
+        ,
+    },
+    .{
+        .version = 5,
+        .name = "add_event_mapping_columns",
+        .up =
+        \\ALTER TABLE events ADD COLUMN activity_id INTEGER;
+        \\ALTER TABLE events ADD COLUMN kind_id INTEGER;
+        \\ALTER TABLE events ADD COLUMN manually_mapped BOOLEAN DEFAULT false
+        ,
+    },
 };
 
 pub const Migrator = struct {

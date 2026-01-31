@@ -104,6 +104,45 @@ test "Migrator.getCurrentVersion returns highest applied version after run" {
     try migrator.run();
 
     const version = try migrator.getCurrentVersion();
-    // Should be 2 after running both migrations
-    try std.testing.expectEqual(@as(u32, 2), version);
+    // Should be 5 after running all migrations
+    try std.testing.expectEqual(@as(u32, 5), version);
+}
+
+// Test 7: hierarchy tables are created
+test "Migrator.run creates hierarchy tables" {
+    const conn = try openInMemoryDb();
+    var migrator = try Migrator.init(conn);
+
+    try migrator.run();
+
+    // Migration 3 creates hierarchy tables
+    try std.testing.expect(tableExists(conn, "customers"));
+    try std.testing.expect(tableExists(conn, "projects"));
+    try std.testing.expect(tableExists(conn, "phases"));
+    try std.testing.expect(tableExists(conn, "activities"));
+    try std.testing.expect(tableExists(conn, "kinds"));
+}
+
+// Test 8: mapping_rules table is created
+test "Migrator.run creates mapping_rules table" {
+    const conn = try openInMemoryDb();
+    var migrator = try Migrator.init(conn);
+
+    try migrator.run();
+
+    // Migration 4 creates mapping_rules table
+    try std.testing.expect(tableExists(conn, "mapping_rules"));
+}
+
+// Test 9: event mapping columns are added
+test "Migrator.run adds event mapping columns" {
+    const conn = try openInMemoryDb();
+    var migrator = try Migrator.init(conn);
+
+    try migrator.run();
+
+    // Migration 5 adds mapping columns to events
+    try std.testing.expect(columnExists(conn, "events", "activity_id"));
+    try std.testing.expect(columnExists(conn, "events", "kind_id"));
+    try std.testing.expect(columnExists(conn, "events", "manually_mapped"));
 }
