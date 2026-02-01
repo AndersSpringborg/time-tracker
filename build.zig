@@ -15,6 +15,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const scoring_module = b.createModule(.{
+        .root_source_file = b.path("src/core/domain/scoring.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const tracker_module = b.createModule(.{
         .root_source_file = b.path("src/core/tracking/tracker.zig"),
         .target = target,
@@ -120,6 +126,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "review", .module = review_module },
                 .{ .name = "terminal", .module = terminal_module },
                 .{ .name = "context", .module = context_module },
+                .{ .name = "scoring", .module = scoring_module },
             },
         }),
     });
@@ -203,6 +210,19 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(event_tests).step);
+
+    // Scoring tests
+    const scoring_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/domain/scoring_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "scoring", .module = scoring_module },
+            },
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(scoring_tests).step);
 
     // Tracker tests
     const tracker_tests = b.addTest(.{
