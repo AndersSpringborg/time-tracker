@@ -411,9 +411,9 @@ fn runRules(allocator: std.mem.Allocator, args: []const [:0]const u8) void {
     const subcommand = args[0];
 
     if (std.mem.eql(u8, subcommand, "list")) {
-        runRulesList(&engine);
+        runRulesList(&engine, conn, allocator);
     } else if (std.mem.eql(u8, subcommand, "add")) {
-        runRulesAdd(&engine, args[1..]);
+        runRulesAdd(&engine, conn, allocator, args[1..]);
     } else if (std.mem.eql(u8, subcommand, "delete")) {
         runRulesDelete(&engine, args[1..]);
     } else {
@@ -421,7 +421,7 @@ fn runRules(allocator: std.mem.Allocator, args: []const [:0]const u8) void {
     }
 }
 
-fn runRulesList(engine: *rules.RulesEngine) void {
+fn runRulesList(engine: *rules.RulesEngine, conn: migrations.c.duckdb_connection, allocator: std.mem.Allocator) void {
     const fetched_rules = engine.listRules() catch |err| {
         std.debug.print("Failed to list rules: {}\n", .{err});
         return;
@@ -434,72 +434,173 @@ fn runRulesList(engine: *rules.RulesEngine) void {
         return;
     }
 
-    std.debug.print("\n{s:<6} {s:<8} {s:<20} {s:<25} {s:<12} {s:<8}\n", .{ "ID", "Priority", "App Pattern", "Title Pattern", "Activity ID", "Kind ID" });
-    std.debug.print("{s:-<6} {s:-<8} {s:-<20} {s:-<25} {s:-<12} {s:-<8}\n", .{ "", "", "", "", "", "" });
+    std.debug.print("\n=== Mapping Rules ===\n\n", .{});
+    std.debug.print("{s:<6} {s:<20} {s:<25} {s:<40}\n", .{ "ID", "App Pattern", "Title Pattern", "Maps To" });
+    std.debug.print("{s:-<6} {s:-<20} {s:-<25} {s:-<40}\n", .{ "", "", "", "" });
+
+    // Track allocated path strings to free them after the loop
+    var allocated_paths: std.ArrayListUnmanaged([]const u8) = .{};
+    defer {
+        for (allocated_paths.items) |path| {
+            allocator.free(path);
+        }
+        allocated_paths.deinit(allocator);
+    }
 
     for (fetched_rules) |rule| {
-        const app = rule.app_pattern orelse "(any)";
-        const title = rule.title_pattern orelse "(any)";
-        std.debug.print("{d:<6} {d:<8} {s:<20} {s:<25} {d:<12} {d:<8}\n", .{
+        const app_pat = rule.app_pattern orelse "(any)";
+        const title_pat = rule.title_pattern orelse "(any)";
+
+        // Get the kind's full path
+        const maps_to = getKindPath(conn, rule.kind_id, allocator) catch "(unknown)";
+        // Track allocation for cleanup (only if we allocated it)
+        if (!std.mem.eql(u8, maps_to, "(unknown)")) {
+            allocated_paths.append(allocator, maps_to) catch {};
+        }
+
+        std.debug.print("{d:<6} {s:<20} {s:<25} {s:<40}\n", .{
             rule.id,
-            rule.priority,
-            app,
-            title,
-            rule.activity_id,
-            rule.kind_id,
+            truncateStr(app_pat, 18),
+            truncateStr(title_pat, 23),
+            truncateStr(maps_to, 38),
         });
     }
     std.debug.print("\n", .{});
 }
 
-fn runRulesAdd(engine: *rules.RulesEngine, args: []const [:0]const u8) void {
-    // Parse args: --app <pattern> --title <pattern> --activity <id> --kind <id> --priority <n>
-    var app_pattern: ?[]const u8 = null;
-    var title_pattern: ?[]const u8 = null;
-    var activity_id: ?i64 = null;
-    var kind_id: ?i64 = null;
-    var priority: i32 = 0;
-
-    var i: usize = 0;
-    while (i < args.len) : (i += 1) {
-        const arg = args[i];
-        if (std.mem.eql(u8, arg, "--app") and i + 1 < args.len) {
-            i += 1;
-            app_pattern = args[i];
-        } else if (std.mem.eql(u8, arg, "--title") and i + 1 < args.len) {
-            i += 1;
-            title_pattern = args[i];
-        } else if (std.mem.eql(u8, arg, "--activity") and i + 1 < args.len) {
-            i += 1;
-            activity_id = std.fmt.parseInt(i64, args[i], 10) catch null;
-        } else if (std.mem.eql(u8, arg, "--kind") and i + 1 < args.len) {
-            i += 1;
-            kind_id = std.fmt.parseInt(i64, args[i], 10) catch null;
-        } else if (std.mem.eql(u8, arg, "--priority") and i + 1 < args.len) {
-            i += 1;
-            priority = std.fmt.parseInt(i32, args[i], 10) catch 0;
-        }
-    }
-
-    if (activity_id == null or kind_id == null) {
-        std.debug.print("Usage: time_tracker rules add --app <pattern> --title <pattern> --activity <id> --kind <id> [--priority <n>]\n", .{});
-        std.debug.print("\nRequired: --activity and --kind\n", .{});
-        std.debug.print("Patterns support * wildcards (e.g., 'IntelliJ*', '*money*')\n", .{});
+fn runRulesAdd(engine: *rules.RulesEngine, conn: migrations.c.duckdb_connection, allocator: std.mem.Allocator, args: []const [:0]const u8) void {
+    // Require app pattern as argument
+    if (args.len == 0) {
+        std.debug.print("Usage: time_tracker rules add <app_pattern>\n", .{});
+        std.debug.print("\nExamples:\n", .{});
+        std.debug.print("  time_tracker rules add Slack\n", .{});
+        std.debug.print("  time_tracker rules add 'IntelliJ*'\n", .{});
+        std.debug.print("  time_tracker rules add '*'\n", .{});
+        std.debug.print("\nPatterns support * wildcards for matching.\n", .{});
         return;
     }
 
+    const app_pattern: []const u8 = args[0];
+
+    // Query all kinds with their full hierarchy path
+    const c = migrations.c;
+    const query_sql =
+        \\SELECT k.kind_id, k.activity_id,
+        \\       cu.name || ' > ' || p.name || ' > ' || ph.name || ' > ' || a.name || ' > ' || k.name as full_path
+        \\FROM kinds k
+        \\JOIN activities a ON k.activity_id = a.activity_id
+        \\JOIN phases ph ON a.phase_id = ph.phase_id
+        \\JOIN projects p ON ph.project_id = p.project_id
+        \\JOIN customers cu ON p.customer_id = cu.customer_id
+        \\ORDER BY cu.name, p.name, ph.name, a.name, k.name
+    ;
+
+    var result: c.duckdb_result = undefined;
+    if (c.duckdb_query(conn, query_sql, &result) == c.DuckDBError) {
+        std.debug.print("Failed to query kinds\n", .{});
+        return;
+    }
+    defer c.duckdb_destroy_result(&result);
+
+    const row_count = c.duckdb_row_count(&result);
+    if (row_count == 0) {
+        std.debug.print("No kinds found. Import your customer hierarchy first:\n", .{});
+        std.debug.print("  time_tracker import customers.json\n", .{});
+        return;
+    }
+
+    // Build picker items
+    var items = allocator.alloc(picker.PickerItem, row_count) catch {
+        std.debug.print("Out of memory\n", .{});
+        return;
+    };
+    defer allocator.free(items);
+
+    var strings = allocator.alloc([]const u8, row_count) catch {
+        std.debug.print("Out of memory\n", .{});
+        return;
+    };
+    defer {
+        for (strings) |s| allocator.free(s);
+        allocator.free(strings);
+    }
+
+    var kind_ids = allocator.alloc(i64, row_count) catch {
+        std.debug.print("Out of memory\n", .{});
+        return;
+    };
+    defer allocator.free(kind_ids);
+
+    var activity_ids = allocator.alloc(i64, row_count) catch {
+        std.debug.print("Out of memory\n", .{});
+        return;
+    };
+    defer allocator.free(activity_ids);
+
+    for (0..row_count) |i| {
+        const row: c.idx_t = @intCast(i);
+        kind_ids[i] = c.duckdb_value_int64(&result, 0, row);
+        activity_ids[i] = c.duckdb_value_int64(&result, 1, row);
+
+        const path_ptr = c.duckdb_value_varchar(&result, 2, row);
+        if (path_ptr != null) {
+            const path_len = std.mem.len(path_ptr);
+            const path_copy = allocator.alloc(u8, path_len) catch {
+                strings[i] = "(error)";
+                continue;
+            };
+            @memcpy(path_copy, path_ptr[0..path_len]);
+            strings[i] = path_copy;
+            c.duckdb_free(path_ptr);
+        } else {
+            strings[i] = "(unknown)";
+        }
+
+        items[i] = .{
+            .id = kind_ids[i],
+            .display_text = strings[i],
+            .secondary_text = "",
+            .is_highlighted = false,
+        };
+    }
+
+    // Show picker
+    std.debug.print("Creating rule for app pattern: {s}\n", .{app_pattern});
+    std.debug.print("Select the kind to map to:\n\n", .{});
+
+    var p = picker.Picker.init(allocator, items, "Select Kind to Map To") catch |err| {
+        if (err == picker.PickerError.NotATty) {
+            std.debug.print("Error: Interactive mode requires a terminal.\n", .{});
+        } else {
+            std.debug.print("Failed to initialize picker: {}\n", .{err});
+        }
+        return;
+    };
+    defer p.deinit();
+
+    const selection = p.run() catch |err| {
+        if (err == picker.PickerError.Cancelled) {
+            std.debug.print("Cancelled.\n", .{});
+        }
+        return;
+    };
+
+    const selected_kind_id = kind_ids[selection.selected_index];
+    const selected_activity_id = activity_ids[selection.selected_index];
+
+    // Add the rule
     engine.addRule(.{
         .app_pattern = app_pattern,
-        .title_pattern = title_pattern,
-        .activity_id = activity_id.?,
-        .kind_id = kind_id.?,
-        .priority = priority,
+        .title_pattern = null,
+        .activity_id = selected_activity_id,
+        .kind_id = selected_kind_id,
+        .priority = 0,
     }) catch |err| {
         std.debug.print("Failed to add rule: {}\n", .{err});
         return;
     };
 
-    std.debug.print("Rule added successfully.\n", .{});
+    std.debug.print("Rule added: '{s}' -> {s}\n", .{ app_pattern, strings[selection.selected_index] });
 }
 
 fn runRulesDelete(engine: *rules.RulesEngine, args: []const [:0]const u8) void {
@@ -1070,6 +1171,56 @@ fn getProjectName(conn: migrations.c.duckdb_connection, project_id: i64, allocat
     c.duckdb_free(name_ptr);
 
     return name_copy;
+}
+
+/// Get the full path for a kind (Customer > Project > Phase > Activity > Kind)
+fn getKindPath(conn: migrations.c.duckdb_connection, kind_id: i64, allocator: std.mem.Allocator) ![]const u8 {
+    const c = migrations.c;
+    var stmt: c.duckdb_prepared_statement = undefined;
+    const sql =
+        \\SELECT cu.name || ' > ' || p.name || ' > ' || k.name
+        \\FROM kinds k
+        \\JOIN activities a ON k.activity_id = a.activity_id
+        \\JOIN phases ph ON a.phase_id = ph.phase_id
+        \\JOIN projects p ON ph.project_id = p.project_id
+        \\JOIN customers cu ON p.customer_id = cu.customer_id
+        \\WHERE k.kind_id = ?
+    ;
+
+    if (c.duckdb_prepare(conn, sql, &stmt) == c.DuckDBError) {
+        return error.QueryFailed;
+    }
+    defer c.duckdb_destroy_prepare(&stmt);
+
+    _ = c.duckdb_bind_int64(stmt, 1, kind_id);
+
+    var result: c.duckdb_result = undefined;
+    if (c.duckdb_execute_prepared(stmt, &result) == c.DuckDBError) {
+        return error.QueryFailed;
+    }
+    defer c.duckdb_destroy_result(&result);
+
+    if (c.duckdb_row_count(&result) == 0) {
+        return error.NotFound;
+    }
+
+    const name_ptr = c.duckdb_value_varchar(&result, 0, 0);
+    if (name_ptr == null) {
+        return error.NotFound;
+    }
+
+    const name_len = std.mem.len(name_ptr);
+    const name_copy = try allocator.alloc(u8, name_len);
+    @memcpy(name_copy, name_ptr[0..name_len]);
+    c.duckdb_free(name_ptr);
+
+    return name_copy;
+}
+
+/// Truncate a string with ellipsis if too long
+fn truncateStr(str: []const u8, max_len: usize) []const u8 {
+    if (str.len <= max_len) return str;
+    return str[0..max_len];
 }
 
 pub fn main() void {
