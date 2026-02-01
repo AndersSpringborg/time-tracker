@@ -451,10 +451,27 @@ fn runRulesList(engine: *rules.RulesEngine, conn: migrations.c.duckdb_connection
         const app_pat = rule.app_pattern orelse "(any)";
         const title_pat = rule.title_pattern orelse "(any)";
 
-        // Get the kind's full path
-        const maps_to = getKindPath(conn, rule.kind_id, allocator) catch "(unknown)";
-        // Track allocation for cleanup (only if we allocated it)
-        if (!std.mem.eql(u8, maps_to, "(unknown)")) {
+        // Get the kind display - either full path or "(global) KindName"
+        var maps_to: []const u8 = undefined;
+        var needs_free = false;
+
+        if (rule.is_global) {
+            // Global rule: show "(global) KindName"
+            if (rule.kind_name) |kind_name| {
+                const formatted = std.fmt.allocPrint(allocator, "(global) {s}", .{kind_name}) catch "(global) ???";
+                maps_to = formatted;
+                needs_free = true;
+            } else {
+                maps_to = "(global) ???";
+            }
+        } else {
+            // Regular rule: show full path
+            maps_to = getKindPath(conn, rule.kind_id, allocator) catch "(unknown)";
+            needs_free = !std.mem.eql(u8, maps_to, "(unknown)");
+        }
+
+        // Track allocation for cleanup
+        if (needs_free) {
             allocated_paths.append(allocator, maps_to) catch {};
         }
 
@@ -469,18 +486,137 @@ fn runRulesList(engine: *rules.RulesEngine, conn: migrations.c.duckdb_connection
 }
 
 fn runRulesAdd(engine: *rules.RulesEngine, conn: migrations.c.duckdb_connection, allocator: std.mem.Allocator, args: []const [:0]const u8) void {
-    // Require app pattern as argument
-    if (args.len == 0) {
-        std.debug.print("Usage: time_tracker rules add <app_pattern>\n", .{});
+    // Parse args for --global flag
+    var is_global = false;
+    var app_pattern: ?[]const u8 = null;
+
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--global") or std.mem.eql(u8, arg, "-g")) {
+            is_global = true;
+        } else if (app_pattern == null) {
+            app_pattern = arg;
+        }
+    }
+
+    if (app_pattern == null) {
+        std.debug.print("Usage: time_tracker rules add [--global] <app_pattern>\n", .{});
         std.debug.print("\nExamples:\n", .{});
-        std.debug.print("  time_tracker rules add Slack\n", .{});
-        std.debug.print("  time_tracker rules add 'IntelliJ*'\n", .{});
-        std.debug.print("  time_tracker rules add '*'\n", .{});
-        std.debug.print("\nPatterns support * wildcards for matching.\n", .{});
+        std.debug.print("  time_tracker rules add Slack          # Map to specific project/kind\n", .{});
+        std.debug.print("  time_tracker rules add --global Chrome # Map to kind by name in current project\n", .{});
+        std.debug.print("  time_tracker rules add -g '*facebook*' # Global rule for any app\n", .{});
+        std.debug.print("\nGlobal rules use the current project context to find the kind by name.\n", .{});
+        std.debug.print("Patterns support * wildcards for matching.\n", .{});
         return;
     }
 
-    const app_pattern: []const u8 = args[0];
+    if (is_global) {
+        runRulesAddGlobal(engine, conn, allocator, app_pattern.?);
+    } else {
+        runRulesAddSpecific(engine, conn, allocator, app_pattern.?);
+    }
+}
+
+fn runRulesAddGlobal(engine: *rules.RulesEngine, conn: migrations.c.duckdb_connection, allocator: std.mem.Allocator, app_pattern: []const u8) void {
+    // Query unique kind names across all projects
+    const c = migrations.c;
+    const query_sql = "SELECT DISTINCT name FROM kinds ORDER BY name";
+
+    var result: c.duckdb_result = undefined;
+    if (c.duckdb_query(conn, query_sql, &result) == c.DuckDBError) {
+        std.debug.print("Failed to query kind names\n", .{});
+        return;
+    }
+    defer c.duckdb_destroy_result(&result);
+
+    const row_count = c.duckdb_row_count(&result);
+    if (row_count == 0) {
+        std.debug.print("No kinds found. Import your customer hierarchy first:\n", .{});
+        std.debug.print("  time_tracker import customers.json\n", .{});
+        return;
+    }
+
+    // Build picker items
+    var items = allocator.alloc(picker.PickerItem, row_count) catch {
+        std.debug.print("Out of memory\n", .{});
+        return;
+    };
+    defer allocator.free(items);
+
+    var kind_names = allocator.alloc([]const u8, row_count) catch {
+        std.debug.print("Out of memory\n", .{});
+        return;
+    };
+    defer {
+        for (kind_names) |s| allocator.free(s);
+        allocator.free(kind_names);
+    }
+
+    for (0..row_count) |i| {
+        const row: c.idx_t = @intCast(i);
+
+        const name_ptr = c.duckdb_value_varchar(&result, 0, row);
+        if (name_ptr != null) {
+            const name_len = std.mem.len(name_ptr);
+            const name_copy = allocator.alloc(u8, name_len) catch {
+                kind_names[i] = "(error)";
+                continue;
+            };
+            @memcpy(name_copy, name_ptr[0..name_len]);
+            kind_names[i] = name_copy;
+            c.duckdb_free(name_ptr);
+        } else {
+            kind_names[i] = "(unknown)";
+        }
+
+        items[i] = .{
+            .id = @intCast(i),
+            .display_text = kind_names[i],
+            .secondary_text = "(global - matches in current project)",
+            .is_highlighted = false,
+        };
+    }
+
+    // Show picker
+    std.debug.print("Creating GLOBAL rule for app pattern: {s}\n", .{app_pattern});
+    std.debug.print("Select the kind name to match in the current project:\n\n", .{});
+
+    var p = picker.Picker.init(allocator, items, "Select Kind Name (Global)") catch |err| {
+        if (err == picker.PickerError.NotATty) {
+            std.debug.print("Error: Interactive mode requires a terminal.\n", .{});
+        } else {
+            std.debug.print("Failed to initialize picker: {}\n", .{err});
+        }
+        return;
+    };
+    defer p.deinit();
+
+    const selection = p.run() catch |err| {
+        if (err == picker.PickerError.Cancelled) {
+            std.debug.print("Cancelled.\n", .{});
+        }
+        return;
+    };
+
+    const selected_kind_name = kind_names[selection.selected_index];
+
+    // Add the global rule
+    engine.addRule(.{
+        .app_pattern = app_pattern,
+        .title_pattern = null,
+        .activity_id = 0, // Not used for global rules
+        .kind_id = 0, // Not used for global rules
+        .priority = 0,
+        .is_global = true,
+        .kind_name = selected_kind_name,
+    }) catch |err| {
+        std.debug.print("Failed to add rule: {}\n", .{err});
+        return;
+    };
+
+    std.debug.print("Global rule added: '{s}' -> kind '{s}' (in current project)\n", .{ app_pattern, selected_kind_name });
+}
+
+fn runRulesAddSpecific(engine: *rules.RulesEngine, conn: migrations.c.duckdb_connection, allocator: std.mem.Allocator, app_pattern: []const u8) void {
 
     // Query all kinds with their full hierarchy path
     const c = migrations.c;

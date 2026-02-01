@@ -15,6 +15,8 @@ pub const RuleInput = struct {
     activity_id: i64,
     kind_id: i64,
     priority: i32 = 0,
+    is_global: bool = false,
+    kind_name: ?[]const u8 = null,
 };
 
 pub const Rule = struct {
@@ -24,6 +26,8 @@ pub const Rule = struct {
     activity_id: i64,
     kind_id: i64,
     priority: i32,
+    is_global: bool,
+    kind_name: ?[]const u8,
 };
 
 pub const Match = struct {
@@ -45,7 +49,7 @@ pub const RulesEngine = struct {
 
     pub fn addRule(self: *RulesEngine, rule: RuleInput) !void {
         var stmt: c.duckdb_prepared_statement = undefined;
-        const sql = "INSERT INTO mapping_rules (app_pattern, title_pattern, activity_id, kind_id, priority) VALUES (?, ?, ?, ?, ?)";
+        const sql = "INSERT INTO mapping_rules (app_pattern, title_pattern, activity_id, kind_id, priority, is_global, kind_name) VALUES (?, ?, ?, ?, ?, ?, ?)";
 
         if (c.duckdb_prepare(self.conn, sql, &stmt) == c.DuckDBError) {
             return RuleError.InsertFailed;
@@ -67,6 +71,13 @@ pub const RulesEngine = struct {
         _ = c.duckdb_bind_int64(stmt, 3, rule.activity_id);
         _ = c.duckdb_bind_int64(stmt, 4, rule.kind_id);
         _ = c.duckdb_bind_int32(stmt, 5, rule.priority);
+        _ = c.duckdb_bind_boolean(stmt, 6, rule.is_global);
+
+        if (rule.kind_name) |name| {
+            _ = c.duckdb_bind_varchar_length(stmt, 7, name.ptr, name.len);
+        } else {
+            _ = c.duckdb_bind_null(stmt, 7);
+        }
 
         var result: c.duckdb_result = undefined;
         if (c.duckdb_execute_prepared(stmt, &result) == c.DuckDBError) {
@@ -90,7 +101,7 @@ pub const RulesEngine = struct {
 
     pub fn listRules(self: *RulesEngine) ![]Rule {
         var result: c.duckdb_result = undefined;
-        const query = "SELECT id, app_pattern, title_pattern, activity_id, kind_id, priority FROM mapping_rules ORDER BY priority DESC";
+        const query = "SELECT id, app_pattern, title_pattern, activity_id, kind_id, priority, is_global, kind_name FROM mapping_rules ORDER BY priority DESC";
 
         if (c.duckdb_query(self.conn, query, &result) == c.DuckDBError) {
             return RuleError.QueryFailed;
@@ -112,6 +123,8 @@ pub const RulesEngine = struct {
                 .activity_id = c.duckdb_value_int64(&result, 3, row),
                 .kind_id = c.duckdb_value_int64(&result, 4, row),
                 .priority = @intCast(c.duckdb_value_int32(&result, 5, row)),
+                .is_global = c.duckdb_value_boolean(&result, 6, row),
+                .kind_name = getStringValue(&result, 7, row),
             };
         }
 
@@ -138,6 +151,13 @@ pub const RulesEngine = struct {
     }
 
     pub fn findMatch(self: *RulesEngine, app_name: []const u8, window_title: []const u8) !?Match {
+        return self.findMatchWithContext(app_name, window_title, null);
+    }
+
+    /// Find a matching rule, resolving global rules against the current project.
+    /// If current_project_id is provided and a global rule matches, it will look up
+    /// the kind by name in that project. If not found, the global rule is skipped.
+    pub fn findMatchWithContext(self: *RulesEngine, app_name: []const u8, window_title: []const u8, current_project_id: ?i64) !?Match {
         const fetched_rules = try self.listRules();
         defer self.allocator.free(fetched_rules);
 
@@ -154,15 +174,95 @@ pub const RulesEngine = struct {
                 true; // null pattern matches any
 
             if (app_matches and title_matches) {
-                return Match{
-                    .rule_id = rule.id,
-                    .activity_id = rule.activity_id,
-                    .kind_id = rule.kind_id,
-                };
+                if (rule.is_global) {
+                    // Global rule: resolve kind_name in current project
+                    if (current_project_id) |project_id| {
+                        if (rule.kind_name) |kind_name| {
+                            if (self.findKindByNameInProject(kind_name, project_id)) |resolved_kind_id| {
+                                // Also need to find the activity_id for this kind
+                                if (self.getActivityIdForKind(resolved_kind_id)) |resolved_activity_id| {
+                                    return Match{
+                                        .rule_id = rule.id,
+                                        .activity_id = resolved_activity_id,
+                                        .kind_id = resolved_kind_id,
+                                    };
+                                }
+                            }
+                        }
+                    }
+                    // Global rule but no current project or kind not found - skip
+                    continue;
+                } else {
+                    // Regular rule: use stored kind_id
+                    return Match{
+                        .rule_id = rule.id,
+                        .activity_id = rule.activity_id,
+                        .kind_id = rule.kind_id,
+                    };
+                }
             }
         }
 
         return null;
+    }
+
+    /// Look up a kind by name within a specific project.
+    fn findKindByNameInProject(self: *RulesEngine, kind_name: []const u8, project_id: i64) ?i64 {
+        var stmt: c.duckdb_prepared_statement = undefined;
+        const sql =
+            \\SELECT k.kind_id FROM kinds k
+            \\JOIN activities a ON k.activity_id = a.activity_id
+            \\JOIN phases ph ON a.phase_id = ph.phase_id
+            \\WHERE ph.project_id = ? AND LOWER(k.name) = LOWER(?)
+            \\LIMIT 1
+        ;
+
+        if (c.duckdb_prepare(self.conn, sql, &stmt) == c.DuckDBError) {
+            return null;
+        }
+        defer c.duckdb_destroy_prepare(&stmt);
+
+        _ = c.duckdb_bind_int64(stmt, 1, project_id);
+        _ = c.duckdb_bind_varchar_length(stmt, 2, kind_name.ptr, kind_name.len);
+
+        var result: c.duckdb_result = undefined;
+        if (c.duckdb_execute_prepared(stmt, &result) == c.DuckDBError) {
+            c.duckdb_destroy_result(&result);
+            return null;
+        }
+        defer c.duckdb_destroy_result(&result);
+
+        if (c.duckdb_row_count(&result) == 0) {
+            return null;
+        }
+
+        return c.duckdb_value_int64(&result, 0, 0);
+    }
+
+    /// Get the activity_id for a given kind_id.
+    fn getActivityIdForKind(self: *RulesEngine, kind_id: i64) ?i64 {
+        var stmt: c.duckdb_prepared_statement = undefined;
+        const sql = "SELECT activity_id FROM kinds WHERE kind_id = ?";
+
+        if (c.duckdb_prepare(self.conn, sql, &stmt) == c.DuckDBError) {
+            return null;
+        }
+        defer c.duckdb_destroy_prepare(&stmt);
+
+        _ = c.duckdb_bind_int64(stmt, 1, kind_id);
+
+        var result: c.duckdb_result = undefined;
+        if (c.duckdb_execute_prepared(stmt, &result) == c.DuckDBError) {
+            c.duckdb_destroy_result(&result);
+            return null;
+        }
+        defer c.duckdb_destroy_result(&result);
+
+        if (c.duckdb_row_count(&result) == 0) {
+            return null;
+        }
+
+        return c.duckdb_value_int64(&result, 0, 0);
     }
 };
 

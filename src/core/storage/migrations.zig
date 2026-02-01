@@ -106,6 +106,14 @@ pub const migrations = [_]Migration{
         \\)
         ,
     },
+    .{
+        .version = 7,
+        .name = "add_global_rules_support",
+        .up =
+        \\ALTER TABLE mapping_rules ADD COLUMN IF NOT EXISTS is_global BOOLEAN DEFAULT false;
+        \\ALTER TABLE mapping_rules ADD COLUMN IF NOT EXISTS kind_name VARCHAR
+        ,
+    },
 };
 
 pub const Migrator = struct {

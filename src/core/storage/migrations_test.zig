@@ -104,8 +104,8 @@ test "Migrator.getCurrentVersion returns highest applied version after run" {
     try migrator.run();
 
     const version = try migrator.getCurrentVersion();
-    // Should be 6 after running all migrations
-    try std.testing.expectEqual(@as(u32, 6), version);
+    // Should be 7 after running all migrations
+    try std.testing.expectEqual(@as(u32, 7), version);
 }
 
 // Test 7: hierarchy tables are created

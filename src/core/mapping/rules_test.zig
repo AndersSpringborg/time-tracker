@@ -217,3 +217,133 @@ test "RulesEngine null pattern matches any" {
     try std.testing.expect(match != null);
     try std.testing.expectEqual(@as(i64, 300), match.?.activity_id);
 }
+
+// Test 12: Global rule is skipped without project context
+test "Global rule skipped without project context" {
+    const conn = try openInMemoryDb();
+    try setupDb(conn);
+
+    var engine = RulesEngine.init(conn, std.testing.allocator);
+
+    // Add a global rule
+    try engine.addRule(.{
+        .app_pattern = "Chrome",
+        .title_pattern = null,
+        .activity_id = 0,
+        .kind_id = 0,
+        .priority = 10,
+        .is_global = true,
+        .kind_name = "Distraction",
+    });
+
+    // Without project context, global rule should be skipped
+    const match = try engine.findMatch("Chrome", "facebook.com");
+    try std.testing.expect(match == null);
+}
+
+// Test 13: Global rule resolves kind in project context
+test "Global rule resolves kind in project context" {
+    const conn = try openInMemoryDb();
+    try setupDb(conn);
+
+    // Set up a project hierarchy with a "Distraction" kind
+    try insertTestHierarchy(conn);
+
+    var engine = RulesEngine.init(conn, std.testing.allocator);
+
+    // Add a global rule
+    try engine.addRule(.{
+        .app_pattern = "Chrome",
+        .title_pattern = "*facebook*",
+        .activity_id = 0,
+        .kind_id = 0,
+        .priority = 10,
+        .is_global = true,
+        .kind_name = "Distraction",
+    });
+
+    // With project context, global rule should resolve "Distraction" in project 1
+    const match = try engine.findMatchWithContext("Chrome", "facebook.com - News Feed", 1);
+    try std.testing.expect(match != null);
+    // The resolved kind_id should be 2 (from test hierarchy)
+    try std.testing.expectEqual(@as(i64, 2), match.?.kind_id);
+}
+
+// Test 14: Global rule skipped if kind name not found in project
+test "Global rule skipped if kind not in project" {
+    const conn = try openInMemoryDb();
+    try setupDb(conn);
+
+    // Set up a project hierarchy (no "NonExistent" kind)
+    try insertTestHierarchy(conn);
+
+    var engine = RulesEngine.init(conn, std.testing.allocator);
+
+    // Add a global rule for a kind that doesn't exist
+    try engine.addRule(.{
+        .app_pattern = "Chrome",
+        .title_pattern = null,
+        .activity_id = 0,
+        .kind_id = 0,
+        .priority = 10,
+        .is_global = true,
+        .kind_name = "NonExistent",
+    });
+
+    // Global rule should be skipped since kind doesn't exist
+    const match = try engine.findMatchWithContext("Chrome", "google.com", 1);
+    try std.testing.expect(match == null);
+}
+
+// Test 15: Global rule falls through to regular rule
+test "Global rule falls through to next rule" {
+    const conn = try openInMemoryDb();
+    try setupDb(conn);
+
+    try insertTestHierarchy(conn);
+
+    var engine = RulesEngine.init(conn, std.testing.allocator);
+
+    // High priority global rule for nonexistent kind (will be skipped)
+    try engine.addRule(.{
+        .app_pattern = "Chrome",
+        .title_pattern = null,
+        .activity_id = 0,
+        .kind_id = 0,
+        .priority = 20,
+        .is_global = true,
+        .kind_name = "NonExistent",
+    });
+
+    // Lower priority regular rule (should match)
+    try engine.addRule(.{
+        .app_pattern = "Chrome",
+        .title_pattern = null,
+        .activity_id = 1,
+        .kind_id = 1,
+        .priority = 5,
+    });
+
+    // Global rule skipped, falls through to regular rule
+    const match = try engine.findMatchWithContext("Chrome", "google.com", 1);
+    try std.testing.expect(match != null);
+    try std.testing.expectEqual(@as(i64, 1), match.?.kind_id);
+}
+
+fn insertTestHierarchy(conn: c.duckdb_connection) !void {
+    // Create a simple hierarchy: Customer -> Project -> Phase -> Activity -> Kind
+    const setup_sql =
+        \\INSERT INTO customers (customer_id, name) VALUES (1, 'Test Customer');
+        \\INSERT INTO projects (project_id, customer_id, name) VALUES (1, 1, 'Test Project');
+        \\INSERT INTO phases (phase_id, project_id, name) VALUES (1, 1, 'Development');
+        \\INSERT INTO activities (activity_id, phase_id, name) VALUES (1, 1, 'Coding');
+        \\INSERT INTO kinds (kind_id, activity_id, name, billable) VALUES (1, 1, 'Productive', true);
+        \\INSERT INTO kinds (kind_id, activity_id, name, billable) VALUES (2, 1, 'Distraction', false);
+    ;
+
+    var result: c.duckdb_result = undefined;
+    if (c.duckdb_query(conn, setup_sql, &result) == c.DuckDBError) {
+        return error.QueryFailed;
+    }
+    c.duckdb_destroy_result(&result);
+}
