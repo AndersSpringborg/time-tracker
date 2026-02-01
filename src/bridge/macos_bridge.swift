@@ -14,6 +14,11 @@ var globalCallback: EventCallback?
 var lastApp: NSRunningApplication?
 var lastObserver: AXObserver?
 
+// Menu bar status item
+var statusItem: NSStatusItem?
+var currentAppName: String = ""
+var currentWindowTitle: String = ""
+
 // --- EXPORTED FUNCTIONS ---
 
 @_cdecl("check_accessibility")
@@ -42,6 +47,14 @@ public func start_listening(callback: EventCallback) {
         return
     }
     
+    // Initialize NSApplication for menu bar support
+    // This is needed for status bar items to work
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)  // No dock icon, just menu bar
+    
+    // Set up the menu bar item
+    setupMenuBar()
+    
     // Watch for app switches
     NSWorkspace.shared.notificationCenter.addObserver(
         forName: NSWorkspace.didActivateApplicationNotification,
@@ -59,7 +72,85 @@ public func start_listening(callback: EventCallback) {
     }
     
     // Start the RunLoop (blocks forever)
-    CFRunLoopRun()
+    app.run()
+}
+
+// --- MENU BAR ---
+
+func setupMenuBar() {
+    // Create the status item in the menu bar
+    statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    
+    if let button = statusItem?.button {
+        button.image = NSImage(systemSymbolName: "clock.fill", accessibilityDescription: "Time Tracker")
+        button.image?.isTemplate = true  // Adapts to light/dark mode
+    }
+    
+    // Create the menu
+    let menu = NSMenu()
+    
+    // Status header
+    let headerItem = NSMenuItem(title: "⏱ Time Tracker", action: nil, keyEquivalent: "")
+    headerItem.isEnabled = false
+    menu.addItem(headerItem)
+    
+    menu.addItem(NSMenuItem.separator())
+    
+    // Current tracking info (will be updated dynamically)
+    let appItem = NSMenuItem(title: "App: -", action: nil, keyEquivalent: "")
+    appItem.isEnabled = false
+    appItem.tag = 100  // Tag to find and update this item
+    menu.addItem(appItem)
+    
+    let windowItem = NSMenuItem(title: "Window: -", action: nil, keyEquivalent: "")
+    windowItem.isEnabled = false
+    windowItem.tag = 101  // Tag to find and update this item
+    menu.addItem(windowItem)
+    
+    menu.addItem(NSMenuItem.separator())
+    
+    // Quit option
+    let quitItem = NSMenuItem(title: "Quit Time Tracker", action: #selector(MenuHelper.quitApp), keyEquivalent: "q")
+    quitItem.target = MenuHelper.shared
+    menu.addItem(quitItem)
+    
+    statusItem?.menu = menu
+}
+
+func updateMenuBar(appName: String, windowTitle: String) {
+    currentAppName = appName
+    currentWindowTitle = windowTitle
+    
+    DispatchQueue.main.async {
+        guard let menu = statusItem?.menu else { return }
+        
+        // Update app name
+        if let appItem = menu.item(withTag: 100) {
+            let truncatedApp = String(appName.prefix(40))
+            appItem.title = "App: \(truncatedApp)"
+        }
+        
+        // Update window title
+        if let windowItem = menu.item(withTag: 101) {
+            let truncatedTitle = String(windowTitle.prefix(50))
+            if truncatedTitle.isEmpty {
+                windowItem.title = "Window: (no title)"
+            } else if windowTitle.count > 50 {
+                windowItem.title = "Window: \(truncatedTitle)..."
+            } else {
+                windowItem.title = "Window: \(truncatedTitle)"
+            }
+        }
+    }
+}
+
+// Helper class to handle menu actions
+class MenuHelper: NSObject {
+    static let shared = MenuHelper()
+    
+    @objc func quitApp() {
+        NSApplication.shared.terminate(nil)
+    }
 }
 
 // --- INTERNAL LOGIC ---
@@ -90,6 +181,9 @@ func handleAppChange(_ app: NSRunningApplication) {
     
     let windowTitle = (titleValue as? String) ?? ""
     let wifiSSID = getCurrentWifiSSID()
+    
+    // Update menu bar
+    updateMenuBar(appName: appName, windowTitle: windowTitle)
     
     // Set up title change observer for this app
     setupTitleObserver(for: app)
@@ -150,6 +244,9 @@ func axCallback(observer: AXObserver, element: AXUIElement, notification: CFStri
         
         let windowTitle = (titleValue as? String) ?? ""
         let wifiSSID = getCurrentWifiSSID()
+        
+        // Update menu bar
+        updateMenuBar(appName: appName, windowTitle: windowTitle)
         
         appName.withCString { cApp in
             windowTitle.withCString { cTitle in
