@@ -1,6 +1,7 @@
 const std = @import("std");
 const Tracker = @import("tracker").Tracker;
 const DuckDbRepository = @import("duckdb_repository").DuckDbRepository;
+const BufferedRepository = @import("buffered_repository").BufferedRepository;
 const query = @import("query");
 const migrations = @import("migrations");
 const hierarchy = @import("hierarchy");
@@ -15,7 +16,7 @@ extern fn start_listening(cb: *const fn ([*c]const u8, [*c]const u8, [*c]const u
 
 // Global state (needed for C callback)
 var global_tracker: ?*Tracker = null;
-var global_repo: ?*DuckDbRepository = null;
+var global_repo: ?*BufferedRepository = null;
 
 fn getTimestampMs() i64 {
     const ts = std.posix.clock_gettime(.REALTIME) catch return 0;
@@ -137,19 +138,23 @@ fn runDaemon(allocator: std.mem.Allocator) void {
         std.debug.print("Failed to determine database path: {}\n", .{err});
         return;
     };
-    defer allocator.free(db_path);
+    // Note: We don't defer free here since the daemon runs forever
+    // and the path is needed by the buffered repository
 
     std.debug.print("Database: {s}\n", .{db_path});
 
-    // Initialize DuckDB repository
-    var repo = DuckDbRepository.init(db_path.ptr) catch |err| {
-        std.debug.print("Failed to initialize database: {}\n", .{err});
-        return;
-    };
+    // Initialize buffered repository (opens DB only during flush)
+    var repo = BufferedRepository.init(allocator, db_path);
     defer repo.deinit();
     global_repo = &repo;
 
-    std.debug.print("Database initialized successfully.\n", .{});
+    // Start the background flush timer (flushes to DB after 5s of inactivity)
+    repo.startFlushTimer() catch |err| {
+        std.debug.print("Failed to start flush timer: {}\n", .{err});
+        return;
+    };
+
+    std.debug.print("Buffered repository initialized (flushes after 5s of inactivity).\n", .{});
 
     // Initialize tracker with repository
     var tracker = Tracker.init(&repo);

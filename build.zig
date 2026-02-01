@@ -129,6 +129,18 @@ pub fn build(b: *std.Build) void {
     suggestions_module.addIncludePath(duckdb_include_path);
     suggestions_module.addLibraryPath(duckdb_lib_path);
 
+    const buffered_repo_module = b.createModule(.{
+        .root_source_file = b.path("src/core/storage/buffered_repository.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "event", .module = event_module },
+            .{ .name = "duckdb_repository", .module = duckdb_repo_module },
+        },
+    });
+    buffered_repo_module.addIncludePath(duckdb_include_path);
+    buffered_repo_module.addLibraryPath(duckdb_lib_path);
+
     // --- 1. Compile Zig to object file ---
     const zig_obj = b.addObject(.{
         .name = "main",
@@ -150,6 +162,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "context", .module = context_module },
                 .{ .name = "scoring", .module = scoring_module },
                 .{ .name = "suggestions", .module = suggestions_module },
+                .{ .name = "buffered_repository", .module = buffered_repo_module },
             },
         }),
     });
@@ -389,6 +402,23 @@ pub fn build(b: *std.Build) void {
     suggestions_tests.root_module.addLibraryPath(duckdb_lib_path);
     linkDuckDbStatic(suggestions_tests);
     test_step.dependOn(&b.addRunArtifact(suggestions_tests).step);
+
+    // Buffered Repository tests
+    const buffered_repo_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/storage/buffered_repository_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "event", .module = event_module },
+                .{ .name = "buffered_repository", .module = buffered_repo_module },
+            },
+        }),
+    });
+    buffered_repo_tests.root_module.addIncludePath(duckdb_include_path);
+    buffered_repo_tests.root_module.addLibraryPath(duckdb_lib_path);
+    linkDuckDbStatic(buffered_repo_tests);
+    test_step.dependOn(&b.addRunArtifact(buffered_repo_tests).step);
 }
 
 fn linkDuckDbStatic(compile: *std.Build.Step.Compile) void {
