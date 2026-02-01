@@ -49,20 +49,19 @@ pub const SuggestionScorer = struct {
         const app_matches = globMatch(input.candidate_app_pattern, input.app_name);
         const title_matches = globMatch(input.candidate_title_pattern, input.window_title);
 
-        // If neither matches, score is 0
-        if (!app_matches and !title_matches) {
+        // App pattern MUST match for any score (app is the primary identifier)
+        // Title pattern matching is optional bonus
+        if (!app_matches) {
             return 0;
         }
 
         var score: u32 = 0;
 
         // Base score from pattern matching
-        if (app_matches) {
-            if (isExactMatch(input.candidate_app_pattern, input.app_name)) {
-                score += self.config.exact_match_weight / 2;
-            } else {
-                score += self.config.partial_match_weight / 2;
-            }
+        if (isExactMatch(input.candidate_app_pattern, input.app_name)) {
+            score += self.config.exact_match_weight / 2;
+        } else {
+            score += self.config.partial_match_weight / 2;
         }
 
         if (title_matches) {

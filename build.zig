@@ -108,6 +108,18 @@ pub fn build(b: *std.Build) void {
     context_module.addIncludePath(duckdb_include_path);
     context_module.addLibraryPath(duckdb_lib_path);
 
+    const suggestions_module = b.createModule(.{
+        .root_source_file = b.path("src/core/suggestions/suggestions.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "migrations", .module = migrations_module },
+            .{ .name = "scoring", .module = scoring_module },
+        },
+    });
+    suggestions_module.addIncludePath(duckdb_include_path);
+    suggestions_module.addLibraryPath(duckdb_lib_path);
+
     // --- 1. Compile Zig to object file ---
     const zig_obj = b.addObject(.{
         .name = "main",
@@ -127,6 +139,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "terminal", .module = terminal_module },
                 .{ .name = "context", .module = context_module },
                 .{ .name = "scoring", .module = scoring_module },
+                .{ .name = "suggestions", .module = suggestions_module },
             },
         }),
     });
@@ -349,6 +362,23 @@ pub fn build(b: *std.Build) void {
     context_tests.root_module.addLibraryPath(duckdb_lib_path);
     linkDuckDbStatic(context_tests);
     test_step.dependOn(&b.addRunArtifact(context_tests).step);
+
+    // Suggestions tests
+    const suggestions_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/suggestions/suggestions_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "migrations", .module = migrations_module },
+                .{ .name = "suggestions", .module = suggestions_module },
+            },
+        }),
+    });
+    suggestions_tests.root_module.addIncludePath(duckdb_include_path);
+    suggestions_tests.root_module.addLibraryPath(duckdb_lib_path);
+    linkDuckDbStatic(suggestions_tests);
+    test_step.dependOn(&b.addRunArtifact(suggestions_tests).step);
 }
 
 fn linkDuckDbStatic(compile: *std.Build.Step.Compile) void {
