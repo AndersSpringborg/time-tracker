@@ -97,6 +97,15 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const picker_module = b.createModule(.{
+        .root_source_file = b.path("src/core/cli/picker.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "terminal", .module = terminal_module },
+        },
+    });
+
     const context_module = b.createModule(.{
         .root_source_file = b.path("src/core/context/context.zig"),
         .target = target,
@@ -137,6 +146,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "rules", .module = rules_module },
                 .{ .name = "review", .module = review_module },
                 .{ .name = "terminal", .module = terminal_module },
+                .{ .name = "picker", .module = picker_module },
                 .{ .name = "context", .module = context_module },
                 .{ .name = "scoring", .module = scoring_module },
                 .{ .name = "suggestions", .module = suggestions_module },
