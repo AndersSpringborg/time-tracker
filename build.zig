@@ -91,6 +91,17 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const context_module = b.createModule(.{
+        .root_source_file = b.path("src/core/context/context.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "migrations", .module = migrations_module },
+        },
+    });
+    context_module.addIncludePath(duckdb_include_path);
+    context_module.addLibraryPath(duckdb_lib_path);
+
     // --- 1. Compile Zig to object file ---
     const zig_obj = b.addObject(.{
         .name = "main",
@@ -108,6 +119,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "rules", .module = rules_module },
                 .{ .name = "review", .module = review_module },
                 .{ .name = "terminal", .module = terminal_module },
+                .{ .name = "context", .module = context_module },
             },
         }),
     });
@@ -300,6 +312,23 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(terminal_tests).step);
+
+    // Context tests
+    const context_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/context/context_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "migrations", .module = migrations_module },
+                .{ .name = "context", .module = context_module },
+            },
+        }),
+    });
+    context_tests.root_module.addIncludePath(duckdb_include_path);
+    context_tests.root_module.addLibraryPath(duckdb_lib_path);
+    linkDuckDbStatic(context_tests);
+    test_step.dependOn(&b.addRunArtifact(context_tests).step);
 }
 
 fn linkDuckDbStatic(compile: *std.Build.Step.Compile) void {
