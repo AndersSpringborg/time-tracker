@@ -260,70 +260,74 @@ pub fn fgColorCode(color: Color) []const u8 {
     };
 }
 
-// Convenience functions that write directly to stdout
-const stdout = std.io.getStdOut().writer();
+// Convenience functions that write directly to stdout using posix.write
+fn writeStdout(bytes: []const u8) void {
+    _ = std.posix.write(std.posix.STDOUT_FILENO, bytes) catch {};
+}
 
 pub fn clearScreen() void {
-    stdout.writeAll(clearScreenCode()) catch {};
+    writeStdout(clearScreenCode());
 }
 
 pub fn clearLine() void {
-    stdout.writeAll(clearLineCode()) catch {};
+    writeStdout(clearLineCode());
 }
 
 pub fn clearToEndOfLine() void {
-    stdout.writeAll(clearToEndOfLineCode()) catch {};
+    writeStdout(clearToEndOfLineCode());
 }
 
 pub fn moveCursor(row: u16, col: u16) void {
     var buf: [32]u8 = undefined;
-    stdout.writeAll(cursorPosition(row, col, &buf)) catch {};
+    writeStdout(cursorPosition(row, col, &buf));
 }
 
 pub fn moveCursorUp(n: u16) void {
     var buf: [16]u8 = undefined;
     const seq = std.fmt.bufPrint(&buf, "\x1b[{d}A", .{n}) catch return;
-    stdout.writeAll(seq) catch {};
+    writeStdout(seq);
 }
 
 pub fn moveCursorDown(n: u16) void {
     var buf: [16]u8 = undefined;
     const seq = std.fmt.bufPrint(&buf, "\x1b[{d}B", .{n}) catch return;
-    stdout.writeAll(seq) catch {};
+    writeStdout(seq);
 }
 
 pub fn hideCursor() void {
-    stdout.writeAll(hideCursorCode()) catch {};
+    writeStdout(hideCursorCode());
 }
 
 pub fn showCursor() void {
-    stdout.writeAll(showCursorCode()) catch {};
+    writeStdout(showCursorCode());
 }
 
 pub fn saveCursor() void {
-    stdout.writeAll(saveCursorCode()) catch {};
+    writeStdout(saveCursorCode());
 }
 
 pub fn restoreCursor() void {
-    stdout.writeAll(restoreCursorCode()) catch {};
+    writeStdout(restoreCursorCode());
 }
 
 pub fn setBold() void {
-    stdout.writeAll(boldCode()) catch {};
+    writeStdout(boldCode());
 }
 
 pub fn resetStyle() void {
-    stdout.writeAll(resetCode()) catch {};
+    writeStdout(resetCode());
 }
 
 pub fn setFg(color: Color) void {
-    stdout.writeAll(fgColorCode(color)) catch {};
+    writeStdout(fgColorCode(color));
 }
 
 pub fn write(text: []const u8) void {
-    stdout.writeAll(text) catch {};
+    writeStdout(text);
 }
 
 pub fn print(comptime fmt: []const u8, args: anytype) void {
-    stdout.print(fmt, args) catch {};
+    var buf: [1024]u8 = undefined;
+    const result = std.fmt.bufPrint(&buf, fmt, args) catch return;
+    writeStdout(result);
 }

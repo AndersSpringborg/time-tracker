@@ -6,6 +6,8 @@ const migrations = @import("migrations");
 const hierarchy = @import("hierarchy");
 const rules = @import("rules");
 const review = @import("review");
+const context = @import("context");
+const picker = @import("picker");
 
 // Import functions from Swift bridge (only used in daemon mode)
 extern fn check_accessibility() bool;
@@ -96,6 +98,7 @@ fn printUsage() void {
         \\  rules          Manage mapping rules
         \\  apply-rules    Apply rules to unmapped events
         \\  review         Interactively review and map unmapped events
+        \\  projects       Manage active project context
         \\
         \\Options for summary/report:
         \\  --today        Show only today's data (default)
@@ -107,6 +110,12 @@ fn printUsage() void {
         \\  rules add      Add a new rule (interactive)
         \\  rules delete   Delete a rule by ID
         \\
+        \\Projects subcommands:
+        \\  projects list  List active projects
+        \\  projects add   Add a project to active context (interactive picker)
+        \\  projects end   End an active project
+        \\  projects clear End all active projects
+        \\
         \\Examples:
         \\  time_tracker daemon
         \\  time_tracker summary --today
@@ -114,6 +123,7 @@ fn printUsage() void {
         \\  time_tracker import customers.json
         \\  time_tracker rules list
         \\  time_tracker review
+        \\  time_tracker projects add
         \\
     ;
     std.debug.print("{s}", .{usage});
@@ -797,6 +807,266 @@ fn runReview(allocator: std.mem.Allocator) void {
     std.debug.print("\nReview complete!\n", .{});
 }
 
+fn runProjects(allocator: std.mem.Allocator, args: []const [:0]const u8) void {
+    const db_path = getDbPath(allocator) catch |err| {
+        std.debug.print("Failed to determine database path: {}\n", .{err});
+        return;
+    };
+    defer allocator.free(db_path);
+
+    const c = migrations.c;
+    var db: c.duckdb_database = undefined;
+    var conn: c.duckdb_connection = undefined;
+
+    if (c.duckdb_open(db_path.ptr, &db) == c.DuckDBError) {
+        std.debug.print("Failed to open database\n", .{});
+        return;
+    }
+    defer c.duckdb_close(&db);
+
+    if (c.duckdb_connect(db, &conn) == c.DuckDBError) {
+        std.debug.print("Failed to connect to database\n", .{});
+        return;
+    }
+    defer c.duckdb_disconnect(&conn);
+
+    // Run migrations first
+    var migrator = migrations.Migrator.init(conn) catch |err| {
+        std.debug.print("Failed to init migrator: {}\n", .{err});
+        return;
+    };
+    migrator.run() catch |err| {
+        std.debug.print("Failed to run migrations: {}\n", .{err});
+        return;
+    };
+
+    var ctx = context.ProjectContext.init(conn, allocator);
+
+    if (args.len < 1) {
+        // Default to list
+        runProjectsList(&ctx, allocator, conn);
+        return;
+    }
+
+    const subcommand = args[0];
+
+    if (std.mem.eql(u8, subcommand, "list")) {
+        runProjectsList(&ctx, allocator, conn);
+    } else if (std.mem.eql(u8, subcommand, "add")) {
+        runProjectsAdd(&ctx, allocator, conn);
+    } else if (std.mem.eql(u8, subcommand, "end")) {
+        runProjectsEnd(&ctx, allocator, args[1..]);
+    } else if (std.mem.eql(u8, subcommand, "clear")) {
+        runProjectsClear(&ctx);
+    } else {
+        std.debug.print("Unknown projects subcommand: {s}\n", .{subcommand});
+        std.debug.print("Usage: time_tracker projects <list|add|end|clear>\n", .{});
+    }
+}
+
+fn runProjectsList(ctx: *context.ProjectContext, allocator: std.mem.Allocator, conn: migrations.c.duckdb_connection) void {
+    const active = ctx.getActiveProjects() catch |err| {
+        std.debug.print("Failed to get active projects: {}\n", .{err});
+        return;
+    };
+    defer allocator.free(active);
+
+    if (active.len == 0) {
+        std.debug.print("No active projects.\n", .{});
+        std.debug.print("Use 'time_tracker projects add' to set your current project context.\n", .{});
+        return;
+    }
+
+    std.debug.print("\n=== Active Projects ===\n\n", .{});
+
+    for (active) |assignment| {
+        // Get project name
+        const name = getProjectName(conn, assignment.project_id, allocator) catch "Unknown";
+        defer if (!std.mem.eql(u8, name, "Unknown")) allocator.free(name);
+        std.debug.print("  [{d}] {s}\n", .{ assignment.project_id, name });
+    }
+
+    std.debug.print("\n", .{});
+}
+
+fn runProjectsAdd(ctx: *context.ProjectContext, allocator: std.mem.Allocator, conn: migrations.c.duckdb_connection) void {
+    // Get all projects
+    const c = migrations.c;
+    var result: c.duckdb_result = undefined;
+    const sql =
+        \\SELECT p.project_id, c.name || ' > ' || p.name as display_name 
+        \\FROM projects p 
+        \\JOIN customers c ON p.customer_id = c.customer_id
+        \\ORDER BY c.name, p.name
+    ;
+
+    if (c.duckdb_query(conn, sql, &result) == c.DuckDBError) {
+        std.debug.print("Failed to query projects\n", .{});
+        return;
+    }
+    defer c.duckdb_destroy_result(&result);
+
+    const row_count = c.duckdb_row_count(&result);
+    if (row_count == 0) {
+        std.debug.print("No projects found. Import a hierarchy first with 'time_tracker import'.\n", .{});
+        return;
+    }
+
+    // Build picker items
+    var items = allocator.alloc(picker.PickerItem, row_count) catch {
+        std.debug.print("Out of memory\n", .{});
+        return;
+    };
+    defer allocator.free(items);
+
+    // Allocate string storage
+    var strings = allocator.alloc([]u8, row_count) catch {
+        std.debug.print("Out of memory\n", .{});
+        return;
+    };
+    defer {
+        for (strings) |s| {
+            allocator.free(s);
+        }
+        allocator.free(strings);
+    }
+
+    // Get active project IDs for highlighting
+    const active_ids = ctx.getActiveProjectIds() catch &[_]i64{};
+    defer if (active_ids.len > 0) allocator.free(active_ids);
+
+    for (0..row_count) |i| {
+        const idx: c.idx_t = @intCast(i);
+        const project_id = c.duckdb_value_int64(&result, 0, idx);
+        const name_ptr = c.duckdb_value_varchar(&result, 1, idx);
+
+        var name_len: usize = 0;
+        if (name_ptr != null) {
+            name_len = std.mem.len(name_ptr);
+        }
+
+        strings[i] = allocator.alloc(u8, name_len) catch {
+            continue;
+        };
+        if (name_ptr != null) {
+            @memcpy(strings[i], name_ptr[0..name_len]);
+            c.duckdb_free(name_ptr);
+        }
+
+        const is_active = blk: {
+            for (active_ids) |aid| {
+                if (aid == project_id) break :blk true;
+            }
+            break :blk false;
+        };
+
+        items[i] = .{
+            .id = project_id,
+            .display_text = strings[i],
+            .secondary_text = if (is_active) "active" else "",
+            .is_highlighted = is_active,
+        };
+    }
+
+    // Run picker
+    var p = picker.Picker.init(allocator, items, "Select Project to Add") catch |err| {
+        if (err == picker.PickerError.NotATty) {
+            std.debug.print("Error: Interactive mode requires a terminal (not piped).\n", .{});
+        } else {
+            std.debug.print("Failed to initialize picker: {}\n", .{err});
+        }
+        return;
+    };
+    defer p.deinit();
+
+    const selection = p.run() catch |err| {
+        if (err == picker.PickerError.Cancelled) {
+            std.debug.print("Cancelled.\n", .{});
+        }
+        return;
+    };
+
+    // Add the project
+    ctx.addProject(selection.selected_id) catch |err| {
+        std.debug.print("Failed to add project: {}\n", .{err});
+        return;
+    };
+
+    const selected_name = items[selection.selected_index].display_text;
+    std.debug.print("Added project: {s}\n", .{selected_name});
+}
+
+fn runProjectsEnd(ctx: *context.ProjectContext, allocator: std.mem.Allocator, args: []const [:0]const u8) void {
+    if (args.len < 1) {
+        std.debug.print("Usage: time_tracker projects end <project_id>\n", .{});
+        std.debug.print("Use 'time_tracker projects list' to see active project IDs.\n", .{});
+        return;
+    }
+
+    const project_id = std.fmt.parseInt(i64, args[0], 10) catch {
+        std.debug.print("Invalid project ID: {s}\n", .{args[0]});
+        return;
+    };
+
+    const is_active = ctx.isProjectActive(project_id) catch false;
+    if (!is_active) {
+        std.debug.print("Project {d} is not currently active.\n", .{project_id});
+        return;
+    }
+
+    ctx.endProject(project_id) catch |err| {
+        std.debug.print("Failed to end project: {}\n", .{err});
+        return;
+    };
+
+    std.debug.print("Project {d} ended.\n", .{project_id});
+    _ = allocator;
+}
+
+fn runProjectsClear(ctx: *context.ProjectContext) void {
+    ctx.endAllProjects() catch |err| {
+        std.debug.print("Failed to clear projects: {}\n", .{err});
+        return;
+    };
+
+    std.debug.print("All active projects cleared.\n", .{});
+}
+
+fn getProjectName(conn: migrations.c.duckdb_connection, project_id: i64, allocator: std.mem.Allocator) ![]const u8 {
+    const c = migrations.c;
+    var stmt: c.duckdb_prepared_statement = undefined;
+    const sql = "SELECT c.name || ' > ' || p.name FROM projects p JOIN customers c ON p.customer_id = c.customer_id WHERE p.project_id = ?";
+
+    if (c.duckdb_prepare(conn, sql, &stmt) == c.DuckDBError) {
+        return error.QueryFailed;
+    }
+    defer c.duckdb_destroy_prepare(&stmt);
+
+    _ = c.duckdb_bind_int64(stmt, 1, project_id);
+
+    var result: c.duckdb_result = undefined;
+    if (c.duckdb_execute_prepared(stmt, &result) == c.DuckDBError) {
+        return error.QueryFailed;
+    }
+    defer c.duckdb_destroy_result(&result);
+
+    if (c.duckdb_row_count(&result) == 0) {
+        return error.NotFound;
+    }
+
+    const name_ptr = c.duckdb_value_varchar(&result, 0, 0);
+    if (name_ptr == null) {
+        return error.NotFound;
+    }
+
+    const name_len = std.mem.len(name_ptr);
+    const name_copy = try allocator.alloc(u8, name_len);
+    @memcpy(name_copy, name_ptr[0..name_len]);
+    c.duckdb_free(name_ptr);
+
+    return name_copy;
+}
+
 pub fn main() void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -831,6 +1101,8 @@ pub fn main() void {
         runApplyRules(allocator);
     } else if (std.mem.eql(u8, command, "review")) {
         runReview(allocator);
+    } else if (std.mem.eql(u8, command, "projects")) {
+        runProjects(allocator, args[2..]);
     } else if (std.mem.eql(u8, command, "--help") or std.mem.eql(u8, command, "-h")) {
         printUsage();
     } else {

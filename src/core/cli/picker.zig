@@ -32,7 +32,7 @@ pub const Picker = struct {
     // State
     items: []const PickerItem,
     filtered_indices: []usize,
-    filter_text: std.ArrayList(u8),
+    filter_text: std.ArrayListUnmanaged(u8),
     selected_index: usize,
     scroll_offset: usize,
     visible_rows: usize,
@@ -51,10 +51,10 @@ pub const Picker = struct {
         var term = Terminal.init() catch return PickerError.NotATty;
         term.enableRawMode() catch return PickerError.TerminalFailed;
 
-        const size = Terminal.getSize() catch .{ .rows = 24, .cols = 80 };
+        const size = Terminal.getSize() catch terminal.Size{ .rows = 24, .cols = 80 };
         const visible = @max(3, size.rows - 6); // Reserve space for header/footer
 
-        const filter_text = std.ArrayList(u8).init(allocator);
+        const filter_text: std.ArrayListUnmanaged(u8) = .{};
 
         // Initially all items are visible
         var filtered = allocator.alloc(usize, items.len) catch {
@@ -81,7 +81,7 @@ pub const Picker = struct {
 
     pub fn deinit(self: *Self) void {
         self.allocator.free(self.filtered_indices);
-        self.filter_text.deinit();
+        self.filter_text.deinit(self.allocator);
         terminal.showCursor();
         terminal.resetStyle();
         terminal.clearScreen();
@@ -118,7 +118,7 @@ pub const Picker = struct {
                         'G' => self.goToBottom(),
                         'q' => return PickerError.Cancelled,
                         else => {
-                            self.filter_text.append(c) catch {};
+                            self.filter_text.append(self.allocator, c) catch {};
                             self.updateFilter();
                         },
                     }
