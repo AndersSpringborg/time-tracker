@@ -31,7 +31,8 @@ pub const Picker = struct {
 
     // State
     items: []const PickerItem,
-    filtered_indices: []usize,
+    filtered_indices: []usize, // Always keeps original allocation size
+    filtered_count: usize, // Number of valid entries in filtered_indices
     filter_text: std.ArrayListUnmanaged(u8),
     selected_index: usize,
     scroll_offset: usize,
@@ -57,7 +58,7 @@ pub const Picker = struct {
         const filter_text: std.ArrayListUnmanaged(u8) = .{};
 
         // Initially all items are visible
-        var filtered = allocator.alloc(usize, items.len) catch {
+        const filtered = allocator.alloc(usize, items.len) catch {
             term.deinit();
             return PickerError.TerminalFailed;
         };
@@ -70,6 +71,7 @@ pub const Picker = struct {
             .allocator = allocator,
             .items = items,
             .filtered_indices = filtered,
+            .filtered_count = items.len,
             .filter_text = filter_text,
             .selected_index = 0,
             .scroll_offset = 0,
@@ -100,7 +102,7 @@ pub const Picker = struct {
             switch (key) {
                 .escape, .ctrl_c => return PickerError.Cancelled,
                 .enter => {
-                    if (self.filtered_indices.len > 0) {
+                    if (self.filtered_count > 0) {
                         const actual_index = self.filtered_indices[self.selected_index];
                         return PickerResult{
                             .selected_id = self.items[actual_index].id,
@@ -154,7 +156,7 @@ pub const Picker = struct {
     }
 
     fn moveDown(self: *Self) void {
-        if (self.filtered_indices.len > 0 and self.selected_index < self.filtered_indices.len - 1) {
+        if (self.filtered_count > 0 and self.selected_index < self.filtered_count - 1) {
             self.selected_index += 1;
             if (self.selected_index >= self.scroll_offset + self.visible_rows) {
                 self.scroll_offset = self.selected_index - self.visible_rows + 1;
@@ -168,8 +170,8 @@ pub const Picker = struct {
     }
 
     fn goToBottom(self: *Self) void {
-        if (self.filtered_indices.len > 0) {
-            self.selected_index = self.filtered_indices.len - 1;
+        if (self.filtered_count > 0) {
+            self.selected_index = self.filtered_count - 1;
             if (self.selected_index >= self.visible_rows) {
                 self.scroll_offset = self.selected_index - self.visible_rows + 1;
             }
@@ -192,12 +194,12 @@ pub const Picker = struct {
     fn pageDown(self: *Self) void {
         self.selected_index = @min(
             self.selected_index + self.visible_rows,
-            if (self.filtered_indices.len > 0) self.filtered_indices.len - 1 else 0,
+            if (self.filtered_count > 0) self.filtered_count - 1 else 0,
         );
         self.scroll_offset = @min(
             self.scroll_offset + self.visible_rows,
-            if (self.filtered_indices.len > self.visible_rows)
-                self.filtered_indices.len - self.visible_rows
+            if (self.filtered_count > self.visible_rows)
+                self.filtered_count - self.visible_rows
             else
                 0,
         );
@@ -215,8 +217,8 @@ pub const Picker = struct {
             }
         }
 
-        // Shrink to actual count (we reuse the same allocation)
-        self.filtered_indices = self.filtered_indices[0..count];
+        // Update the count (allocation stays the same size)
+        self.filtered_count = count;
 
         // Reset selection if needed
         if (count == 0) {
@@ -269,14 +271,14 @@ pub const Picker = struct {
             terminal.write(self.filter_text.items);
         }
         terminal.setFg(Color.bright_black);
-        terminal.print(" ({d} matches)\n", .{self.filtered_indices.len});
+        terminal.print(" ({d} matches)\n", .{self.filtered_count});
         terminal.resetStyle();
         terminal.write("\n");
 
         // Items
-        const end_idx = @min(self.scroll_offset + self.visible_rows, self.filtered_indices.len);
+        const end_idx = @min(self.scroll_offset + self.visible_rows, self.filtered_count);
 
-        if (self.filtered_indices.len == 0) {
+        if (self.filtered_count == 0) {
             terminal.setFg(Color.bright_black);
             terminal.write("  (no matches)\n");
             terminal.resetStyle();
@@ -315,13 +317,13 @@ pub const Picker = struct {
         }
 
         // Scroll indicator
-        if (self.filtered_indices.len > self.visible_rows) {
+        if (self.filtered_count > self.visible_rows) {
             terminal.write("\n");
             terminal.setFg(Color.bright_black);
             terminal.print("  [{d}-{d} of {d}]", .{
                 self.scroll_offset + 1,
                 end_idx,
-                self.filtered_indices.len,
+                self.filtered_count,
             });
             terminal.resetStyle();
         }
