@@ -114,6 +114,22 @@ pub const migrations = [_]Migration{
         \\ALTER TABLE mapping_rules ADD COLUMN IF NOT EXISTS kind_name VARCHAR
         ,
     },
+    .{
+        .version = 8,
+        .name = "fix_kinds_composite_primary_key",
+        .up =
+        \\CREATE TABLE IF NOT EXISTS kinds_new (
+        \\    activity_id INTEGER NOT NULL REFERENCES activities(activity_id),
+        \\    kind_id INTEGER NOT NULL,
+        \\    name VARCHAR NOT NULL,
+        \\    billable BOOLEAN NOT NULL DEFAULT true,
+        \\    PRIMARY KEY (activity_id, kind_id)
+        \\);
+        \\INSERT INTO kinds_new SELECT activity_id, kind_id, name, billable FROM kinds ON CONFLICT DO NOTHING;
+        \\DROP TABLE kinds;
+        \\ALTER TABLE kinds_new RENAME TO kinds
+        ,
+    },
 };
 
 pub const Migrator = struct {
