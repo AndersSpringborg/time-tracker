@@ -12,3 +12,6 @@ zig-out/
 
 # Swift build artifacts
 *.o
+
+# Distribution build artifacts
+dist/
