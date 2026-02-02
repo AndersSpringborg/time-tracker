@@ -77,7 +77,7 @@ test "HierarchyImporter imports full hierarchy" {
         \\  "Projects": [{
         \\    "id": "Project Alpha",
         \\    "ProjectId": 200,
-        \\    "Phases": [{
+        \\    "TimePhases": [{
         \\      "PhaseId": 300,
         \\      "Name": "Development",
         \\      "Activities": [{
@@ -141,7 +141,7 @@ test "HierarchyImporter detects non-billable activities" {
         \\  "Projects": [{
         \\    "id": "Project",
         \\    "ProjectId": 200,
-        \\    "Phases": [{
+        \\    "TimePhases": [{
         \\      "PhaseId": 300,
         \\      "Name": "Phase",
         \\      "Activities": [

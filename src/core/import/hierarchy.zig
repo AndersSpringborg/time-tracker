@@ -111,7 +111,7 @@ pub const HierarchyImporter = struct {
                 try self.insertProject(project_id, customer_id, project_name);
                 stats.projects += 1;
 
-                const phases = project_obj.get("Phases").?.array.items;
+                const phases = project_obj.get("TimePhases").?.array.items;
                 for (phases) |phase_val| {
                     const phase_obj = phase_val.object;
 
