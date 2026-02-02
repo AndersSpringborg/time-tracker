@@ -155,9 +155,73 @@ class MenuHelper: NSObject {
 
 // --- INTERNAL LOGIC ---
 
+// Cache WiFi SSID to avoid calling slow system_profiler on every event
+var cachedWifiSSID: String = ""
+var lastWifiCheck: Date = Date.distantPast
+let wifiCacheInterval: TimeInterval = 30.0  // Refresh every 30 seconds
+
 func getCurrentWifiSSID() -> String {
+    // Return cached value if still fresh
+    if Date().timeIntervalSince(lastWifiCheck) < wifiCacheInterval {
+        return cachedWifiSSID
+    }
+    
+    // Try CoreWLAN first (requires Location Services permission)
     let client = CWWiFiClient.shared()
-    return client.interface()?.ssid() ?? ""
+    if let interface = client.interface(), let ssid = interface.ssid() {
+        cachedWifiSSID = ssid
+        lastWifiCheck = Date()
+        return ssid
+    }
+    
+    // Fallback to system_profiler (doesn't require Location permission, but slow)
+    cachedWifiSSID = getWifiSSIDViaSystemProfiler()
+    lastWifiCheck = Date()
+    return cachedWifiSSID
+}
+
+func getWifiSSIDViaSystemProfiler() -> String {
+    let task = Process()
+    let pipe = Pipe()
+    
+    task.executableURL = URL(fileURLWithPath: "/usr/sbin/system_profiler")
+    task.arguments = ["SPAirPortDataType", "-detailLevel", "basic"]
+    task.standardOutput = pipe
+    task.standardError = FileHandle.nullDevice
+    
+    do {
+        try task.run()
+        task.waitUntilExit()
+        
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        if let output = String(data: data, encoding: .utf8) {
+            // Look for "Current Network Information:" section and get the network name on the next line
+            let lines = output.components(separatedBy: "\n")
+            var foundCurrentNetwork = false
+            for line in lines {
+                if line.contains("Current Network Information:") {
+                    foundCurrentNetwork = true
+                    continue
+                }
+                if foundCurrentNetwork {
+                    // Next non-empty line after "Current Network Information:" is the SSID
+                    let trimmed = line.trimmingCharacters(in: .whitespaces)
+                    if !trimmed.isEmpty && trimmed.hasSuffix(":") {
+                        // Remove the trailing colon
+                        let ssid = String(trimmed.dropLast())
+                        if !ssid.isEmpty && ssid != "Network Type" {
+                            return ssid
+                        }
+                    }
+                    foundCurrentNetwork = false
+                }
+            }
+        }
+    } catch {
+        NSLog("[TimeTracker] WiFi: system_profiler command failed: %@", error.localizedDescription)
+    }
+    
+    return ""
 }
 
 func handleAppChange(_ app: NSRunningApplication) {
