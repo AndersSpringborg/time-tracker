@@ -11,6 +11,7 @@ const c = migrations.c;
 
 const Reviewer = review.Reviewer;
 const UnmappedEvent = review.UnmappedEvent;
+const DateString = review.DateString;
 
 /// Event row for table display
 const EventRow = struct {
@@ -34,42 +35,32 @@ const App = struct {
     table_ctx: vaxis.widgets.Table.TableContext,
     should_quit: bool = false,
 
+    // Day navigation
+    dates: []DateString,
+    current_date_idx: usize = 0,
+
     pub fn init(allocator: std.mem.Allocator, conn: c.duckdb_connection) !App {
         var reviewer_instance = Reviewer.init(conn, allocator);
 
-        // Fetch unmapped events
-        const events = try reviewer_instance.getUnmappedEvents();
+        // Get all dates with unmapped events
+        const dates = try reviewer_instance.getDatesWithUnmappedEvents();
 
-        // Convert to table rows
-        const rows = try allocator.alloc(EventRow, events.len);
-        for (events, 0..) |event, i| {
-            rows[i] = EventRow{
-                .id = event.id,
-                .app_name = undefined,
-                .window_title = undefined,
-                .duration = undefined,
-            };
-
-            // Copy app name
-            const app_len = @min(event.app_name.len, 255);
-            @memcpy(rows[i].app_buf[0..app_len], event.app_name[0..app_len]);
-            rows[i].app_name = rows[i].app_buf[0..app_len];
-
-            // Copy and truncate window title
-            const title_len = @min(event.window_title.len, 60);
-            @memcpy(rows[i].title_buf[0..title_len], event.window_title[0..title_len]);
-            rows[i].window_title = rows[i].title_buf[0..title_len];
-
-            // Format duration
-            const duration_str = formatDuration(event.duration_ms, &rows[i].duration_buf);
-            rows[i].duration = duration_str;
+        if (dates.len == 0) {
+            allocator.free(dates);
+            return error.NoEvents;
         }
+
+        // Fetch events for the first (most recent) date
+        const events = try reviewer_instance.getUnmappedEventsForDate(dates[0].slice());
+        const rows = try convertToRows(allocator, events);
 
         return App{
             .allocator = allocator,
             .reviewer = reviewer_instance,
             .events = events,
             .rows = rows,
+            .dates = dates,
+            .current_date_idx = 0,
             .table_ctx = .{
                 .active = true,
                 .active_bg = .{ .rgb = .{ 64, 128, 255 } },
@@ -86,9 +77,49 @@ const App = struct {
     pub fn deinit(self: *App) void {
         self.allocator.free(self.rows);
         self.allocator.free(self.events);
+        self.allocator.free(self.dates);
         if (self.table_ctx.sel_rows) |sel| {
             self.allocator.free(sel);
         }
+    }
+
+    /// Reload events for the current date
+    fn reloadEvents(self: *App) !void {
+        // Free old data
+        self.allocator.free(self.rows);
+        self.allocator.free(self.events);
+        if (self.table_ctx.sel_rows) |sel| {
+            self.allocator.free(sel);
+            self.table_ctx.sel_rows = null;
+        }
+
+        // Load new events
+        const date = self.dates[self.current_date_idx].slice();
+        self.events = try self.reviewer.getUnmappedEventsForDate(date);
+        self.rows = try convertToRows(self.allocator, self.events);
+
+        // Reset cursor
+        self.table_ctx.row = 0;
+    }
+
+    /// Navigate to the previous day (older)
+    fn prevDay(self: *App) void {
+        if (self.current_date_idx + 1 < self.dates.len) {
+            self.current_date_idx += 1;
+            self.reloadEvents() catch {};
+        }
+    }
+
+    /// Navigate to the next day (newer)
+    fn nextDay(self: *App) void {
+        if (self.current_date_idx > 0) {
+            self.current_date_idx -= 1;
+            self.reloadEvents() catch {};
+        }
+    }
+
+    pub fn getCurrentDate(self: *App) []const u8 {
+        return self.dates[self.current_date_idx].slice();
     }
 
     pub fn handleKey(self: *App, key: vaxis.Key) bool {
@@ -96,6 +127,16 @@ const App = struct {
         if (key.matches('q', .{}) or key.matches('c', .{ .ctrl = true })) {
             self.should_quit = true;
             return true;
+        }
+
+        // Day navigation
+        if (key.matches('[', .{})) {
+            self.prevDay();
+            return false;
+        }
+        if (key.matches(']', .{})) {
+            self.nextDay();
+            return false;
         }
 
         // Navigation
@@ -230,6 +271,33 @@ const App = struct {
     }
 };
 
+fn convertToRows(allocator: std.mem.Allocator, events: []UnmappedEvent) ![]EventRow {
+    const rows = try allocator.alloc(EventRow, events.len);
+    for (events, 0..) |event, i| {
+        rows[i] = EventRow{
+            .id = event.id,
+            .app_name = undefined,
+            .window_title = undefined,
+            .duration = undefined,
+        };
+
+        // Copy app name
+        const app_len = @min(event.app_name.len, 255);
+        @memcpy(rows[i].app_buf[0..app_len], event.app_name[0..app_len]);
+        rows[i].app_name = rows[i].app_buf[0..app_len];
+
+        // Copy and truncate window title
+        const title_len = @min(event.window_title.len, 60);
+        @memcpy(rows[i].title_buf[0..title_len], event.window_title[0..title_len]);
+        rows[i].window_title = rows[i].title_buf[0..title_len];
+
+        // Format duration
+        const duration_str = formatDuration(event.duration_ms, &rows[i].duration_buf);
+        rows[i].duration = duration_str;
+    }
+    return rows;
+}
+
 fn formatDuration(ms: i64, buf: []u8) []const u8 {
     const total_seconds = @divFloor(ms, 1000);
     const hours = @divFloor(total_seconds, 3600);
@@ -256,13 +324,14 @@ pub fn run(allocator: std.mem.Allocator, conn: c.duckdb_connection) !void {
     defer vx.deinit(allocator, tty.writer());
 
     // Initialize app
-    var app = try App.init(allocator, conn);
+    var app = App.init(allocator, conn) catch |err| {
+        if (err == error.NoEvents) {
+            std.debug.print("No unmapped events to review.\n", .{});
+            return;
+        }
+        return err;
+    };
     defer app.deinit();
-
-    if (app.rows.len == 0) {
-        std.debug.print("No unmapped events to review.\n", .{});
-        return;
-    }
 
     // Event loop
     var loop: vaxis.Loop(union(enum) {
@@ -301,7 +370,10 @@ pub fn run(allocator: std.mem.Allocator, conn: c.duckdb_connection) !void {
 
         var header_buf: [256]u8 = undefined;
         const sel_count = app.getSelectionCount();
-        const header_text = std.fmt.bufPrint(&header_buf, " Review: {d} unmapped events | {d} selected | j/k:Move Space:Select a:SelectApp q:Quit", .{ app.rows.len, sel_count }) catch "Review";
+        const current_date = app.getCurrentDate();
+        const date_info_len = app.dates.len;
+        const date_pos = app.current_date_idx + 1;
+        const header_text = std.fmt.bufPrint(&header_buf, " {s} ({d}/{d}) | {d} events | {d} selected | [/]:Day j/k:Move Space:Select a:App q:Quit", .{ current_date, date_pos, date_info_len, app.rows.len, sel_count }) catch "Review";
         _ = header_win.print(&.{.{ .text = header_text, .style = .{ .fg = .{ .rgb = .{ 200, 200, 200 } } } }}, .{});
 
         // Table
@@ -319,6 +391,9 @@ pub fn run(allocator: std.mem.Allocator, conn: c.duckdb_connection) !void {
                 app.rows,
                 &app.table_ctx,
             );
+        } else {
+            // Show message when no events for current day
+            _ = table_win.print(&.{.{ .text = "  No events for this date", .style = .{ .fg = .{ .rgb = .{ 128, 128, 128 } } } }}, .{});
         }
 
         try vx.render(tty.writer());

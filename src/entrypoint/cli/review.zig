@@ -58,6 +58,16 @@ pub const HierarchyMatch = struct {
     display_path: []const u8,
 };
 
+/// Date string buffer type (YYYY-MM-DD format)
+pub const DateString = struct {
+    buf: [10]u8 = undefined,
+    len: usize = 0,
+
+    pub fn slice(self: *const DateString) []const u8 {
+        return self.buf[0..self.len];
+    }
+};
+
 pub const Reviewer = struct {
     conn: c.duckdb_connection,
     allocator: std.mem.Allocator,
@@ -67,6 +77,108 @@ pub const Reviewer = struct {
             .conn = conn,
             .allocator = allocator,
         };
+    }
+
+    /// Get distinct dates that have unmapped events, sorted descending (newest first)
+    pub fn getDatesWithUnmappedEvents(self: *Reviewer) ![]DateString {
+        var result: c.duckdb_result = undefined;
+        const query =
+            \\SELECT DISTINCT DATE(TO_TIMESTAMP(timestamp_ms / 1000)) as event_date
+            \\FROM events 
+            \\WHERE activity_id IS NULL AND manually_mapped = false
+            \\ORDER BY event_date DESC
+        ;
+
+        if (c.duckdb_query(self.conn, query, &result) == c.DuckDBError) {
+            return ReviewError.QueryFailed;
+        }
+        defer c.duckdb_destroy_result(&result);
+
+        const row_count = c.duckdb_row_count(&result);
+        var dates = self.allocator.alloc(DateString, row_count) catch {
+            return ReviewError.OutOfMemory;
+        };
+
+        for (0..row_count) |i| {
+            const row: c.idx_t = @intCast(i);
+            dates[i] = DateString{};
+
+            const date_ptr = c.duckdb_value_varchar(&result, 0, row);
+            if (date_ptr != null) {
+                const date_len = @min(std.mem.len(date_ptr), 10);
+                @memcpy(dates[i].buf[0..date_len], date_ptr[0..date_len]);
+                dates[i].len = date_len;
+                c.duckdb_free(date_ptr);
+            }
+        }
+
+        return dates;
+    }
+
+    /// Get unmapped events for a specific date (YYYY-MM-DD format)
+    pub fn getUnmappedEventsForDate(self: *Reviewer, date: []const u8) ![]UnmappedEvent {
+        var stmt: c.duckdb_prepared_statement = undefined;
+        const query =
+            \\SELECT id, timestamp_ms, app_name, window_title, duration_ms 
+            \\FROM events 
+            \\WHERE activity_id IS NULL AND manually_mapped = false
+            \\  AND DATE(TO_TIMESTAMP(timestamp_ms / 1000)) = ?
+            \\ORDER BY timestamp_ms DESC
+        ;
+
+        if (c.duckdb_prepare(self.conn, query, &stmt) == c.DuckDBError) {
+            return ReviewError.QueryFailed;
+        }
+        defer c.duckdb_destroy_prepare(&stmt);
+
+        _ = c.duckdb_bind_varchar_length(stmt, 1, date.ptr, date.len);
+
+        var result: c.duckdb_result = undefined;
+        if (c.duckdb_execute_prepared(stmt, &result) == c.DuckDBError) {
+            return ReviewError.QueryFailed;
+        }
+        defer c.duckdb_destroy_result(&result);
+
+        const row_count = c.duckdb_row_count(&result);
+        var events = self.allocator.alloc(UnmappedEvent, row_count) catch {
+            return ReviewError.OutOfMemory;
+        };
+
+        for (0..row_count) |i| {
+            const row: c.idx_t = @intCast(i);
+
+            events[i] = UnmappedEvent{
+                .id = c.duckdb_value_int64(&result, 0, row),
+                .timestamp_ms = c.duckdb_value_int64(&result, 1, row),
+                .app_name = undefined,
+                .window_title = undefined,
+                .duration_ms = c.duckdb_value_int64(&result, 4, row),
+            };
+
+            // Copy app_name
+            const app_ptr = c.duckdb_value_varchar(&result, 2, row);
+            if (app_ptr != null) {
+                const app_len = @min(std.mem.len(app_ptr), 255);
+                @memcpy(events[i].app_name_buf[0..app_len], app_ptr[0..app_len]);
+                events[i].app_name = events[i].app_name_buf[0..app_len];
+                c.duckdb_free(app_ptr);
+            } else {
+                events[i].app_name = "";
+            }
+
+            // Copy window_title
+            const title_ptr = c.duckdb_value_varchar(&result, 3, row);
+            if (title_ptr != null) {
+                const title_len = @min(std.mem.len(title_ptr), 511);
+                @memcpy(events[i].window_title_buf[0..title_len], title_ptr[0..title_len]);
+                events[i].window_title = events[i].window_title_buf[0..title_len];
+                c.duckdb_free(title_ptr);
+            } else {
+                events[i].window_title = "";
+            }
+        }
+
+        return events;
     }
 
     /// Get all unmapped events (where activity_id IS NULL AND manually_mapped = false)
