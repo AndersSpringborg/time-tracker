@@ -30,6 +30,8 @@ const ManageProjectUseCase = @import("manage_project").ManageProjectUseCase;
 const DuckDbEventRepository = @import("duckdb_event_repository").DuckDbEventRepository;
 const DuckDbRuleRepository = @import("duckdb_rule_repository").DuckDbRuleRepository;
 const DuckDbProjectRepository = @import("duckdb_project_repository").DuckDbProjectRepository;
+const DuckDbHierarchyRepository = @import("duckdb_hierarchy_repository").DuckDbHierarchyRepository;
+const DuckDbQueryRepository = @import("duckdb_query_repository").DuckDbQueryRepository;
 
 pub const AppContextError = error{
     DatabaseOpenFailed,
@@ -57,6 +59,8 @@ pub const AppContext = struct {
     eventRepo: DuckDbEventRepository,
     ruleRepo: DuckDbRuleRepository,
     projectRepo: DuckDbProjectRepository,
+    hierarchyRepo: DuckDbHierarchyRepository,
+    queryRepo: DuckDbQueryRepository,
 
     // Application layer: Use cases (wired after struct is placed)
     trackEvent: TrackEventUseCase,
@@ -103,6 +107,8 @@ pub const AppContext = struct {
             .eventRepo = DuckDbEventRepository.init(conn, allocator),
             .ruleRepo = DuckDbRuleRepository.init(conn, allocator),
             .projectRepo = DuckDbProjectRepository.init(conn, allocator),
+            .hierarchyRepo = DuckDbHierarchyRepository.init(conn, allocator),
+            .queryRepo = DuckDbQueryRepository.init(conn, allocator),
             // Use cases will be wired below
             .trackEvent = undefined,
             .manageProject = undefined,

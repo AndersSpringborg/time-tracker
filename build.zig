@@ -259,6 +259,8 @@ pub fn build(b: *std.Build) void {
             .{ .name = "duckdb_event_repository", .module = duckdb_event_repository },
             .{ .name = "duckdb_rule_repository", .module = duckdb_rule_repository },
             .{ .name = "duckdb_project_repository", .module = duckdb_project_repository },
+            .{ .name = "duckdb_hierarchy_repository", .module = duckdb_hierarchy_repository },
+            .{ .name = "duckdb_query_repository", .module = duckdb_query_repository },
         },
     });
     app_context_module.addIncludePath(duckdb_include_path);
