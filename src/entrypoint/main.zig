@@ -1,7 +1,8 @@
 //! CLI Entry Point using Clean Architecture
 //!
-//! This is the new entry point that uses AppContext to wire up all dependencies.
+//! This is the unified entry point for both CLI commands and the daemon.
 //! Commands delegate to use cases and repositories via the composition root.
+//! The daemon command integrates with Swift for macOS event tracking.
 
 const std = @import("std");
 const AppContext = @import("app_context").AppContext;
@@ -12,9 +13,22 @@ const Rule = domain_rule.Rule;
 
 // Legacy modules (still needed for complex workflows)
 const review = @import("review");
+const review_tui = @import("review_tui");
 const picker = @import("picker");
 const migrations = @import("migrations");
 const c = migrations.c;
+
+// Daemon modules
+const Tracker = @import("tracker").Tracker;
+const BufferedRepository = @import("buffered_repository").BufferedRepository;
+
+// Import functions from Swift bridge
+extern fn check_accessibility() bool;
+extern fn start_listening(cb: *const fn ([*c]const u8, [*c]const u8, [*c]const u8, i32) callconv(.c) void) void;
+
+// Global state (needed for C callback from Swift)
+var global_tracker: ?*Tracker = null;
+var global_repo: ?*BufferedRepository = null;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -32,7 +46,9 @@ pub fn main() !void {
 
     const command = args[1];
 
-    if (std.mem.eql(u8, command, "summary")) {
+    if (std.mem.eql(u8, command, "daemon")) {
+        runDaemon(allocator);
+    } else if (std.mem.eql(u8, command, "summary")) {
         runSummary(allocator, args[2..]);
     } else if (std.mem.eql(u8, command, "report")) {
         runReport(allocator, args[2..]);
@@ -59,6 +75,7 @@ fn printUsage() void {
         \\Usage: tt <command> [options]
         \\
         \\Commands:
+        \\  daemon         Start the time tracking daemon (macOS)
         \\  summary        Show time spent per application
         \\  report         Show detailed report with window titles
         \\  import         Import customer hierarchy from JSON file
@@ -85,6 +102,7 @@ fn printUsage() void {
         \\  projects clear End all active projects
         \\
         \\Examples:
+        \\  tt daemon              # Start tracking in background
         \\  tt summary --today
         \\  tt report --week
         \\  tt import customers.json
@@ -524,123 +542,12 @@ fn runReview(allocator: std.mem.Allocator) void {
     defer ctx.deinit();
 
     const conn = ctx.getConnection();
-    var reviewer = review.Reviewer.init(conn, allocator);
 
-    // Get unmapped events
-    const events = reviewer.getUnmappedEvents() catch |err| {
-        std.debug.print("Failed to get unmapped events: {}\n", .{err});
+    // Run the TUI
+    review_tui.run(allocator, conn) catch |err| {
+        std.debug.print("Review TUI error: {}\n", .{err});
         return;
     };
-    defer allocator.free(events);
-
-    if (events.len == 0) {
-        std.debug.print("No unmapped events to review.\n", .{});
-        return;
-    }
-
-    std.debug.print("\n=== Interactive Event Review ===\n", .{});
-    std.debug.print("Found {d} unmapped events.\n\n", .{events.len});
-
-    var input_buf: [512]u8 = undefined;
-
-    var i: usize = 0;
-    while (i < events.len) {
-        const event = events[i];
-
-        var dur_buf: [32]u8 = undefined;
-        const duration = formatDuration(event.duration_ms, &dur_buf);
-
-        std.debug.print("--- Event {d}/{d} ---\n", .{ i + 1, events.len });
-        std.debug.print("App:      {s}\n", .{event.app_name});
-        std.debug.print("Title:    {s}\n", .{event.window_title});
-        std.debug.print("Duration: {s}\n", .{duration});
-        std.debug.print("\nActions: [s]earch, [n]ext, [q]uit\n", .{});
-        std.debug.print("> ", .{});
-
-        const line = readLine(&input_buf) catch {
-            std.debug.print("\nGoodbye!\n", .{});
-            return;
-        };
-
-        const trimmed = std.mem.trim(u8, line, " \t\r\n");
-
-        if (trimmed.len == 0 or std.mem.eql(u8, trimmed, "n")) {
-            i += 1;
-            continue;
-        }
-
-        if (std.mem.eql(u8, trimmed, "q")) {
-            std.debug.print("\nExiting review.\n", .{});
-            return;
-        }
-
-        if (std.mem.eql(u8, trimmed, "s") or std.mem.startsWith(u8, trimmed, "s ")) {
-            var search_term: []const u8 = undefined;
-
-            if (trimmed.len > 2) {
-                search_term = trimmed[2..];
-            } else {
-                std.debug.print("Enter search term: ", .{});
-                const search_line = readLine(&input_buf) catch {
-                    continue;
-                };
-                search_term = std.mem.trim(u8, search_line, " \t\r\n");
-            }
-
-            if (search_term.len == 0) {
-                continue;
-            }
-
-            const matches = reviewer.searchFullHierarchy(search_term) catch |err| {
-                std.debug.print("Search failed: {}\n", .{err});
-                continue;
-            };
-            defer {
-                for (matches) |m| {
-                    allocator.free(m.display_path);
-                }
-                allocator.free(matches);
-            }
-
-            if (matches.len == 0) {
-                std.debug.print("No matches found for '{s}'.\n\n", .{search_term});
-                continue;
-            }
-
-            std.debug.print("\nSearch results:\n", .{});
-            for (matches, 0..) |m, idx| {
-                std.debug.print("  [{d}] {s}\n", .{ idx + 1, m.display_path });
-            }
-            std.debug.print("  [0] Cancel\n", .{});
-            std.debug.print("\nSelect (1-{d}): ", .{matches.len});
-
-            const select_line = readLine(&input_buf) catch {
-                continue;
-            };
-            const select_trimmed = std.mem.trim(u8, select_line, " \t\r\n");
-            const selection = std.fmt.parseInt(usize, select_trimmed, 10) catch {
-                std.debug.print("Invalid selection.\n\n", .{});
-                continue;
-            };
-
-            if (selection == 0 or selection > matches.len) {
-                std.debug.print("Cancelled.\n\n", .{});
-                continue;
-            }
-
-            const selected = matches[selection - 1];
-
-            reviewer.mapEvent(event.id, selected.activity_id, selected.kind_id, true) catch |err| {
-                std.debug.print("Failed to map event: {}\n", .{err});
-                continue;
-            };
-
-            std.debug.print("Mapped to: {s}\n\n", .{selected.display_path});
-            i += 1;
-        }
-    }
-
-    std.debug.print("\nReview complete!\n", .{});
 }
 
 // =============================================================================
@@ -865,4 +772,114 @@ fn runProjectsClear(ctx: *AppContext) void {
     };
 
     std.debug.print("Cleared all active projects.\n", .{});
+}
+
+// =============================================================================
+// DAEMON COMMAND
+// =============================================================================
+
+fn getTimestampMs() i64 {
+    const ts = std.posix.clock_gettime(.REALTIME) catch return 0;
+    const sec_ms: i64 = ts.sec * 1000;
+    const nsec_ms: i64 = @divFloor(ts.nsec, 1_000_000);
+    return sec_ms + nsec_ms;
+}
+
+// Callback that Swift calls on each event
+fn onEvent(
+    c_app: [*c]const u8,
+    c_title: [*c]const u8,
+    c_wifi: [*c]const u8,
+    error_code: i32,
+) callconv(.c) void {
+    if (error_code == 1) {
+        std.debug.print(
+            \\
+            \\ERROR: Accessibility permission required!
+            \\
+            \\Please grant access in:
+            \\  System Settings → Privacy & Security → Accessibility
+            \\
+            \\Add your Terminal app (or the binary) and restart.
+            \\
+        , .{});
+        return;
+    }
+
+    const app = std.mem.span(c_app);
+    const title = std.mem.span(c_title);
+    const wifi = std.mem.span(c_wifi);
+    const timestamp = getTimestampMs();
+
+    std.debug.print("[Event] App: {s} | Title: {s} | WiFi: {s}\n", .{ app, title, wifi });
+
+    // Track the event
+    if (global_tracker) |tracker| {
+        tracker.onEventWithWifi(app, title, wifi, timestamp);
+    }
+}
+
+fn getDaemonDbPath(allocator: std.mem.Allocator) ![:0]const u8 {
+    const home = std.posix.getenv("HOME") orelse "/tmp";
+    const xdg_data = std.posix.getenv("XDG_DATA_HOME");
+
+    var path_buf: [512]u8 = undefined;
+    var path_len: usize = 0;
+
+    if (xdg_data) |data_dir| {
+        path_len = (std.fmt.bufPrint(&path_buf, "{s}/time-tracker", .{data_dir}) catch return error.PathTooLong).len;
+    } else {
+        path_len = (std.fmt.bufPrint(&path_buf, "{s}/.local/share/time-tracker", .{home}) catch return error.PathTooLong).len;
+    }
+
+    // Create directory if it doesn't exist
+    const dir_path = path_buf[0..path_len];
+    std.fs.makeDirAbsolute(dir_path) catch |err| {
+        if (err != error.PathAlreadyExists) {
+            std.debug.print("Warning: Could not create data directory: {s}\n", .{dir_path});
+        }
+    };
+
+    // Append database filename
+    const full_path = std.fmt.allocPrint(allocator, "{s}/tracker.db\x00", .{dir_path}) catch return error.OutOfMemory;
+    return full_path[0 .. full_path.len - 1 :0];
+}
+
+fn runDaemon(allocator: std.mem.Allocator) void {
+    std.debug.print("=== Time Tracker Daemon ===\n\n", .{});
+
+    const db_path = getDaemonDbPath(allocator) catch |err| {
+        std.debug.print("Failed to determine database path: {}\n", .{err});
+        return;
+    };
+
+    std.debug.print("Database: {s}\n", .{db_path});
+
+    // Initialize buffered repository (opens DB only during flush)
+    var repo = BufferedRepository.init(allocator, db_path);
+    defer repo.deinit();
+    global_repo = &repo;
+
+    // Start the background flush timer (flushes to DB after 5s of inactivity)
+    repo.startFlushTimer() catch |err| {
+        std.debug.print("Failed to start flush timer: {}\n", .{err});
+        return;
+    };
+
+    std.debug.print("Buffered repository initialized (flushes after 5s of inactivity).\n", .{});
+
+    // Initialize tracker with repository
+    var tracker = Tracker.init(&repo);
+    global_tracker = &tracker;
+
+    // Check accessibility
+    if (!check_accessibility()) {
+        std.debug.print("\nWarning: Accessibility not yet granted. Will report error on start.\n", .{});
+    }
+
+    std.debug.print("\nStarting event listener... (switch windows to see events)\n", .{});
+    std.debug.print("Press Ctrl+C to exit.\n\n", .{});
+
+    // Hand control to Swift's NSRunLoop (blocks forever)
+    start_listening(&onEvent);
 }
