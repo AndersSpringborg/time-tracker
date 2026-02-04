@@ -270,26 +270,12 @@ pub fn build(b: *std.Build) void {
     // LEGACY MODULES (still in src/core/ - will be migrated later)
     // =======================================================================
 
-    // Event module (old location - still used by existing code)
-    const event_module = b.createModule(.{
-        .root_source_file = b.path("src/core/domain/event.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    // Scoring module (old location - still used by existing code)
-    const scoring_module = b.createModule(.{
-        .root_source_file = b.path("src/core/domain/scoring.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
     const tracker_module = b.createModule(.{
         .root_source_file = b.path("src/core/tracking/tracker.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "event", .module = event_module },
+            .{ .name = "event", .module = domain_event_module },
         },
     });
 
@@ -298,7 +284,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "event", .module = event_module },
+            .{ .name = "event", .module = domain_event_module },
             .{ .name = "migrations", .module = migrations_module },
         },
     });
@@ -378,7 +364,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "migrations", .module = migrations_module },
-            .{ .name = "scoring", .module = scoring_module },
+            .{ .name = "scoring", .module = domain_scoring_module },
         },
     });
     suggestions_module.addIncludePath(duckdb_include_path);
@@ -389,7 +375,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "event", .module = event_module },
+            .{ .name = "event", .module = domain_event_module },
             .{ .name = "duckdb_repository", .module = duckdb_repo_module },
         },
     });
@@ -397,6 +383,7 @@ pub fn build(b: *std.Build) void {
     buffered_repo_module.addLibraryPath(duckdb_lib_path);
 
     // --- 1. Compile Zig to object file ---
+    // The daemon only needs tracker and buffered_repository
     const zig_obj = b.addObject(.{
         .name = "main",
         .root_module = b.createModule(.{
@@ -404,19 +391,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "event", .module = event_module },
                 .{ .name = "tracker", .module = tracker_module },
-                .{ .name = "duckdb_repository", .module = duckdb_repo_module },
-                .{ .name = "query", .module = query_module },
-                .{ .name = "migrations", .module = migrations_module },
-                .{ .name = "hierarchy", .module = hierarchy_module },
-                .{ .name = "rules", .module = rules_module },
-                .{ .name = "review", .module = review_module },
-                .{ .name = "terminal", .module = terminal_module },
-                .{ .name = "picker", .module = picker_module },
-                .{ .name = "context", .module = context_module },
-                .{ .name = "scoring", .module = scoring_module },
-                .{ .name = "suggestions", .module = suggestions_module },
                 .{ .name = "buffered_repository", .module = buffered_repo_module },
             },
         }),
@@ -774,32 +749,6 @@ pub fn build(b: *std.Build) void {
     // LEGACY TESTS (still in src/core/)
     // -----------------------------------------------------------------------
 
-    // Event tests (old location)
-    const event_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/core/domain/event_test.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "event", .module = event_module },
-            },
-        }),
-    });
-    test_step.dependOn(&b.addRunArtifact(event_tests).step);
-
-    // Scoring tests (old location)
-    const scoring_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/core/domain/scoring_test.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "scoring", .module = scoring_module },
-            },
-        }),
-    });
-    test_step.dependOn(&b.addRunArtifact(scoring_tests).step);
-
     // Tracker tests
     const tracker_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -807,7 +756,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "event", .module = event_module },
+                .{ .name = "event", .module = domain_event_module },
                 .{ .name = "tracker", .module = tracker_module },
             },
         }),
@@ -821,7 +770,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "event", .module = event_module },
+                .{ .name = "event", .module = domain_event_module },
                 .{ .name = "migrations", .module = migrations_module },
                 .{ .name = "duckdb_repository", .module = duckdb_repo_module },
             },
@@ -950,7 +899,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "event", .module = event_module },
+                .{ .name = "event", .module = domain_event_module },
                 .{ .name = "buffered_repository", .module = buffered_repo_module },
             },
         }),
@@ -962,7 +911,6 @@ pub fn build(b: *std.Build) void {
 
     // Suppress unused variable warnings for domain modules not yet used in app
     _ = domain_glob_module;
-    _ = domain_scoring_module;
 }
 
 fn linkDuckDbStatic(compile: *std.Build.Step.Compile) void {
