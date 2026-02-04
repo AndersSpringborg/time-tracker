@@ -68,6 +68,16 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    // Rule repository interface
+    const rule_repository_interface = b.createModule(.{
+        .root_source_file = b.path("src/application/interfaces/rule_repository.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "domain_rule", .module = domain_rule_module },
+        },
+    });
+
     // Fake event repository for testing
     const fake_event_repository = b.createModule(.{
         .root_source_file = b.path("src/application/fakes/fake_event_repository.zig"),
@@ -79,6 +89,17 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    // Fake rule repository for testing
+    const fake_rule_repository = b.createModule(.{
+        .root_source_file = b.path("src/application/fakes/fake_rule_repository.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "domain_rule", .module = domain_rule_module },
+            .{ .name = "rule_repository", .module = rule_repository_interface },
+        },
+    });
+
     // Track event use case
     const track_event_usecase = b.createModule(.{
         .root_source_file = b.path("src/application/usecases/track_event.zig"),
@@ -87,6 +108,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "domain_event", .module = domain_event_module },
             .{ .name = "event_repository", .module = event_repository_interface },
+            .{ .name = "rule_repository", .module = rule_repository_interface },
         },
     });
 
@@ -385,6 +407,20 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(fake_event_repo_tests).step);
 
+    // Fake rule repository tests
+    const fake_rule_repo_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/application/fakes/fake_rule_repository.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "domain_rule", .module = domain_rule_module },
+                .{ .name = "rule_repository", .module = rule_repository_interface },
+            },
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(fake_rule_repo_tests).step);
+
     // Track event use case tests
     const track_event_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -393,8 +429,11 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "domain_event", .module = domain_event_module },
+                .{ .name = "domain_rule", .module = domain_rule_module },
                 .{ .name = "event_repository", .module = event_repository_interface },
+                .{ .name = "rule_repository", .module = rule_repository_interface },
                 .{ .name = "fake_event_repository", .module = fake_event_repository },
+                .{ .name = "fake_rule_repository", .module = fake_rule_repository },
                 .{ .name = "track_event", .module = track_event_usecase },
             },
         }),
@@ -594,7 +633,6 @@ pub fn build(b: *std.Build) void {
     // Suppress unused variable warnings for domain modules not yet used in app
     _ = domain_glob_module;
     _ = domain_scoring_module;
-    _ = domain_rule_module;
     _ = domain_hierarchy_module;
     _ = domain_project_context_module;
 }

@@ -14,6 +14,13 @@ pub const StoredEvent = struct {
     manually_mapped: bool,
 };
 
+/// Result of a rule match, passed when saving events.
+pub const RuleMatch = struct {
+    rule_id: i64,
+    activity_id: i64,
+    kind_id: i64,
+};
+
 /// Interface for persisting and retrieving events.
 /// Implementations: DuckDbEventRepository, BufferedEventRepository
 pub const EventRepository = struct {
@@ -21,14 +28,14 @@ pub const EventRepository = struct {
     vtable: *const VTable,
 
     const VTable = struct {
-        save: *const fn (*anyopaque, Event, i64) void,
+        save: *const fn (*anyopaque, Event, i64, ?RuleMatch) void,
         getLastEvent: *const fn (*anyopaque) ?StoredEvent,
         countEvents: *const fn (*anyopaque) i64,
     };
 
-    /// Save an event with its duration.
-    pub fn save(self: EventRepository, event: Event, duration_ms: i64) void {
-        self.vtable.save(self.ptr, event, duration_ms);
+    /// Save an event with its duration and optional rule match.
+    pub fn save(self: EventRepository, event: Event, duration_ms: i64, match: ?RuleMatch) void {
+        self.vtable.save(self.ptr, event, duration_ms, match);
     }
 
     /// Get the most recent event.

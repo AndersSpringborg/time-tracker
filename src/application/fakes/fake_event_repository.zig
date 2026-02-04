@@ -1,7 +1,9 @@
 const std = @import("std");
 const Event = @import("domain_event").Event;
-const StoredEvent = @import("event_repository").StoredEvent;
-const EventRepository = @import("event_repository").EventRepository;
+const event_repository = @import("event_repository");
+const StoredEvent = event_repository.StoredEvent;
+const EventRepository = event_repository.EventRepository;
+const RuleMatch = event_repository.RuleMatch;
 
 /// In-memory fake implementation of EventRepository for testing.
 pub const FakeEventRepository = struct {
@@ -13,6 +15,8 @@ pub const FakeEventRepository = struct {
         id: i64,
         event: Event,
         duration_ms: i64,
+        activity_id: ?i64,
+        kind_id: ?i64,
     };
 
     pub fn init(allocator: std.mem.Allocator) FakeEventRepository {
@@ -27,11 +31,13 @@ pub const FakeEventRepository = struct {
         self.events.deinit(self.allocator);
     }
 
-    pub fn save(self: *FakeEventRepository, event: Event, duration_ms: i64) void {
+    pub fn save(self: *FakeEventRepository, event: Event, duration_ms: i64, match: ?RuleMatch) void {
         self.events.append(self.allocator, .{
             .id = self.next_id,
             .event = event,
             .duration_ms = duration_ms,
+            .activity_id = if (match) |m| m.activity_id else null,
+            .kind_id = if (match) |m| m.kind_id else null,
         }) catch return;
         self.next_id += 1;
     }
@@ -46,8 +52,8 @@ pub const FakeEventRepository = struct {
             .window_title = last.event.window_title,
             .wifi_ssid = last.event.wifi_ssid,
             .duration_ms = last.duration_ms,
-            .activity_id = null,
-            .kind_id = null,
+            .activity_id = last.activity_id,
+            .kind_id = last.kind_id,
             .manually_mapped = false,
         };
     }
@@ -68,9 +74,9 @@ pub const FakeEventRepository = struct {
         };
     }
 
-    fn saveVtable(ptr: *anyopaque, event: Event, duration_ms: i64) void {
+    fn saveVtable(ptr: *anyopaque, event: Event, duration_ms: i64, match: ?RuleMatch) void {
         const self: *FakeEventRepository = @ptrCast(@alignCast(ptr));
-        self.save(event, duration_ms);
+        self.save(event, duration_ms, match);
     }
 
     fn getLastEventVtable(ptr: *anyopaque) ?StoredEvent {
@@ -95,7 +101,7 @@ test "FakeEventRepository saves and retrieves events" {
         .wifi_ssid = "Home",
     };
 
-    repo.save(event, 500);
+    repo.save(event, 500, null);
 
     try std.testing.expectEqual(@as(i64, 1), repo.countEvents());
 
@@ -103,6 +109,29 @@ test "FakeEventRepository saves and retrieves events" {
     try std.testing.expect(last != null);
     try std.testing.expectEqualStrings("Safari", last.?.app_name);
     try std.testing.expectEqual(@as(i64, 500), last.?.duration_ms);
+}
+
+test "FakeEventRepository saves event with rule match" {
+    var repo = FakeEventRepository.init(std.testing.allocator);
+    defer repo.deinit();
+
+    const event = Event{
+        .timestamp_ms = 1000,
+        .app_name = "Safari",
+        .window_title = "Google",
+        .wifi_ssid = "Home",
+    };
+
+    repo.save(event, 500, RuleMatch{
+        .rule_id = 1,
+        .activity_id = 10,
+        .kind_id = 20,
+    });
+
+    const last = repo.getLastEvent();
+    try std.testing.expect(last != null);
+    try std.testing.expectEqual(@as(?i64, 10), last.?.activity_id);
+    try std.testing.expectEqual(@as(?i64, 20), last.?.kind_id);
 }
 
 test "FakeEventRepository works through interface" {
@@ -118,7 +147,7 @@ test "FakeEventRepository works through interface" {
         .wifi_ssid = "Office",
     };
 
-    repo.save(event, 1000);
+    repo.save(event, 1000, null);
 
     try std.testing.expectEqual(@as(i64, 1), repo.countEvents());
 }
