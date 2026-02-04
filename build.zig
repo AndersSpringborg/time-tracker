@@ -197,6 +197,30 @@ pub fn build(b: *std.Build) void {
     duckdb_project_repository.addLibraryPath(duckdb_lib_path);
 
     // =======================================================================
+    // ENTRYPOINT LAYER (Composition Root)
+    // =======================================================================
+
+    // App Context - wires everything together
+    const app_context_module = b.createModule(.{
+        .root_source_file = b.path("src/entrypoint/app_context.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            // Migrations for database setup
+            .{ .name = "migrations", .module = migrations_module },
+            // Use cases
+            .{ .name = "track_event", .module = track_event_usecase },
+            .{ .name = "manage_project", .module = manage_project_usecase },
+            // External layer implementations
+            .{ .name = "duckdb_event_repository", .module = duckdb_event_repository },
+            .{ .name = "duckdb_rule_repository", .module = duckdb_rule_repository },
+            .{ .name = "duckdb_project_repository", .module = duckdb_project_repository },
+        },
+    });
+    app_context_module.addIncludePath(duckdb_include_path);
+    app_context_module.addLibraryPath(duckdb_lib_path);
+
+    // =======================================================================
     // LEGACY MODULES (still in src/core/ - will be migrated later)
     // =======================================================================
 
@@ -603,6 +627,28 @@ pub fn build(b: *std.Build) void {
     duckdb_project_repo_tests.root_module.addLibraryPath(duckdb_lib_path);
     linkDuckDbStatic(duckdb_project_repo_tests);
     test_step.dependOn(&b.addRunArtifact(duckdb_project_repo_tests).step);
+
+    // -----------------------------------------------------------------------
+    // ENTRYPOINT LAYER TESTS
+    // -----------------------------------------------------------------------
+
+    // App Context tests (Composition Root)
+    const app_context_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/entrypoint/app_context_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "app_context", .module = app_context_module },
+                .{ .name = "domain_event", .module = domain_event_module },
+                .{ .name = "migrations", .module = migrations_module },
+            },
+        }),
+    });
+    app_context_tests.root_module.addIncludePath(duckdb_include_path);
+    app_context_tests.root_module.addLibraryPath(duckdb_lib_path);
+    linkDuckDbStatic(app_context_tests);
+    test_step.dependOn(&b.addRunArtifact(app_context_tests).step);
 
     // -----------------------------------------------------------------------
     // LEGACY TESTS (still in src/core/)
