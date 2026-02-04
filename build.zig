@@ -487,6 +487,38 @@ pub fn build(b: *std.Build) void {
     }
 
     // =======================================================================
+    // CLI-ONLY EXECUTABLE (no Swift/daemon - uses new clean architecture)
+    // =======================================================================
+    const cli_module = b.createModule(.{
+        .root_source_file = b.path("src/entrypoint/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "app_context", .module = app_context_module },
+            .{ .name = "query_repository", .module = query_repository_interface },
+        },
+    });
+    cli_module.addIncludePath(duckdb_include_path);
+    cli_module.addLibraryPath(duckdb_lib_path);
+
+    const cli_exe = b.addExecutable(.{
+        .name = "tt",
+        .root_module = cli_module,
+    });
+    linkDuckDbStatic(cli_exe);
+
+    const cli_install = b.addInstallArtifact(cli_exe, .{});
+    b.getInstallStep().dependOn(&cli_install.step);
+
+    // Run step for CLI
+    const cli_run_step = b.step("cli", "Run the CLI-only version (no daemon)");
+    const cli_run_cmd = b.addRunArtifact(cli_exe);
+    cli_run_step.dependOn(&cli_run_cmd.step);
+    if (b.args) |args| {
+        cli_run_cmd.addArgs(args);
+    }
+
+    // =======================================================================
     // TEST STEP
     // =======================================================================
     const test_step = b.step("test", "Run unit tests");
