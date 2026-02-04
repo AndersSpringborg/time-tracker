@@ -196,6 +196,50 @@ pub fn build(b: *std.Build) void {
     duckdb_project_repository.addIncludePath(duckdb_include_path);
     duckdb_project_repository.addLibraryPath(duckdb_lib_path);
 
+    // Hierarchy repository interface
+    const hierarchy_repository_interface = b.createModule(.{
+        .root_source_file = b.path("src/application/interfaces/hierarchy_repository.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "domain_hierarchy", .module = domain_hierarchy_module },
+        },
+    });
+
+    // DuckDB Hierarchy Repository
+    const duckdb_hierarchy_repository = b.createModule(.{
+        .root_source_file = b.path("src/external/duckdb/hierarchy_repository.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "hierarchy_repository", .module = hierarchy_repository_interface },
+            .{ .name = "domain_hierarchy", .module = domain_hierarchy_module },
+            .{ .name = "migrations", .module = migrations_module },
+        },
+    });
+    duckdb_hierarchy_repository.addIncludePath(duckdb_include_path);
+    duckdb_hierarchy_repository.addLibraryPath(duckdb_lib_path);
+
+    // Query repository interface
+    const query_repository_interface = b.createModule(.{
+        .root_source_file = b.path("src/application/interfaces/query_repository.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // DuckDB Query Repository
+    const duckdb_query_repository = b.createModule(.{
+        .root_source_file = b.path("src/external/duckdb/query_repository.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "query_repository", .module = query_repository_interface },
+            .{ .name = "migrations", .module = migrations_module },
+        },
+    });
+    duckdb_query_repository.addIncludePath(duckdb_include_path);
+    duckdb_query_repository.addLibraryPath(duckdb_lib_path);
+
     // =======================================================================
     // ENTRYPOINT LAYER (Composition Root)
     // =======================================================================
@@ -628,6 +672,41 @@ pub fn build(b: *std.Build) void {
     linkDuckDbStatic(duckdb_project_repo_tests);
     test_step.dependOn(&b.addRunArtifact(duckdb_project_repo_tests).step);
 
+    // DuckDB Hierarchy Repository tests
+    const duckdb_hierarchy_repo_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/external/duckdb/hierarchy_repository_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "duckdb_hierarchy_repository", .module = duckdb_hierarchy_repository },
+                .{ .name = "migrations", .module = migrations_module },
+            },
+        }),
+    });
+    duckdb_hierarchy_repo_tests.root_module.addIncludePath(duckdb_include_path);
+    duckdb_hierarchy_repo_tests.root_module.addLibraryPath(duckdb_lib_path);
+    linkDuckDbStatic(duckdb_hierarchy_repo_tests);
+    test_step.dependOn(&b.addRunArtifact(duckdb_hierarchy_repo_tests).step);
+
+    // DuckDB Query Repository tests
+    const duckdb_query_repo_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/external/duckdb/query_repository_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "duckdb_query_repository", .module = duckdb_query_repository },
+                .{ .name = "query_repository", .module = query_repository_interface },
+                .{ .name = "migrations", .module = migrations_module },
+            },
+        }),
+    });
+    duckdb_query_repo_tests.root_module.addIncludePath(duckdb_include_path);
+    duckdb_query_repo_tests.root_module.addLibraryPath(duckdb_lib_path);
+    linkDuckDbStatic(duckdb_query_repo_tests);
+    test_step.dependOn(&b.addRunArtifact(duckdb_query_repo_tests).step);
+
     // -----------------------------------------------------------------------
     // ENTRYPOINT LAYER TESTS
     // -----------------------------------------------------------------------
@@ -843,7 +922,6 @@ pub fn build(b: *std.Build) void {
     // Suppress unused variable warnings for domain modules not yet used in app
     _ = domain_glob_module;
     _ = domain_scoring_module;
-    _ = domain_hierarchy_module;
 }
 
 fn linkDuckDbStatic(compile: *std.Build.Step.Compile) void {

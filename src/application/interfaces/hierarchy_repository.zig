@@ -1,5 +1,5 @@
 const std = @import("std");
-const hierarchy = @import("../../domain/hierarchy.zig");
+const hierarchy = @import("domain_hierarchy");
 const ImportStats = hierarchy.ImportStats;
 const HierarchyPath = hierarchy.HierarchyPath;
 
