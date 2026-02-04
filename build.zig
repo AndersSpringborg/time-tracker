@@ -8,13 +8,64 @@ pub fn build(b: *std.Build) void {
     const duckdb_include_path: std.Build.LazyPath = .{ .cwd_relative = "vendor/duckdb/include" };
     const duckdb_lib_path: std.Build.LazyPath = .{ .cwd_relative = "vendor/duckdb/lib" };
 
-    // --- Shared modules ---
+    // =======================================================================
+    // NEW DOMAIN LAYER MODULES (Clean Architecture)
+    // =======================================================================
+
+    // Glob matching - pure algorithm
+    const domain_glob_module = b.createModule(.{
+        .root_source_file = b.path("src/domain/glob.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Event - core domain type (new location)
+    const domain_event_module = b.createModule(.{
+        .root_source_file = b.path("src/domain/event.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Scoring - pure algorithm using glob
+    const domain_scoring_module = b.createModule(.{
+        .root_source_file = b.path("src/domain/scoring.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Rule types - pure domain types using glob
+    const domain_rule_module = b.createModule(.{
+        .root_source_file = b.path("src/domain/rule.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Hierarchy types - pure domain types
+    const domain_hierarchy_module = b.createModule(.{
+        .root_source_file = b.path("src/domain/hierarchy.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Project context types - pure domain types
+    const domain_project_context_module = b.createModule(.{
+        .root_source_file = b.path("src/domain/project_context.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // =======================================================================
+    // LEGACY MODULES (still in src/core/ - will be migrated later)
+    // =======================================================================
+
+    // Event module (old location - still used by existing code)
     const event_module = b.createModule(.{
         .root_source_file = b.path("src/core/domain/event.zig"),
         .target = target,
         .optimize = optimize,
     });
 
+    // Scoring module (old location - still used by existing code)
     const scoring_module = b.createModule(.{
         .root_source_file = b.path("src/core/domain/scoring.zig"),
         .target = target,
@@ -231,10 +282,60 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-    // --- Test step ---
+    // =======================================================================
+    // TEST STEP
+    // =======================================================================
     const test_step = b.step("test", "Run unit tests");
 
-    // Event tests
+    // -----------------------------------------------------------------------
+    // NEW DOMAIN LAYER TESTS
+    // -----------------------------------------------------------------------
+
+    // Glob tests
+    const domain_glob_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/domain/glob_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(domain_glob_tests).step);
+
+    // Domain Event tests
+    const domain_event_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/domain/event_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(domain_event_tests).step);
+
+    // Domain Scoring tests
+    const domain_scoring_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/domain/scoring_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(domain_scoring_tests).step);
+
+    // Domain Rule tests
+    const domain_rule_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/domain/rule_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(domain_rule_tests).step);
+
+    // -----------------------------------------------------------------------
+    // LEGACY TESTS (still in src/core/)
+    // -----------------------------------------------------------------------
+
+    // Event tests (old location)
     const event_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/domain/event_test.zig"),
@@ -247,7 +348,7 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(event_tests).step);
 
-    // Scoring tests
+    // Scoring tests (old location)
     const scoring_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/domain/scoring_test.zig"),
@@ -419,6 +520,15 @@ pub fn build(b: *std.Build) void {
     buffered_repo_tests.root_module.addLibraryPath(duckdb_lib_path);
     linkDuckDbStatic(buffered_repo_tests);
     test_step.dependOn(&b.addRunArtifact(buffered_repo_tests).step);
+
+    // Suppress unused variable warnings for new domain modules
+    // (they will be used in later phases)
+    _ = domain_glob_module;
+    _ = domain_event_module;
+    _ = domain_scoring_module;
+    _ = domain_rule_module;
+    _ = domain_hierarchy_module;
+    _ = domain_project_context_module;
 }
 
 fn linkDuckDbStatic(compile: *std.Build.Step.Compile) void {
