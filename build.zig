@@ -112,6 +112,26 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    // Project repository interface
+    const project_repository_interface = b.createModule(.{
+        .root_source_file = b.path("src/application/interfaces/project_repository.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "domain_project_context", .module = domain_project_context_module },
+        },
+    });
+
+    // Fake project repository for testing
+    const fake_project_repository = b.createModule(.{
+        .root_source_file = b.path("src/application/fakes/fake_project_repository.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "project_repository", .module = project_repository_interface },
+        },
+    });
+
     // =======================================================================
     // LEGACY MODULES (still in src/core/ - will be migrated later)
     // =======================================================================
@@ -421,6 +441,19 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(fake_rule_repo_tests).step);
 
+    // Fake project repository tests
+    const fake_project_repo_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/application/fakes/fake_project_repository.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "project_repository", .module = project_repository_interface },
+            },
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(fake_project_repo_tests).step);
+
     // Track event use case tests
     const track_event_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -634,7 +667,7 @@ pub fn build(b: *std.Build) void {
     _ = domain_glob_module;
     _ = domain_scoring_module;
     _ = domain_hierarchy_module;
-    _ = domain_project_context_module;
+    _ = fake_project_repository;
 }
 
 fn linkDuckDbStatic(compile: *std.Build.Step.Compile) void {
