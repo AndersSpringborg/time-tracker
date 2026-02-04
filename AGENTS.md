@@ -92,6 +92,24 @@ public typealias EventCallback = @convention(c) (
 
 ## Testing
 
+### TDD - Chicago/Detroit Style
+
+We follow **Chicago-style TDD** (also called Detroit or Classical TDD):
+
+1. **Write the test first** - Start with a failing test that describes the behavior
+2. **Test behavior, not implementation** - Tests verify what the code does, not how
+3. **Use real collaborators** - Prefer real objects over mocks; use in-memory databases
+4. **Refactor with confidence** - Tests protect against regressions
+
+**Workflow**:
+```
+1. Write a failing test
+2. Write minimal code to make it pass
+3. Refactor (tests still pass)
+4. Commit
+5. Repeat
+```
+
 **Test naming** - `Module.function description`:
 ```zig
 test "RulesEngine finds matching rule" { ... }
@@ -111,33 +129,38 @@ test "HierarchyImporter imports full hierarchy" {
 }
 ```
 
-**Database tests** - Use in-memory DuckDB (`:memory:`).
+**Database tests** - Use in-memory DuckDB (`:memory:`) with real migrations.
 
-## Database Migrations
+## Git Workflow
 
-Add to `src/core/storage/migrations.zig`:
-```zig
-.{
-    .version = N,
-    .name = "descriptive_name",
-    .up = \\SQL statements
-          \\Multiple lines
-    ,
-},
-```
+### Commit Frequently
 
-Update version in `migrations_test.zig` when adding migrations.
+- **Commit after each meaningful change** - Don't batch unrelated changes
+- **Commit when tests pass** - Green tests = safe commit point
+- **Small, focused commits** - Easier to review and revert if needed
 
-## Git Commits
+### Conventional Commits
 
-Conventional commits: `feat:`, `fix:`, `chore:`, `docs:`
+Format: `type: description`
 
+- `feat:` - New feature
+- `fix:` - Bug fix
+- `chore:` - Maintenance, refactoring
+- `docs:` - Documentation only
+
+**Example**:
 ```
 feat: add global rules that resolve kind by name in current project
 
 - Add migration for is_global flag and kind_name column
 - Global rules look up kind by name in current project
 ```
+
+### Commit Message Guidelines
+
+- First line: concise summary (50 chars or less ideal)
+- Body: explain *why*, not *what* (the diff shows what)
+- Reference issue numbers if applicable
 
 ## Key Patterns
 
