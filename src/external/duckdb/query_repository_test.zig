@@ -63,16 +63,16 @@ test "DuckDbQueryRepository gets app summary" {
     // Insert test events
     try insertTestEvent(conn, "Safari", "Google", 60000); // 1 min
     try insertTestEvent(conn, "Safari", "GitHub", 120000); // 2 min
-    try insertTestEvent(conn, "Code", "main.zig", 180000); // 3 min
+    try insertTestEvent(conn, "Code", "main.zig", 240000); // 4 min (more than Safari's 3 min)
 
     const summaries = try repo.getAppSummary(.all);
     defer repo.freeAppSummaries(summaries);
 
     try std.testing.expectEqual(@as(usize, 2), summaries.len);
 
-    // Code should be first (3 min > 3 min Safari)
+    // Code should be first (4 min > 3 min Safari)
     try std.testing.expect(std.mem.eql(u8, summaries[0].app_name, "Code"));
-    try std.testing.expectEqual(@as(i64, 180000), summaries[0].total_ms);
+    try std.testing.expectEqual(@as(i64, 240000), summaries[0].total_ms);
 
     // Safari second with combined time
     try std.testing.expect(std.mem.eql(u8, summaries[1].app_name, "Safari"));
