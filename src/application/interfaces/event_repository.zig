@@ -1,5 +1,5 @@
 const std = @import("std");
-const Event = @import("../../domain/event.zig").Event;
+const Event = @import("domain_event").Event;
 
 /// Stored event with database ID and computed duration.
 pub const StoredEvent = struct {
@@ -39,37 +39,5 @@ pub const EventRepository = struct {
     /// Count total events in the repository.
     pub fn countEvents(self: EventRepository) i64 {
         return self.vtable.countEvents(self.ptr);
-    }
-
-    /// Create an EventRepository from any type that implements the required methods.
-    pub fn init(impl: anytype) EventRepository {
-        const Impl = @TypeOf(impl);
-        const impl_ptr = if (@typeInfo(Impl) == .pointer) impl else @as(*@TypeOf(impl.*), @ptrCast(@constCast(&impl)));
-
-        const gen = struct {
-            fn save(ptr: *anyopaque, event: Event, duration_ms: i64) void {
-                const self: Impl = @ptrCast(@alignCast(ptr));
-                self.save(event, duration_ms);
-            }
-
-            fn getLastEvent(ptr: *anyopaque) ?StoredEvent {
-                const self: Impl = @ptrCast(@alignCast(ptr));
-                return self.getLastEvent();
-            }
-
-            fn countEvents(ptr: *anyopaque) i64 {
-                const self: Impl = @ptrCast(@alignCast(ptr));
-                return self.countEvents();
-            }
-        };
-
-        return .{
-            .ptr = impl_ptr,
-            .vtable = &.{
-                .save = gen.save,
-                .getLastEvent = gen.getLastEvent,
-                .countEvents = gen.countEvents,
-            },
-        };
     }
 };

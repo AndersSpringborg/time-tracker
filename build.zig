@@ -55,6 +55,42 @@ pub fn build(b: *std.Build) void {
     });
 
     // =======================================================================
+    // APPLICATION LAYER MODULES (Clean Architecture)
+    // =======================================================================
+
+    // Event repository interface
+    const event_repository_interface = b.createModule(.{
+        .root_source_file = b.path("src/application/interfaces/event_repository.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "domain_event", .module = domain_event_module },
+        },
+    });
+
+    // Fake event repository for testing
+    const fake_event_repository = b.createModule(.{
+        .root_source_file = b.path("src/application/fakes/fake_event_repository.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "domain_event", .module = domain_event_module },
+            .{ .name = "event_repository", .module = event_repository_interface },
+        },
+    });
+
+    // Track event use case
+    const track_event_usecase = b.createModule(.{
+        .root_source_file = b.path("src/application/usecases/track_event.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "domain_event", .module = domain_event_module },
+            .{ .name = "event_repository", .module = event_repository_interface },
+        },
+    });
+
+    // =======================================================================
     // LEGACY MODULES (still in src/core/ - will be migrated later)
     // =======================================================================
 
@@ -332,6 +368,40 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(domain_rule_tests).step);
 
     // -----------------------------------------------------------------------
+    // APPLICATION LAYER TESTS
+    // -----------------------------------------------------------------------
+
+    // Fake event repository tests
+    const fake_event_repo_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/application/fakes/fake_event_repository.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "domain_event", .module = domain_event_module },
+                .{ .name = "event_repository", .module = event_repository_interface },
+            },
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(fake_event_repo_tests).step);
+
+    // Track event use case tests
+    const track_event_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/application/usecases/track_event_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "domain_event", .module = domain_event_module },
+                .{ .name = "event_repository", .module = event_repository_interface },
+                .{ .name = "fake_event_repository", .module = fake_event_repository },
+                .{ .name = "track_event", .module = track_event_usecase },
+            },
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(track_event_tests).step);
+
+    // -----------------------------------------------------------------------
     // LEGACY TESTS (still in src/core/)
     // -----------------------------------------------------------------------
 
@@ -521,10 +591,8 @@ pub fn build(b: *std.Build) void {
     linkDuckDbStatic(buffered_repo_tests);
     test_step.dependOn(&b.addRunArtifact(buffered_repo_tests).step);
 
-    // Suppress unused variable warnings for new domain modules
-    // (they will be used in later phases)
+    // Suppress unused variable warnings for domain modules not yet used in app
     _ = domain_glob_module;
-    _ = domain_event_module;
     _ = domain_scoring_module;
     _ = domain_rule_module;
     _ = domain_hierarchy_module;
