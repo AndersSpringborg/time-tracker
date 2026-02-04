@@ -291,36 +291,6 @@ pub fn build(b: *std.Build) void {
     duckdb_repo_module.addIncludePath(duckdb_include_path);
     duckdb_repo_module.addLibraryPath(duckdb_lib_path);
 
-    const query_module = b.createModule(.{
-        .root_source_file = b.path("src/core/cli/query.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    query_module.addIncludePath(duckdb_include_path);
-    query_module.addLibraryPath(duckdb_lib_path);
-
-    const hierarchy_module = b.createModule(.{
-        .root_source_file = b.path("src/core/import/hierarchy.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "migrations", .module = migrations_module },
-        },
-    });
-    hierarchy_module.addIncludePath(duckdb_include_path);
-    hierarchy_module.addLibraryPath(duckdb_lib_path);
-
-    const rules_module = b.createModule(.{
-        .root_source_file = b.path("src/core/mapping/rules.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "migrations", .module = migrations_module },
-        },
-    });
-    rules_module.addIncludePath(duckdb_include_path);
-    rules_module.addLibraryPath(duckdb_lib_path);
-
     const review_module = b.createModule(.{
         .root_source_file = b.path("src/core/cli/review.zig"),
         .target = target,
@@ -347,16 +317,8 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    const context_module = b.createModule(.{
-        .root_source_file = b.path("src/core/context/context.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "migrations", .module = migrations_module },
-        },
-    });
-    context_module.addIncludePath(duckdb_include_path);
-    context_module.addLibraryPath(duckdb_lib_path);
+    picker_module.addIncludePath(duckdb_include_path);
+    picker_module.addLibraryPath(duckdb_lib_path);
 
     const suggestions_module = b.createModule(.{
         .root_source_file = b.path("src/core/suggestions/suggestions.zig"),
@@ -793,40 +755,6 @@ pub fn build(b: *std.Build) void {
     linkDuckDbStatic(migrations_tests);
     test_step.dependOn(&b.addRunArtifact(migrations_tests).step);
 
-    // Hierarchy import tests
-    const hierarchy_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/core/import/hierarchy_test.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "migrations", .module = migrations_module },
-                .{ .name = "hierarchy", .module = hierarchy_module },
-            },
-        }),
-    });
-    hierarchy_tests.root_module.addIncludePath(duckdb_include_path);
-    hierarchy_tests.root_module.addLibraryPath(duckdb_lib_path);
-    linkDuckDbStatic(hierarchy_tests);
-    test_step.dependOn(&b.addRunArtifact(hierarchy_tests).step);
-
-    // Rules engine tests
-    const rules_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/core/mapping/rules_test.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "migrations", .module = migrations_module },
-                .{ .name = "rules", .module = rules_module },
-            },
-        }),
-    });
-    rules_tests.root_module.addIncludePath(duckdb_include_path);
-    rules_tests.root_module.addLibraryPath(duckdb_lib_path);
-    linkDuckDbStatic(rules_tests);
-    test_step.dependOn(&b.addRunArtifact(rules_tests).step);
-
     // Review tests
     const review_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -856,23 +784,6 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(terminal_tests).step);
-
-    // Context tests
-    const context_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/core/context/context_test.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "migrations", .module = migrations_module },
-                .{ .name = "context", .module = context_module },
-            },
-        }),
-    });
-    context_tests.root_module.addIncludePath(duckdb_include_path);
-    context_tests.root_module.addLibraryPath(duckdb_lib_path);
-    linkDuckDbStatic(context_tests);
-    test_step.dependOn(&b.addRunArtifact(context_tests).step);
 
     // Suggestions tests
     const suggestions_tests = b.addTest(.{
