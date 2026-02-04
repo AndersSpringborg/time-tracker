@@ -143,6 +143,60 @@ pub fn build(b: *std.Build) void {
     });
 
     // =======================================================================
+    // EXTERNAL LAYER MODULES (DuckDB implementations)
+    // =======================================================================
+
+    // Migrations module (needed by external layer - moved here from legacy section)
+    const migrations_module = b.createModule(.{
+        .root_source_file = b.path("src/core/storage/migrations.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    migrations_module.addIncludePath(duckdb_include_path);
+    migrations_module.addLibraryPath(duckdb_lib_path);
+
+    // DuckDB Event Repository
+    const duckdb_event_repository = b.createModule(.{
+        .root_source_file = b.path("src/external/duckdb/event_repository.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "domain_event", .module = domain_event_module },
+            .{ .name = "event_repository", .module = event_repository_interface },
+            .{ .name = "migrations", .module = migrations_module },
+        },
+    });
+    duckdb_event_repository.addIncludePath(duckdb_include_path);
+    duckdb_event_repository.addLibraryPath(duckdb_lib_path);
+
+    // DuckDB Rule Repository
+    const duckdb_rule_repository = b.createModule(.{
+        .root_source_file = b.path("src/external/duckdb/rule_repository.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "domain_rule", .module = domain_rule_module },
+            .{ .name = "rule_repository", .module = rule_repository_interface },
+            .{ .name = "migrations", .module = migrations_module },
+        },
+    });
+    duckdb_rule_repository.addIncludePath(duckdb_include_path);
+    duckdb_rule_repository.addLibraryPath(duckdb_lib_path);
+
+    // DuckDB Project Repository
+    const duckdb_project_repository = b.createModule(.{
+        .root_source_file = b.path("src/external/duckdb/project_repository.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "project_repository", .module = project_repository_interface },
+            .{ .name = "migrations", .module = migrations_module },
+        },
+    });
+    duckdb_project_repository.addIncludePath(duckdb_include_path);
+    duckdb_project_repository.addLibraryPath(duckdb_lib_path);
+
+    // =======================================================================
     // LEGACY MODULES (still in src/core/ - will be migrated later)
     // =======================================================================
 
@@ -168,14 +222,6 @@ pub fn build(b: *std.Build) void {
             .{ .name = "event", .module = event_module },
         },
     });
-
-    const migrations_module = b.createModule(.{
-        .root_source_file = b.path("src/core/storage/migrations.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    migrations_module.addIncludePath(duckdb_include_path);
-    migrations_module.addLibraryPath(duckdb_lib_path);
 
     const duckdb_repo_module = b.createModule(.{
         .root_source_file = b.path("src/core/storage/duckdb_repository.zig"),
@@ -497,6 +543,66 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(manage_project_tests).step);
+
+    // -----------------------------------------------------------------------
+    // EXTERNAL LAYER TESTS (DuckDB implementations)
+    // -----------------------------------------------------------------------
+
+    // DuckDB Event Repository tests
+    const duckdb_event_repo_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/external/duckdb/event_repository_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "domain_event", .module = domain_event_module },
+                .{ .name = "event_repository", .module = event_repository_interface },
+                .{ .name = "duckdb_event_repository", .module = duckdb_event_repository },
+                .{ .name = "migrations", .module = migrations_module },
+            },
+        }),
+    });
+    duckdb_event_repo_tests.root_module.addIncludePath(duckdb_include_path);
+    duckdb_event_repo_tests.root_module.addLibraryPath(duckdb_lib_path);
+    linkDuckDbStatic(duckdb_event_repo_tests);
+    test_step.dependOn(&b.addRunArtifact(duckdb_event_repo_tests).step);
+
+    // DuckDB Rule Repository tests
+    const duckdb_rule_repo_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/external/duckdb/rule_repository_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "domain_rule", .module = domain_rule_module },
+                .{ .name = "rule_repository", .module = rule_repository_interface },
+                .{ .name = "duckdb_rule_repository", .module = duckdb_rule_repository },
+                .{ .name = "migrations", .module = migrations_module },
+            },
+        }),
+    });
+    duckdb_rule_repo_tests.root_module.addIncludePath(duckdb_include_path);
+    duckdb_rule_repo_tests.root_module.addLibraryPath(duckdb_lib_path);
+    linkDuckDbStatic(duckdb_rule_repo_tests);
+    test_step.dependOn(&b.addRunArtifact(duckdb_rule_repo_tests).step);
+
+    // DuckDB Project Repository tests
+    const duckdb_project_repo_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/external/duckdb/project_repository_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "project_repository", .module = project_repository_interface },
+                .{ .name = "duckdb_project_repository", .module = duckdb_project_repository },
+                .{ .name = "migrations", .module = migrations_module },
+            },
+        }),
+    });
+    duckdb_project_repo_tests.root_module.addIncludePath(duckdb_include_path);
+    duckdb_project_repo_tests.root_module.addLibraryPath(duckdb_lib_path);
+    linkDuckDbStatic(duckdb_project_repo_tests);
+    test_step.dependOn(&b.addRunArtifact(duckdb_project_repo_tests).step);
 
     // -----------------------------------------------------------------------
     // LEGACY TESTS (still in src/core/)
