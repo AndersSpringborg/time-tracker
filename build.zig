@@ -132,6 +132,16 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    // Manage project use case
+    const manage_project_usecase = b.createModule(.{
+        .root_source_file = b.path("src/application/usecases/manage_project.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "project_repository", .module = project_repository_interface },
+        },
+    });
+
     // =======================================================================
     // LEGACY MODULES (still in src/core/ - will be migrated later)
     // =======================================================================
@@ -473,6 +483,21 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(track_event_tests).step);
 
+    // Manage project use case tests
+    const manage_project_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/application/usecases/manage_project_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "project_repository", .module = project_repository_interface },
+                .{ .name = "fake_project_repository", .module = fake_project_repository },
+                .{ .name = "manage_project", .module = manage_project_usecase },
+            },
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(manage_project_tests).step);
+
     // -----------------------------------------------------------------------
     // LEGACY TESTS (still in src/core/)
     // -----------------------------------------------------------------------
@@ -667,7 +692,6 @@ pub fn build(b: *std.Build) void {
     _ = domain_glob_module;
     _ = domain_scoring_module;
     _ = domain_hierarchy_module;
-    _ = fake_project_repository;
 }
 
 fn linkDuckDbStatic(compile: *std.Build.Step.Compile) void {
