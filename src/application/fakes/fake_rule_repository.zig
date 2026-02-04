@@ -44,18 +44,48 @@ pub const FakeRuleRepository = struct {
         return findFirstMatch(self.rules.items, app_name, window_title);
     }
 
+    pub fn findMatchWithContext(self: *FakeRuleRepository, app_name: []const u8, window_title: []const u8, current_project_id: ?i64) RuleRepositoryError!?Match {
+        // FakeRuleRepository doesn't support global rule resolution - just delegate to findMatch
+        _ = current_project_id;
+        return self.findMatch(app_name, window_title);
+    }
+
     pub fn getRuleCount(self: *FakeRuleRepository) RuleRepositoryError!i64 {
         return @intCast(self.rules.items.len);
+    }
+
+    pub fn listRules(self: *FakeRuleRepository) RuleRepositoryError![]Rule {
+        // Return a copy of the rules array
+        const copy = self.allocator.alloc(Rule, self.rules.items.len) catch return error.OutOfMemory;
+        @memcpy(copy, self.rules.items);
+        return copy;
+    }
+
+    pub fn freeRules(self: *FakeRuleRepository, rules_list: []Rule) void {
+        self.allocator.free(rules_list);
+    }
+
+    pub fn deleteRule(self: *FakeRuleRepository, rule_id: i64) RuleRepositoryError!void {
+        for (self.rules.items, 0..) |rule, i| {
+            if (rule.id == rule_id) {
+                _ = self.rules.orderedRemove(i);
+                return;
+            }
+        }
     }
 
     /// Convert to the interface type.
     pub fn repository(self: *FakeRuleRepository) RuleRepository {
         return RuleRepository{
             .ptr = self,
+            .allocator = self.allocator,
             .vtable = &.{
                 .findMatch = findMatchVtable,
+                .findMatchWithContext = findMatchWithContextVtable,
                 .addRule = addRuleVtable,
                 .getRuleCount = getRuleCountVtable,
+                .listRules = listRulesVtable,
+                .deleteRule = deleteRuleVtable,
             },
         };
     }
@@ -63,6 +93,11 @@ pub const FakeRuleRepository = struct {
     fn findMatchVtable(ptr: *anyopaque, app_name: []const u8, window_title: []const u8) RuleRepositoryError!?Match {
         const self: *FakeRuleRepository = @ptrCast(@alignCast(ptr));
         return self.findMatch(app_name, window_title);
+    }
+
+    fn findMatchWithContextVtable(ptr: *anyopaque, app_name: []const u8, window_title: []const u8, current_project_id: ?i64) RuleRepositoryError!?Match {
+        const self: *FakeRuleRepository = @ptrCast(@alignCast(ptr));
+        return self.findMatchWithContext(app_name, window_title, current_project_id);
     }
 
     fn addRuleVtable(ptr: *anyopaque, input: RuleInput) RuleRepositoryError!void {
@@ -73,6 +108,16 @@ pub const FakeRuleRepository = struct {
     fn getRuleCountVtable(ptr: *anyopaque) RuleRepositoryError!i64 {
         const self: *FakeRuleRepository = @ptrCast(@alignCast(ptr));
         return self.getRuleCount();
+    }
+
+    fn listRulesVtable(ptr: *anyopaque) RuleRepositoryError![]Rule {
+        const self: *FakeRuleRepository = @ptrCast(@alignCast(ptr));
+        return self.listRules();
+    }
+
+    fn deleteRuleVtable(ptr: *anyopaque, rule_id: i64) RuleRepositoryError!void {
+        const self: *FakeRuleRepository = @ptrCast(@alignCast(ptr));
+        return self.deleteRule(rule_id);
     }
 };
 

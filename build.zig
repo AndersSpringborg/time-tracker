@@ -909,7 +909,7 @@ pub fn build(b: *std.Build) void {
     linkDuckDbStatic(buffered_repo_tests);
     test_step.dependOn(&b.addRunArtifact(buffered_repo_tests).step);
 
-    // Suppress unused variable warnings for domain modules not yet used in app
+    // Suppress unused variable warnings for domain modules not yet used
     _ = domain_glob_module;
 }
 
