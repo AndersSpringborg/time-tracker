@@ -463,6 +463,36 @@ pub const Reviewer = struct {
         return kinds;
     }
 
+    /// Map multiple events to an activity and kind
+    pub fn mapEvents(self: *Reviewer, event_ids: []const i64, activity_id: i64, kind_id: i64) !void {
+        for (event_ids) |event_id| {
+            try self.mapEvent(event_id, activity_id, kind_id, true);
+        }
+    }
+
+    /// Discard events (mark as manually_mapped but with no activity - non-work)
+    pub fn discardEvents(self: *Reviewer, event_ids: []const i64) !void {
+        var stmt: c.duckdb_prepared_statement = undefined;
+        const query = "UPDATE events SET manually_mapped = true WHERE id = ?";
+
+        if (c.duckdb_prepare(self.conn, query, &stmt) == c.DuckDBError) {
+            return ReviewError.UpdateFailed;
+        }
+        defer c.duckdb_destroy_prepare(&stmt);
+
+        for (event_ids) |event_id| {
+            _ = c.duckdb_clear_bindings(stmt);
+            _ = c.duckdb_bind_int64(stmt, 1, event_id);
+
+            var result: c.duckdb_result = undefined;
+            if (c.duckdb_execute_prepared(stmt, &result) == c.DuckDBError) {
+                c.duckdb_destroy_result(&result);
+                return ReviewError.UpdateFailed;
+            }
+            c.duckdb_destroy_result(&result);
+        }
+    }
+
     /// Map an event to an activity and kind
     pub fn mapEvent(self: *Reviewer, event_id: i64, activity_id: i64, kind_id: i64, manually_mapped: bool) !void {
         var stmt: c.duckdb_prepared_statement = undefined;

@@ -12,6 +12,7 @@ const c = migrations.c;
 const Reviewer = review.Reviewer;
 const UnmappedEvent = review.UnmappedEvent;
 const DateString = review.DateString;
+const HierarchyMatch = review.HierarchyMatch;
 
 /// Event row for table display
 const EventRow = struct {
@@ -26,6 +27,12 @@ const EventRow = struct {
     duration_buf: [32]u8 = undefined,
 };
 
+/// UI Mode
+const Mode = enum {
+    normal,
+    search,
+};
+
 /// Application state
 const App = struct {
     allocator: std.mem.Allocator,
@@ -38,6 +45,17 @@ const App = struct {
     // Day navigation
     dates: []DateString,
     current_date_idx: usize = 0,
+
+    // Modal state
+    mode: Mode = .normal,
+    search_buf: [128]u8 = undefined,
+    search_len: usize = 0,
+    search_results: []HierarchyMatch = &[_]HierarchyMatch{},
+    search_cursor: usize = 0,
+
+    // Status message
+    status_msg: []const u8 = "",
+    status_is_error: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, conn: c.duckdb_connection) !App {
         var reviewer_instance = Reviewer.init(conn, allocator);
@@ -81,6 +99,17 @@ const App = struct {
         if (self.table_ctx.sel_rows) |sel| {
             self.allocator.free(sel);
         }
+        self.freeSearchResults();
+    }
+
+    fn freeSearchResults(self: *App) void {
+        for (self.search_results) |match| {
+            self.allocator.free(match.display_path);
+        }
+        if (self.search_results.len > 0) {
+            self.allocator.free(self.search_results);
+            self.search_results = &[_]HierarchyMatch{};
+        }
     }
 
     /// Reload events for the current date
@@ -102,6 +131,24 @@ const App = struct {
         self.table_ctx.row = 0;
     }
 
+    /// Reload dates list (after mapping/discarding events)
+    fn reloadDates(self: *App) !void {
+        self.allocator.free(self.dates);
+        self.dates = try self.reviewer.getDatesWithUnmappedEvents();
+
+        if (self.dates.len == 0) {
+            // No more events, will quit
+            self.should_quit = true;
+            self.status_msg = "All events processed!";
+            return;
+        }
+
+        // Adjust current date index if needed
+        if (self.current_date_idx >= self.dates.len) {
+            self.current_date_idx = self.dates.len - 1;
+        }
+    }
+
     /// Navigate to the previous day (older)
     fn prevDay(self: *App) void {
         if (self.current_date_idx + 1 < self.dates.len) {
@@ -119,14 +166,184 @@ const App = struct {
     }
 
     pub fn getCurrentDate(self: *App) []const u8 {
+        if (self.dates.len == 0) return "N/A";
         return self.dates[self.current_date_idx].slice();
     }
 
+    /// Get selected event IDs (or current row if nothing selected)
+    fn getSelectedEventIds(self: *App) ![]i64 {
+        if (self.table_ctx.sel_rows) |sel| {
+            const ids = try self.allocator.alloc(i64, sel.len);
+            for (sel, 0..) |row_idx, i| {
+                if (row_idx < self.events.len) {
+                    ids[i] = self.events[row_idx].id;
+                }
+            }
+            return ids;
+        } else {
+            // Use current row
+            const ids = try self.allocator.alloc(i64, 1);
+            if (self.table_ctx.row < self.events.len) {
+                ids[0] = self.events[self.table_ctx.row].id;
+            }
+            return ids;
+        }
+    }
+
+    /// Perform mapping of selected events
+    fn performMapping(self: *App, match: HierarchyMatch) void {
+        const event_ids = self.getSelectedEventIds() catch {
+            self.status_msg = "Error getting selection";
+            self.status_is_error = true;
+            return;
+        };
+        defer self.allocator.free(event_ids);
+
+        self.reviewer.mapEvents(event_ids, match.activity_id, match.kind_id) catch {
+            self.status_msg = "Error mapping events";
+            self.status_is_error = true;
+            return;
+        };
+
+        // Clear search state
+        self.mode = .normal;
+        self.search_len = 0;
+        self.freeSearchResults();
+        self.search_cursor = 0;
+
+        // Reload data
+        self.reloadDates() catch {};
+        if (!self.should_quit) {
+            self.reloadEvents() catch {};
+        }
+
+        self.status_msg = "Events mapped successfully";
+        self.status_is_error = false;
+    }
+
+    /// Discard selected events
+    fn discardSelected(self: *App) void {
+        const event_ids = self.getSelectedEventIds() catch {
+            self.status_msg = "Error getting selection";
+            self.status_is_error = true;
+            return;
+        };
+        defer self.allocator.free(event_ids);
+
+        self.reviewer.discardEvents(event_ids) catch {
+            self.status_msg = "Error discarding events";
+            self.status_is_error = true;
+            return;
+        };
+
+        // Reload data
+        self.reloadDates() catch {};
+        if (!self.should_quit) {
+            self.reloadEvents() catch {};
+        }
+
+        self.status_msg = "Events discarded";
+        self.status_is_error = false;
+    }
+
+    /// Perform search
+    fn doSearch(self: *App) void {
+        self.freeSearchResults();
+        self.search_cursor = 0;
+
+        if (self.search_len == 0) return;
+
+        self.search_results = self.reviewer.searchFullHierarchy(self.search_buf[0..self.search_len]) catch {
+            self.status_msg = "Search failed";
+            self.status_is_error = true;
+            return;
+        };
+    }
+
     pub fn handleKey(self: *App, key: vaxis.Key) bool {
+        // Mode-specific handling
+        switch (self.mode) {
+            .search => return self.handleSearchKey(key),
+            .normal => return self.handleNormalKey(key),
+        }
+    }
+
+    fn handleSearchKey(self: *App, key: vaxis.Key) bool {
+        // Cancel search
+        if (key.matches(vaxis.Key.escape, .{}) or key.matches('c', .{ .ctrl = true })) {
+            self.mode = .normal;
+            self.search_len = 0;
+            self.freeSearchResults();
+            return false;
+        }
+
+        // Confirm selection
+        if (key.matches(vaxis.Key.enter, .{})) {
+            if (self.search_results.len > 0 and self.search_cursor < self.search_results.len) {
+                self.performMapping(self.search_results[self.search_cursor]);
+            }
+            return false;
+        }
+
+        // Navigate results
+        if (key.matchesAny(&.{ vaxis.Key.up, 'k' }, .{ .ctrl = true })) {
+            if (self.search_cursor > 0) {
+                self.search_cursor -= 1;
+            }
+            return false;
+        }
+        if (key.matchesAny(&.{ vaxis.Key.down, 'j' }, .{ .ctrl = true })) {
+            if (self.search_cursor + 1 < self.search_results.len) {
+                self.search_cursor += 1;
+            }
+            return false;
+        }
+
+        // Backspace
+        if (key.matches(vaxis.Key.backspace, .{})) {
+            if (self.search_len > 0) {
+                self.search_len -= 1;
+                self.doSearch();
+            }
+            return false;
+        }
+
+        // Type character
+        if (key.text) |text| {
+            if (self.search_len + text.len <= self.search_buf.len) {
+                @memcpy(self.search_buf[self.search_len .. self.search_len + text.len], text);
+                self.search_len += text.len;
+                self.doSearch();
+            }
+            return false;
+        }
+
+        return false;
+    }
+
+    fn handleNormalKey(self: *App, key: vaxis.Key) bool {
         // Quit
         if (key.matches('q', .{}) or key.matches('c', .{ .ctrl = true })) {
             self.should_quit = true;
             return true;
+        }
+
+        // Open search/map modal
+        if (key.matches('m', .{})) {
+            if (self.rows.len > 0) {
+                self.mode = .search;
+                self.search_len = 0;
+                self.freeSearchResults();
+            }
+            return false;
+        }
+
+        // Discard selected events
+        if (key.matches('d', .{})) {
+            if (self.rows.len > 0) {
+                self.discardSelected();
+            }
+            return false;
         }
 
         // Day navigation
@@ -186,6 +403,7 @@ const App = struct {
                 self.allocator.free(sel);
                 self.table_ctx.sel_rows = null;
             }
+            self.status_msg = "";
         }
 
         return false;
@@ -373,10 +591,16 @@ pub fn run(allocator: std.mem.Allocator, conn: c.duckdb_connection) !void {
         const current_date = app.getCurrentDate();
         const date_info_len = app.dates.len;
         const date_pos = app.current_date_idx + 1;
-        const header_text = std.fmt.bufPrint(&header_buf, " {s} ({d}/{d}) | {d} events | {d} selected | [/]:Day j/k:Move Space:Select a:App q:Quit", .{ current_date, date_pos, date_info_len, app.rows.len, sel_count }) catch "Review";
+        const header_text = std.fmt.bufPrint(&header_buf, " {s} ({d}/{d}) | {d} events | {d} sel | []:Day Space:Sel a:App m:Map d:Discard q:Quit", .{ current_date, date_pos, date_info_len, app.rows.len, sel_count }) catch "Review";
         _ = header_win.print(&.{.{ .text = header_text, .style = .{ .fg = .{ .rgb = .{ 200, 200, 200 } } } }}, .{});
 
-        // Table
+        // Status message on line 2 if present
+        if (app.status_msg.len > 0) {
+            const status_color: vaxis.Color = if (app.status_is_error) .{ .rgb = .{ 255, 100, 100 } } else .{ .rgb = .{ 100, 255, 100 } };
+            _ = header_win.print(&.{ .{ .text = " ", .style = .{} }, .{ .text = app.status_msg, .style = .{ .fg = status_color } } }, .{ .row_offset = 1 });
+        }
+
+        // Table area
         const table_win = win.child(.{
             .x_off = 0,
             .y_off = 2,
@@ -392,8 +616,73 @@ pub fn run(allocator: std.mem.Allocator, conn: c.duckdb_connection) !void {
                 &app.table_ctx,
             );
         } else {
-            // Show message when no events for current day
             _ = table_win.print(&.{.{ .text = "  No events for this date", .style = .{ .fg = .{ .rgb = .{ 128, 128, 128 } } } }}, .{});
+        }
+
+        // Search modal overlay
+        if (app.mode == .search) {
+            const modal_width: u16 = @min(80, win.width -| 4);
+            const modal_height: u16 = @min(15, win.height -| 4);
+            const modal_x = (win.width -| modal_width) / 2;
+            const modal_y = (win.height -| modal_height) / 2;
+
+            const modal_win = win.child(.{
+                .x_off = modal_x,
+                .y_off = modal_y,
+                .width = modal_width,
+                .height = modal_height,
+            });
+
+            // Modal background
+            modal_win.fill(.{ .style = .{ .bg = .{ .rgb = .{ 40, 40, 50 } } } });
+
+            // Border (simple)
+            for (0..modal_width) |x| {
+                modal_win.writeCell(@intCast(x), 0, .{ .char = .{ .grapheme = "-" }, .style = .{ .fg = .{ .rgb = .{ 100, 100, 120 } } } });
+                modal_win.writeCell(@intCast(x), modal_height -| 1, .{ .char = .{ .grapheme = "-" }, .style = .{ .fg = .{ .rgb = .{ 100, 100, 120 } } } });
+            }
+
+            // Title
+            _ = modal_win.print(&.{.{ .text = " Search & Map (Esc to cancel, Enter to confirm)", .style = .{ .fg = .{ .rgb = .{ 200, 200, 200 } } } }}, .{ .row_offset = 1 });
+
+            // Search input
+            var search_display: [140]u8 = undefined;
+            const search_text = std.fmt.bufPrint(&search_display, " > {s}_", .{app.search_buf[0..app.search_len]}) catch " > _";
+            _ = modal_win.print(&.{.{ .text = search_text, .style = .{ .fg = .{ .rgb = .{ 255, 255, 100 } } } }}, .{ .row_offset = 3 });
+
+            // Results
+            if (app.search_results.len > 0) {
+                var result_row: u16 = 5;
+                for (app.search_results, 0..) |match, i| {
+                    if (result_row >= modal_height - 1) break;
+
+                    const is_selected = i == app.search_cursor;
+                    const fg_color: vaxis.Color = if (is_selected) .{ .rgb = .{ 255, 255, 255 } } else .{ .rgb = .{ 180, 180, 180 } };
+                    const bg_color: vaxis.Color = if (is_selected) .{ .rgb = .{ 60, 80, 120 } } else .{ .rgb = .{ 40, 40, 50 } };
+
+                    // Truncate path to fit
+                    const max_path_len = @min(match.display_path.len, modal_width - 4);
+                    const path_slice = match.display_path[0..max_path_len];
+
+                    var line_buf: [100]u8 = undefined;
+                    const line_text = std.fmt.bufPrint(&line_buf, "  {s}", .{path_slice}) catch "  ...";
+
+                    // Fill row background
+                    for (1..modal_width - 1) |x| {
+                        modal_win.writeCell(@intCast(x), result_row, .{ .char = .{ .grapheme = " " }, .style = .{ .bg = bg_color } });
+                    }
+
+                    _ = modal_win.print(&.{.{ .text = line_text, .style = .{ .fg = fg_color, .bg = bg_color } }}, .{ .row_offset = result_row, .col_offset = 0 });
+                    result_row += 1;
+                }
+            } else if (app.search_len > 0) {
+                _ = modal_win.print(&.{.{ .text = "  No matches found", .style = .{ .fg = .{ .rgb = .{ 128, 128, 128 } } } }}, .{ .row_offset = 5 });
+            } else {
+                _ = modal_win.print(&.{.{ .text = "  Type to search hierarchy...", .style = .{ .fg = .{ .rgb = .{ 128, 128, 128 } } } }}, .{ .row_offset = 5 });
+            }
+
+            // Navigation hint
+            _ = modal_win.print(&.{.{ .text = " Ctrl+j/k: Navigate results", .style = .{ .fg = .{ .rgb = .{ 100, 100, 100 } } } }}, .{ .row_offset = modal_height -| 2 });
         }
 
         try vx.render(tty.writer());
