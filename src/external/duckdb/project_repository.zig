@@ -130,7 +130,7 @@ pub const DuckDbProjectRepository = struct {
         return count > 0;
     }
 
-    pub fn freeProjectIds(self: *DuckDbProjectRepository, ids: []i64) void {
+    pub fn freeProjectIds(self: *DuckDbProjectRepository, ids: []const i64) void {
         self.allocator.free(ids);
     }
 
@@ -180,7 +180,7 @@ pub const DuckDbProjectRepository = struct {
         return self.isProjectActive(project_id);
     }
 
-    fn freeProjectIdsVtable(ptr: *anyopaque, ids: []i64) void {
+    fn freeProjectIdsVtable(ptr: *anyopaque, ids: []const i64) void {
         const self: *DuckDbProjectRepository = @ptrCast(@alignCast(ptr));
         self.freeProjectIds(ids);
     }

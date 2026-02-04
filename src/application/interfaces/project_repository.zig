@@ -21,7 +21,7 @@ pub const ProjectRepository = struct {
         getActiveProjectIds: *const fn (*anyopaque) ProjectRepositoryError![]i64,
         hasActiveProjects: *const fn (*anyopaque) ProjectRepositoryError!bool,
         isProjectActive: *const fn (*anyopaque, i64) ProjectRepositoryError!bool,
-        freeProjectIds: *const fn (*anyopaque, []i64) void,
+        freeProjectIds: *const fn (*anyopaque, []const i64) void,
     };
 
     /// Add a project to the active context. Idempotent - won't add if already active.
@@ -56,7 +56,7 @@ pub const ProjectRepository = struct {
     }
 
     /// Free project IDs returned by getActiveProjectIds().
-    pub fn freeProjectIds(self: ProjectRepository, ids: []i64) void {
+    pub fn freeProjectIds(self: ProjectRepository, ids: []const i64) void {
         self.vtable.freeProjectIds(self.ptr, ids);
     }
 };

@@ -58,7 +58,7 @@ pub const FakeProjectRepository = struct {
         return false;
     }
 
-    pub fn freeProjectIds(self: *FakeProjectRepository, ids: []i64) void {
+    pub fn freeProjectIds(self: *FakeProjectRepository, ids: []const i64) void {
         self.allocator.free(ids);
     }
 
@@ -108,7 +108,7 @@ pub const FakeProjectRepository = struct {
         return self.isProjectActive(project_id);
     }
 
-    fn freeProjectIdsVtable(ptr: *anyopaque, ids: []i64) void {
+    fn freeProjectIdsVtable(ptr: *anyopaque, ids: []const i64) void {
         const self: *FakeProjectRepository = @ptrCast(@alignCast(ptr));
         self.freeProjectIds(ids);
     }

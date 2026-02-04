@@ -472,10 +472,9 @@ pub fn build(b: *std.Build) void {
             .{ .name = "app_context", .module = app_context_module },
             .{ .name = "query_repository", .module = query_repository_interface },
             .{ .name = "hierarchy_repository", .module = hierarchy_repository_interface },
+            .{ .name = "domain_rule", .module = domain_rule_module },
             // Legacy modules for commands not yet fully migrated
-            .{ .name = "rules", .module = rules_module },
             .{ .name = "review", .module = review_module },
-            .{ .name = "context", .module = context_module },
             .{ .name = "picker", .module = picker_module },
             .{ .name = "migrations", .module = migrations_module },
         },

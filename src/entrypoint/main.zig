@@ -7,11 +7,11 @@ const std = @import("std");
 const AppContext = @import("app_context").AppContext;
 const query_repo = @import("query_repository");
 const hierarchy_repo = @import("hierarchy_repository");
+const domain_rule = @import("domain_rule");
+const Rule = domain_rule.Rule;
 
-// Legacy modules (still using DuckDB directly)
-const rules = @import("rules");
+// Legacy modules (still needed for complex workflows)
 const review = @import("review");
-const context = @import("context");
 const picker = @import("picker");
 const migrations = @import("migrations");
 const c = migrations.c;
@@ -307,8 +307,6 @@ fn runRules(allocator: std.mem.Allocator, args: []const [:0]const u8) void {
     };
     defer ctx.deinit();
 
-    var engine = rules.RulesEngine.init(ctx.getConnection(), allocator);
-
     if (args.len < 1) {
         std.debug.print("Usage: tt rules <list|add|delete>\n", .{});
         return;
@@ -317,11 +315,11 @@ fn runRules(allocator: std.mem.Allocator, args: []const [:0]const u8) void {
     const subcommand = args[0];
 
     if (std.mem.eql(u8, subcommand, "list")) {
-        runRulesList(&engine, ctx.getConnection(), allocator);
+        runRulesList(ctx);
     } else if (std.mem.eql(u8, subcommand, "add")) {
-        runRulesAdd(&engine, ctx.getConnection(), allocator, args[1..]);
+        runRulesAdd(ctx, args[1..]);
     } else if (std.mem.eql(u8, subcommand, "delete")) {
-        runRulesDelete(&engine, args[1..]);
+        runRulesDelete(ctx, args[1..]);
     } else {
         std.debug.print("Unknown rules subcommand: {s}\n", .{subcommand});
     }
@@ -368,12 +366,12 @@ fn getKindPath(conn: c.duckdb_connection, kind_id: i64, allocator: std.mem.Alloc
     return path;
 }
 
-fn runRulesList(engine: *rules.RulesEngine, conn: c.duckdb_connection, allocator: std.mem.Allocator) void {
-    const fetched_rules = engine.listRules() catch |err| {
+fn runRulesList(ctx: *AppContext) void {
+    const fetched_rules = ctx.ruleRepo.listRules() catch |err| {
         std.debug.print("Failed to list rules: {}\n", .{err});
         return;
     };
-    defer engine.allocator.free(fetched_rules);
+    defer ctx.ruleRepo.freeRules(fetched_rules);
 
     if (fetched_rules.len == 0) {
         std.debug.print("No mapping rules defined.\n", .{});
@@ -388,9 +386,9 @@ fn runRulesList(engine: *rules.RulesEngine, conn: c.duckdb_connection, allocator
     var allocated_paths: std.ArrayListUnmanaged([]const u8) = .{};
     defer {
         for (allocated_paths.items) |path| {
-            allocator.free(path);
+            ctx.allocator.free(path);
         }
-        allocated_paths.deinit(allocator);
+        allocated_paths.deinit(ctx.allocator);
     }
 
     for (fetched_rules) |rule| {
@@ -402,19 +400,19 @@ fn runRulesList(engine: *rules.RulesEngine, conn: c.duckdb_connection, allocator
 
         if (rule.is_global) {
             if (rule.kind_name) |kind_name| {
-                const formatted = std.fmt.allocPrint(allocator, "(global) {s}", .{kind_name}) catch "(global) ???";
+                const formatted = std.fmt.allocPrint(ctx.allocator, "(global) {s}", .{kind_name}) catch "(global) ???";
                 maps_to = formatted;
                 needs_free = true;
             } else {
                 maps_to = "(global) ???";
             }
         } else {
-            maps_to = getKindPath(conn, rule.kind_id, allocator) catch "(unknown)";
+            maps_to = getKindPath(ctx.getConnection(), rule.kind_id, ctx.allocator) catch "(unknown)";
             needs_free = !std.mem.eql(u8, maps_to, "(unknown)");
         }
 
         if (needs_free) {
-            allocated_paths.append(allocator, maps_to) catch {};
+            allocated_paths.append(ctx.allocator, maps_to) catch {};
         }
 
         var id_buf: [16]u8 = undefined;
@@ -425,16 +423,14 @@ fn runRulesList(engine: *rules.RulesEngine, conn: c.duckdb_connection, allocator
     std.debug.print("\n", .{});
 }
 
-fn runRulesAdd(engine: *rules.RulesEngine, conn: c.duckdb_connection, allocator: std.mem.Allocator, args: []const [:0]const u8) void {
-    _ = engine;
-    _ = conn;
-    _ = allocator;
+fn runRulesAdd(ctx: *AppContext, args: []const [:0]const u8) void {
+    _ = ctx;
     _ = args;
     std.debug.print("Interactive rule adding not yet implemented in new CLI.\n", .{});
     std.debug.print("Use the legacy 'time_tracker rules add' command for now.\n", .{});
 }
 
-fn runRulesDelete(engine: *rules.RulesEngine, args: []const [:0]const u8) void {
+fn runRulesDelete(ctx: *AppContext, args: []const [:0]const u8) void {
     if (args.len < 1) {
         std.debug.print("Usage: tt rules delete <rule_id>\n", .{});
         return;
@@ -445,7 +441,7 @@ fn runRulesDelete(engine: *rules.RulesEngine, args: []const [:0]const u8) void {
         return;
     };
 
-    engine.deleteRule(rule_id) catch |err| {
+    ctx.ruleRepo.deleteRule(rule_id) catch |err| {
         std.debug.print("Failed to delete rule: {}\n", .{err});
         return;
     };
@@ -465,7 +461,6 @@ fn runApplyRules(allocator: std.mem.Allocator) void {
     defer ctx.deinit();
 
     const conn = ctx.getConnection();
-    var engine = rules.RulesEngine.init(conn, allocator);
 
     // Get unmapped events
     var result: c.duckdb_result = undefined;
@@ -491,7 +486,7 @@ fn runApplyRules(allocator: std.mem.Allocator) void {
         const app_name = std.mem.sliceTo(app_name_ptr, 0);
         const title = std.mem.sliceTo(title_ptr, 0);
 
-        const match = engine.findMatch(app_name, title) catch continue;
+        const match = ctx.ruleRepo.findMatch(app_name, title) catch continue;
         if (match) |m| {
             var update_stmt: c.duckdb_prepared_statement = undefined;
             const update_sql = "UPDATE events SET activity_id = ?, kind_id = ? WHERE id = ?";
@@ -659,24 +654,21 @@ fn runProjects(allocator: std.mem.Allocator, args: []const [:0]const u8) void {
     };
     defer ctx.deinit();
 
-    const conn = ctx.getConnection();
-    var proj_ctx = context.ProjectContext.init(conn, allocator);
-
     if (args.len < 1) {
-        runProjectsList(&proj_ctx, allocator, conn);
+        runProjectsList(ctx);
         return;
     }
 
     const subcommand = args[0];
 
     if (std.mem.eql(u8, subcommand, "list")) {
-        runProjectsList(&proj_ctx, allocator, conn);
+        runProjectsList(ctx);
     } else if (std.mem.eql(u8, subcommand, "add")) {
-        runProjectsAdd(&proj_ctx, allocator, conn);
+        runProjectsAdd(ctx);
     } else if (std.mem.eql(u8, subcommand, "end")) {
-        runProjectsEnd(&proj_ctx, allocator, args[1..]);
+        runProjectsEnd(ctx, args[1..]);
     } else if (std.mem.eql(u8, subcommand, "clear")) {
-        runProjectsClear(&proj_ctx);
+        runProjectsClear(ctx);
     } else {
         std.debug.print("Unknown projects subcommand: {s}\n", .{subcommand});
         std.debug.print("Usage: tt projects <list|add|end|clear>\n", .{});
@@ -716,14 +708,14 @@ fn getProjectName(conn: c.duckdb_connection, project_id: i64, allocator: std.mem
     return name;
 }
 
-fn runProjectsList(proj_ctx: *context.ProjectContext, allocator: std.mem.Allocator, conn: c.duckdb_connection) void {
-    const active = proj_ctx.getActiveProjects() catch |err| {
+fn runProjectsList(ctx: *AppContext) void {
+    const active_ids = ctx.projectRepo.getActiveProjectIds() catch |err| {
         std.debug.print("Failed to get active projects: {}\n", .{err});
         return;
     };
-    defer allocator.free(active);
+    defer ctx.projectRepo.freeProjectIds(active_ids);
 
-    if (active.len == 0) {
+    if (active_ids.len == 0) {
         std.debug.print("No active projects.\n", .{});
         std.debug.print("Use 'tt projects add' to set your current project context.\n", .{});
         return;
@@ -731,16 +723,19 @@ fn runProjectsList(proj_ctx: *context.ProjectContext, allocator: std.mem.Allocat
 
     std.debug.print("\n=== Active Projects ===\n\n", .{});
 
-    for (active) |assignment| {
-        const name = getProjectName(conn, assignment.project_id, allocator) catch "Unknown";
-        defer if (!std.mem.eql(u8, name, "Unknown")) allocator.free(name);
-        std.debug.print("  [{d}] {s}\n", .{ assignment.project_id, name });
+    for (active_ids) |project_id| {
+        const name = getProjectName(ctx.getConnection(), project_id, ctx.allocator) catch "Unknown";
+        defer if (!std.mem.eql(u8, name, "Unknown")) ctx.allocator.free(name);
+        std.debug.print("  [{d}] {s}\n", .{ project_id, name });
     }
 
     std.debug.print("\n", .{});
 }
 
-fn runProjectsAdd(proj_ctx: *context.ProjectContext, allocator: std.mem.Allocator, conn: c.duckdb_connection) void {
+fn runProjectsAdd(ctx: *AppContext) void {
+    const conn = ctx.getConnection();
+    const allocator = ctx.allocator;
+
     // Get all projects
     var result: c.duckdb_result = undefined;
     const sql =
@@ -780,8 +775,8 @@ fn runProjectsAdd(proj_ctx: *context.ProjectContext, allocator: std.mem.Allocato
         allocator.free(strings);
     }
 
-    const active_ids = proj_ctx.getActiveProjectIds() catch &[_]i64{};
-    defer if (active_ids.len > 0) allocator.free(active_ids);
+    const active_ids = ctx.projectRepo.getActiveProjectIds() catch &[_]i64{};
+    defer if (active_ids.len > 0) ctx.projectRepo.freeProjectIds(active_ids);
 
     for (0..row_count) |i| {
         const idx: c.idx_t = @intCast(i);
@@ -834,7 +829,7 @@ fn runProjectsAdd(proj_ctx: *context.ProjectContext, allocator: std.mem.Allocato
         return;
     };
 
-    proj_ctx.addProject(selection.selected_id) catch |err| {
+    ctx.projectRepo.addProject(selection.selected_id) catch |err| {
         std.debug.print("Failed to add project: {}\n", .{err});
         return;
     };
@@ -843,8 +838,7 @@ fn runProjectsAdd(proj_ctx: *context.ProjectContext, allocator: std.mem.Allocato
     std.debug.print("Added project: {s}\n", .{selected_name});
 }
 
-fn runProjectsEnd(proj_ctx: *context.ProjectContext, allocator: std.mem.Allocator, args: []const [:0]const u8) void {
-    _ = allocator;
+fn runProjectsEnd(ctx: *AppContext, args: []const [:0]const u8) void {
     if (args.len < 1) {
         std.debug.print("Usage: tt projects end <project_id>\n", .{});
         std.debug.print("Use 'tt projects list' to see active project IDs.\n", .{});
@@ -856,7 +850,7 @@ fn runProjectsEnd(proj_ctx: *context.ProjectContext, allocator: std.mem.Allocato
         return;
     };
 
-    proj_ctx.endProject(project_id) catch |err| {
+    ctx.projectRepo.endProject(project_id) catch |err| {
         std.debug.print("Failed to end project: {}\n", .{err});
         return;
     };
@@ -864,8 +858,8 @@ fn runProjectsEnd(proj_ctx: *context.ProjectContext, allocator: std.mem.Allocato
     std.debug.print("Ended project {d}.\n", .{project_id});
 }
 
-fn runProjectsClear(proj_ctx: *context.ProjectContext) void {
-    proj_ctx.endAllProjects() catch |err| {
+fn runProjectsClear(ctx: *AppContext) void {
+    ctx.projectRepo.endAllProjects() catch |err| {
         std.debug.print("Failed to clear projects: {}\n", .{err});
         return;
     };
