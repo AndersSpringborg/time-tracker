@@ -244,6 +244,13 @@ pub fn build(b: *std.Build) void {
     // ENTRYPOINT LAYER (Composition Root)
     // =======================================================================
 
+    // Config module - user settings
+    const config_module = b.createModule(.{
+        .root_source_file = b.path("src/entrypoint/config.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // App Context - wires everything together
     const app_context_module = b.createModule(.{
         .root_source_file = b.path("src/entrypoint/app_context.zig"),
@@ -345,7 +352,7 @@ pub fn build(b: *std.Build) void {
     buffered_repo_module.addLibraryPath(duckdb_lib_path);
 
     // --- 1. Compile Zig to object file ---
-    // The daemon only needs tracker and buffered_repository
+    // The daemon needs tracker, buffered_repository, config, and rule matching
     const zig_obj = b.addObject(.{
         .name = "main",
         .root_module = b.createModule(.{
@@ -355,6 +362,12 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "tracker", .module = tracker_module },
                 .{ .name = "buffered_repository", .module = buffered_repo_module },
+                .{ .name = "config", .module = config_module },
+                .{ .name = "domain_rule", .module = domain_rule_module },
+                .{ .name = "duckdb_rule_repository", .module = duckdb_rule_repository },
+                .{ .name = "duckdb_hierarchy_repository", .module = duckdb_hierarchy_repository },
+                .{ .name = "duckdb_event_repository", .module = duckdb_event_repository },
+                .{ .name = "migrations", .module = migrations_module },
             },
         }),
     });
@@ -435,6 +448,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "query_repository", .module = query_repository_interface },
             .{ .name = "hierarchy_repository", .module = hierarchy_repository_interface },
             .{ .name = "domain_rule", .module = domain_rule_module },
+            .{ .name = "config", .module = config_module },
             // Legacy modules for commands not yet fully migrated
             .{ .name = "review", .module = review_module },
             .{ .name = "picker", .module = picker_module },
@@ -687,6 +701,16 @@ pub fn build(b: *std.Build) void {
     // -----------------------------------------------------------------------
     // ENTRYPOINT LAYER TESTS
     // -----------------------------------------------------------------------
+
+    // Config tests
+    const config_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/entrypoint/config.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(config_tests).step);
 
     // App Context tests (Composition Root)
     const app_context_tests = b.addTest(.{

@@ -9,6 +9,7 @@ const query_repo = @import("query_repository");
 const hierarchy_repo = @import("hierarchy_repository");
 const domain_rule = @import("domain_rule");
 const Rule = domain_rule.Rule;
+const config = @import("config");
 
 // Legacy modules (still needed for complex workflows)
 const review = @import("review");
@@ -46,6 +47,8 @@ pub fn main() !void {
         runReview(allocator);
     } else if (std.mem.eql(u8, command, "projects")) {
         runProjects(allocator, args[2..]);
+    } else if (std.mem.eql(u8, command, "config")) {
+        runConfig(allocator, args[2..]);
     } else if (std.mem.eql(u8, command, "help") or std.mem.eql(u8, command, "--help") or std.mem.eql(u8, command, "-h")) {
         printUsage();
     } else {
@@ -66,6 +69,7 @@ fn printUsage() void {
         \\  apply-rules    Apply rules to unmapped events
         \\  review         Interactively review and map unmapped events
         \\  projects       Manage active project context
+        \\  config         View and edit configuration
         \\  help           Show this help message
         \\
         \\Options for summary/report:
@@ -84,6 +88,12 @@ fn printUsage() void {
         \\  projects end   End an active project
         \\  projects clear End all active projects
         \\
+        \\Config subcommands:
+        \\  config list           List all settings
+        \\  config get <key>      Get a setting value
+        \\  config set <key> <v>  Set a setting value
+        \\  config unset <key>    Reset to default
+        \\
         \\Examples:
         \\  tt summary --today
         \\  tt report --week
@@ -91,6 +101,7 @@ fn printUsage() void {
         \\  tt rules list
         \\  tt review
         \\  tt projects add
+        \\  tt config set tracking-wifi "MyHomeNetwork"
         \\
     ;
     std.debug.print("{s}", .{usage});
@@ -865,4 +876,99 @@ fn runProjectsClear(ctx: *AppContext) void {
     };
 
     std.debug.print("Cleared all active projects.\n", .{});
+}
+
+// =============================================================================
+// Config Command
+// =============================================================================
+
+fn runConfig(allocator: std.mem.Allocator, args: []const [:0]const u8) void {
+    if (args.len < 1) {
+        runConfigList(allocator);
+        return;
+    }
+
+    const subcommand = args[0];
+
+    if (std.mem.eql(u8, subcommand, "list")) {
+        runConfigList(allocator);
+    } else if (std.mem.eql(u8, subcommand, "get")) {
+        if (args.len < 2) {
+            std.debug.print("Usage: tt config get <key>\n", .{});
+            std.debug.print("Available keys: tracking-wifi, enabled\n", .{});
+            return;
+        }
+        runConfigGet(allocator, args[1]);
+    } else if (std.mem.eql(u8, subcommand, "set")) {
+        if (args.len < 3) {
+            std.debug.print("Usage: tt config set <key> <value>\n", .{});
+            std.debug.print("Available keys: tracking-wifi, enabled\n", .{});
+            return;
+        }
+        runConfigSet(allocator, args[1], args[2]);
+    } else if (std.mem.eql(u8, subcommand, "unset")) {
+        if (args.len < 2) {
+            std.debug.print("Usage: tt config unset <key>\n", .{});
+            std.debug.print("Available keys: tracking-wifi, enabled\n", .{});
+            return;
+        }
+        runConfigUnset(allocator, args[1]);
+    } else {
+        std.debug.print("Unknown config subcommand: {s}\n", .{subcommand});
+        std.debug.print("Usage: tt config <list|get|set|unset>\n", .{});
+    }
+}
+
+fn runConfigList(allocator: std.mem.Allocator) void {
+    const entries = config.listAll(allocator) catch |err| {
+        std.debug.print("Failed to load config: {}\n", .{err});
+        return;
+    };
+    defer config.freeEntries(allocator, entries);
+
+    std.debug.print("\n=== Configuration ===\n\n", .{});
+
+    for (entries) |entry| {
+        const value_str = entry.value orelse "(not set)";
+        std.debug.print("  {s}: {s}\n", .{ entry.key, value_str });
+        std.debug.print("    {s}\n\n", .{entry.description});
+    }
+
+    const path = config.getConfigPath(allocator) catch {
+        return;
+    };
+    defer allocator.free(path);
+    std.debug.print("Config file: {s}\n\n", .{path});
+}
+
+fn runConfigGet(allocator: std.mem.Allocator, key: [:0]const u8) void {
+    const value = config.getValue(allocator, key) catch |err| {
+        std.debug.print("Failed to load config: {}\n", .{err});
+        return;
+    };
+
+    if (value) |v| {
+        defer allocator.free(v);
+        std.debug.print("{s}\n", .{v});
+    } else {
+        std.debug.print("(not set)\n", .{});
+    }
+}
+
+fn runConfigSet(allocator: std.mem.Allocator, key: [:0]const u8, value: [:0]const u8) void {
+    config.setValue(allocator, key, value) catch |err| {
+        std.debug.print("Failed to set config: {}\n", .{err});
+        return;
+    };
+
+    std.debug.print("Set {s} = {s}\n", .{ key, value });
+}
+
+fn runConfigUnset(allocator: std.mem.Allocator, key: [:0]const u8) void {
+    config.unsetValue(allocator, key) catch |err| {
+        std.debug.print("Failed to unset config: {}\n", .{err});
+        return;
+    };
+
+    std.debug.print("Unset {s} (returned to default)\n", .{key});
 }

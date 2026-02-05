@@ -6,14 +6,28 @@
 const std = @import("std");
 const Tracker = @import("tracker").Tracker;
 const BufferedRepository = @import("buffered_repository").BufferedRepository;
+const config_mod = @import("config");
+const domain_rule = @import("domain_rule");
+const DuckDbRuleRepository = @import("duckdb_rule_repository").DuckDbRuleRepository;
+const DuckDbHierarchyRepository = @import("duckdb_hierarchy_repository").DuckDbHierarchyRepository;
+const DuckDbEventRepository = @import("duckdb_event_repository").DuckDbEventRepository;
+const migrations = @import("migrations");
+const c = migrations.c;
 
 // Import functions from Swift bridge
 extern fn check_accessibility() bool;
 extern fn start_listening(cb: *const fn ([*c]const u8, [*c]const u8, [*c]const u8, i32) callconv(.c) void) void;
+extern fn set_tracking_wifi(ssid: [*c]const u8) void;
+extern fn clear_tracking_wifi() void;
+extern fn update_matched_info(project: [*c]const u8, activity: [*c]const u8) void;
+extern fn clear_matched_info() void;
+extern fn update_unmatched_count(count: i64) void;
 
 // Global state (needed for C callback)
 var global_tracker: ?*Tracker = null;
 var global_repo: ?*BufferedRepository = null;
+var global_allocator: ?std.mem.Allocator = null;
+var global_db_path: ?[:0]const u8 = null;
 
 fn getTimestampMs() i64 {
     const ts = std.posix.clock_gettime(.REALTIME) catch return 0;
@@ -54,6 +68,75 @@ fn onEvent(
     if (global_tracker) |tracker| {
         tracker.onEventWithWifi(app, title, wifi, timestamp);
     }
+
+    // Try to match rules and update menubar
+    matchAndUpdateMenubar(app, title);
+}
+
+/// Match the current event against rules and update the menubar with project/activity info
+fn matchAndUpdateMenubar(app: []const u8, title: []const u8) void {
+    const allocator = global_allocator orelse return;
+    const db_path = global_db_path orelse return;
+
+    // Open a temporary database connection for the query
+    var db: c.duckdb_database = undefined;
+    var conn: c.duckdb_connection = undefined;
+
+    if (c.duckdb_open(db_path.ptr, &db) == c.DuckDBError) {
+        return;
+    }
+    defer c.duckdb_close(&db);
+
+    if (c.duckdb_connect(db, &conn) == c.DuckDBError) {
+        return;
+    }
+    defer c.duckdb_disconnect(&conn);
+
+    // Create rule repository and look for a match
+    var rule_repo = DuckDbRuleRepository.init(conn, allocator);
+    const match_result = rule_repo.findMatch(app, title) catch {
+        clear_matched_info();
+        return;
+    };
+
+    if (match_result) |match| {
+        // Get project and activity names
+        var hierarchy_repo = DuckDbHierarchyRepository.init(conn, allocator);
+        const names = hierarchy_repo.getProjectAndActivityForKind(match.kind_id) catch {
+            clear_matched_info();
+            return;
+        };
+        defer {
+            allocator.free(@constCast(names.project));
+            allocator.free(@constCast(names.activity));
+        }
+
+        // Convert to null-terminated strings for C interop
+        var project_buf: [256]u8 = undefined;
+        var activity_buf: [256]u8 = undefined;
+
+        if (names.project.len < project_buf.len and names.activity.len < activity_buf.len) {
+            @memcpy(project_buf[0..names.project.len], names.project);
+            project_buf[names.project.len] = 0;
+
+            @memcpy(activity_buf[0..names.activity.len], names.activity);
+            activity_buf[names.activity.len] = 0;
+
+            update_matched_info(&project_buf, &activity_buf);
+        }
+    } else {
+        clear_matched_info();
+    }
+
+    // Update unmatched event count in menubar
+    updateUnmatchedCount(conn, allocator);
+}
+
+/// Count unmatched events and update the menubar display
+fn updateUnmatchedCount(conn: c.duckdb_connection, allocator: std.mem.Allocator) void {
+    var event_repo = DuckDbEventRepository.init(conn, allocator);
+    const count = event_repo.countUnmatchedEvents();
+    update_unmatched_count(count);
 }
 
 fn getDbPath(allocator: std.mem.Allocator) ![:0]const u8 {
@@ -132,10 +215,35 @@ pub fn main() !void {
 fn runDaemon(allocator: std.mem.Allocator) void {
     std.debug.print("=== Time Tracker Daemon ===\n\n", .{});
 
+    // Load configuration
+    var cfg = config_mod.load(allocator) catch |err| {
+        std.debug.print("Warning: Failed to load config: {}. Using defaults.\n", .{err});
+        return;
+    };
+    defer cfg.deinit(allocator);
+
+    // Configure WiFi-based tracking
+    if (cfg.tracking_wifi) |wifi| {
+        std.debug.print("Tracking WiFi: {s}\n", .{wifi});
+        // Null-terminate for C interop
+        var wifi_buf: [128]u8 = undefined;
+        if (wifi.len < wifi_buf.len) {
+            @memcpy(wifi_buf[0..wifi.len], wifi);
+            wifi_buf[wifi.len] = 0;
+            set_tracking_wifi(&wifi_buf);
+        }
+    } else {
+        std.debug.print("Tracking WiFi: (all networks)\n", .{});
+        clear_tracking_wifi();
+    }
+
     const db_path = getDbPath(allocator) catch |err| {
         std.debug.print("Failed to determine database path: {}\n", .{err});
         return;
     };
+    // Don't defer free - we need this for the lifetime of the daemon
+    global_db_path = db_path;
+    global_allocator = allocator;
 
     std.debug.print("Database: {s}\n", .{db_path});
 

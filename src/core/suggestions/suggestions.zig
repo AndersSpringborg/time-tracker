@@ -61,7 +61,7 @@ pub const SuggestionEngine = struct {
         defer self.allocator.free(active_projects);
 
         // Get candidates from rules
-        var candidates = try self.getCandidatesFromRules();
+        const candidates = try self.getCandidatesFromRules();
         defer self.allocator.free(candidates);
 
         if (candidates.len == 0) {

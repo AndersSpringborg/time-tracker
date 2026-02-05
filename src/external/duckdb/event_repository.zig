@@ -119,6 +119,20 @@ pub const DuckDbEventRepository = struct {
         return c.duckdb_value_int64(&result, 0, 0);
     }
 
+    /// Count events that have no activity_id and were not manually mapped.
+    /// These are events that need rules to be created.
+    pub fn countUnmatchedEvents(self: *DuckDbEventRepository) i64 {
+        var result: c.duckdb_result = undefined;
+
+        const query = "SELECT COUNT(*) FROM events WHERE activity_id IS NULL AND manually_mapped = false";
+        if (c.duckdb_query(self.conn, query, &result) == c.DuckDBError) {
+            return 0;
+        }
+        defer c.duckdb_destroy_result(&result);
+
+        return c.duckdb_value_int64(&result, 0, 0);
+    }
+
     /// Convert to the interface type.
     pub fn repository(self: *DuckDbEventRepository) EventRepository {
         return EventRepository{
