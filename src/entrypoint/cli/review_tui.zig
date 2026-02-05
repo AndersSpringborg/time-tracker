@@ -15,11 +15,15 @@ const DateString = review.DateString;
 const HierarchyMatch = review.HierarchyMatch;
 
 /// Event row for table display
+/// Fields are ordered so display columns (app, title, duration) come first
 const EventRow = struct {
-    id: i64,
+    // Display fields (indices 0, 1, 2)
     app_name: []const u8,
     window_title: []const u8,
     duration: []const u8,
+
+    // Non-display fields
+    id: i64,
 
     // Storage buffers
     app_buf: [256]u8 = undefined,
@@ -86,7 +90,7 @@ const App = struct {
                 .row_bg_1 = .{ .rgb = .{ 24, 24, 24 } },
                 .row_bg_2 = .{ .rgb = .{ 16, 16, 16 } },
                 .header_names = .{ .custom = &.{ "App", "Window Title", "Duration" } },
-                .col_indexes = .{ .by_idx = &.{ 1, 2, 3 } }, // Skip id field
+                .col_indexes = .{ .by_idx = &.{ 0, 1, 2 } }, // app_name, window_title, duration
                 .col_width = .{ .static_individual = &.{ 20, 50, 12 } },
             },
         };
