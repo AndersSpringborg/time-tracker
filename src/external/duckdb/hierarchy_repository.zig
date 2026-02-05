@@ -237,6 +237,68 @@ pub const DuckDbHierarchyRepository = struct {
         return path_copy;
     }
 
+    /// Get project name and activity name for a kind_id.
+    /// Returns two strings: project_name and activity_name (caller must free both).
+    pub fn getProjectAndActivityForKind(self: *DuckDbHierarchyRepository, kind_id: i64) HierarchyRepositoryError!struct { project: []const u8, activity: []const u8 } {
+        var stmt: c.duckdb_prepared_statement = undefined;
+        const sql =
+            \\SELECT cu.name || ' > ' || p.name, a.name
+            \\FROM kinds k
+            \\JOIN activities a ON k.activity_id = a.activity_id
+            \\JOIN phases ph ON a.phase_id = ph.phase_id
+            \\JOIN projects p ON ph.project_id = p.project_id
+            \\JOIN customers cu ON p.customer_id = cu.customer_id
+            \\WHERE k.kind_id = ?
+        ;
+
+        if (c.duckdb_prepare(self.conn, sql, &stmt) == c.DuckDBError) {
+            return HierarchyRepositoryError.QueryFailed;
+        }
+        defer c.duckdb_destroy_prepare(&stmt);
+
+        _ = c.duckdb_bind_int64(stmt, 1, kind_id);
+
+        var result: c.duckdb_result = undefined;
+        if (c.duckdb_execute_prepared(stmt, &result) == c.DuckDBError) {
+            return HierarchyRepositoryError.QueryFailed;
+        }
+        defer c.duckdb_destroy_result(&result);
+
+        if (c.duckdb_row_count(&result) == 0) {
+            return HierarchyRepositoryError.QueryFailed;
+        }
+
+        // Get project name (column 0)
+        const project_ptr = c.duckdb_value_varchar(&result, 0, 0);
+        if (project_ptr == null) {
+            return HierarchyRepositoryError.QueryFailed;
+        }
+        const project_len = std.mem.len(project_ptr);
+        const project_copy = self.allocator.alloc(u8, project_len) catch {
+            c.duckdb_free(project_ptr);
+            return HierarchyRepositoryError.OutOfMemory;
+        };
+        @memcpy(project_copy, project_ptr[0..project_len]);
+        c.duckdb_free(project_ptr);
+
+        // Get activity name (column 1)
+        const activity_ptr = c.duckdb_value_varchar(&result, 1, 0);
+        if (activity_ptr == null) {
+            self.allocator.free(project_copy);
+            return HierarchyRepositoryError.QueryFailed;
+        }
+        const activity_len = std.mem.len(activity_ptr);
+        const activity_copy = self.allocator.alloc(u8, activity_len) catch {
+            self.allocator.free(project_copy);
+            c.duckdb_free(activity_ptr);
+            return HierarchyRepositoryError.OutOfMemory;
+        };
+        @memcpy(activity_copy, activity_ptr[0..activity_len]);
+        c.duckdb_free(activity_ptr);
+
+        return .{ .project = project_copy, .activity = activity_copy };
+    }
+
     pub fn freeMatches(self: *DuckDbHierarchyRepository, matches: []HierarchyMatch) void {
         for (matches) |m| {
             if (m.display_path.len > 0) {

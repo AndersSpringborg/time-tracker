@@ -48,6 +48,9 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/domain/rule.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{
+            .{ .name = "glob", .module = domain_glob_module },
+        },
     });
 
     // Hierarchy types - pure domain types
@@ -254,6 +257,16 @@ pub fn build(b: *std.Build) void {
     // ENTRYPOINT LAYER (Composition Root)
     // =======================================================================
 
+    // Config module - user settings
+    const config_module = b.createModule(.{
+        .root_source_file = b.path("src/entrypoint/config.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "glob", .module = domain_glob_module },
+        },
+    });
+
     // App Context - wires everything together
     const app_context_module = b.createModule(.{
         .root_source_file = b.path("src/entrypoint/app_context.zig"),
@@ -391,6 +404,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "query_repository", .module = query_repository_interface },
             .{ .name = "hierarchy_repository", .module = hierarchy_repository_interface },
             .{ .name = "domain_rule", .module = domain_rule_module },
+            .{ .name = "config", .module = config_module },
             // Legacy CLI modules
             .{ .name = "review", .module = review_module },
             .{ .name = "review_tui", .module = review_tui_module },
@@ -399,6 +413,10 @@ pub fn build(b: *std.Build) void {
             // Daemon modules
             .{ .name = "tracker", .module = tracker_module },
             .{ .name = "buffered_repository", .module = buffered_repo_module },
+            // DuckDB repositories for menubar rule matching
+            .{ .name = "duckdb_rule_repository", .module = duckdb_rule_repository },
+            .{ .name = "duckdb_hierarchy_repository", .module = duckdb_hierarchy_repository },
+            .{ .name = "duckdb_event_repository", .module = duckdb_event_repository },
         },
     });
     unified_module.addIncludePath(duckdb_include_path);
@@ -516,6 +534,9 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/domain/rule_test.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{ .name = "glob", .module = domain_glob_module },
+            },
         }),
     });
     test_step.dependOn(&b.addRunArtifact(domain_rule_tests).step);
@@ -698,6 +719,19 @@ pub fn build(b: *std.Build) void {
     // ENTRYPOINT LAYER TESTS
     // -----------------------------------------------------------------------
 
+    // Config tests
+    const config_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/entrypoint/config.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "glob", .module = domain_glob_module },
+            },
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(config_tests).step);
+
     // App Context tests (Composition Root)
     const app_context_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -825,9 +859,6 @@ pub fn build(b: *std.Build) void {
     buffered_repo_tests.root_module.addLibraryPath(duckdb_lib_path);
     linkDuckDbStatic(buffered_repo_tests);
     test_step.dependOn(&b.addRunArtifact(buffered_repo_tests).step);
-
-    // Suppress unused variable warnings for domain modules not yet used
-    _ = domain_glob_module;
 }
 
 fn linkDuckDbStatic(compile: *std.Build.Step.Compile) void {

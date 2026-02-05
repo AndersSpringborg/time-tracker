@@ -19,6 +19,10 @@ var statusItem: NSStatusItem?
 var currentAppName: String = ""
 var currentWindowTitle: String = ""
 
+// Tracking state
+var trackingPaused: Bool = false
+var workWifiPatterns: [String] = []
+
 // --- EXPORTED FUNCTIONS ---
 
 @_cdecl("check_accessibility")
@@ -33,6 +37,96 @@ public func get_wifi_ssid() -> UnsafePointer<CChar>? {
         return (ssid as NSString).utf8String
     }
     return nil
+}
+
+@_cdecl("add_work_wifi")
+public func add_work_wifi(_ pattern: UnsafePointer<CChar>?) {
+    if let patternPtr = pattern {
+        let patternStr = String(cString: patternPtr)
+        if !workWifiPatterns.contains(patternStr) {
+            workWifiPatterns.append(patternStr)
+            NSLog("[TimeTracker] Added work WiFi pattern: %@", patternStr)
+        }
+    }
+}
+
+@_cdecl("clear_work_wifis")
+public func clear_work_wifis() {
+    workWifiPatterns.removeAll()
+    trackingPaused = false
+    NSLog("[TimeTracker] Cleared all work WiFi patterns - tracking on all networks")
+}
+
+// Current matched project/activity
+var currentProject: String? = nil
+var currentActivity: String? = nil
+
+// Unmatched event count
+var unmatchedEventCount: Int64 = 0
+
+@_cdecl("update_matched_info")
+public func update_matched_info(_ project: UnsafePointer<CChar>?, _ activity: UnsafePointer<CChar>?) {
+    if let projectPtr = project, let activityPtr = activity {
+        currentProject = String(cString: projectPtr)
+        currentActivity = String(cString: activityPtr)
+        updateMatchedInfoInMenu()
+    }
+}
+
+@_cdecl("clear_matched_info")
+public func clear_matched_info() {
+    currentProject = nil
+    currentActivity = nil
+    updateMatchedInfoInMenu()
+}
+
+@_cdecl("update_unmatched_count")
+public func update_unmatched_count(_ count: Int64) {
+    unmatchedEventCount = count
+    updateUnmatchedCountInMenu()
+}
+
+func updateUnmatchedCountInMenu() {
+    DispatchQueue.main.async {
+        guard let menu = statusItem?.menu else { return }
+        
+        if let unmatchedItem = menu.item(withTag: 105) {
+            if unmatchedEventCount > 0 {
+                unmatchedItem.title = "⚠️ \(unmatchedEventCount) events need rules"
+                unmatchedItem.isHidden = false
+            } else {
+                unmatchedItem.isHidden = true
+            }
+        }
+    }
+}
+
+func updateMatchedInfoInMenu() {
+    DispatchQueue.main.async {
+        guard let menu = statusItem?.menu else { return }
+        
+        // Update project (tag 103)
+        if let projectItem = menu.item(withTag: 103) {
+            if let project = currentProject {
+                projectItem.title = "Project: \(project)"
+                projectItem.isHidden = false
+            } else {
+                projectItem.title = "Project: (no match)"
+                projectItem.isHidden = false
+            }
+        }
+        
+        // Update activity (tag 104)
+        if let activityItem = menu.item(withTag: 104) {
+            if let activity = currentActivity {
+                activityItem.title = "Activity: \(activity)"
+                activityItem.isHidden = false
+            } else {
+                activityItem.title = "Activity: (no match)"
+                activityItem.isHidden = false
+            }
+        }
+    }
 }
 
 @_cdecl("start_listening")
@@ -90,9 +184,15 @@ func setupMenuBar() {
     let menu = NSMenu()
     
     // Status header
-    let headerItem = NSMenuItem(title: "⏱ Time Tracker", action: nil, keyEquivalent: "")
+    let headerItem = NSMenuItem(title: "Time Tracker", action: nil, keyEquivalent: "")
     headerItem.isEnabled = false
     menu.addItem(headerItem)
+    
+    // Tracking status (will be updated dynamically)
+    let trackingStatusItem = NSMenuItem(title: "Status: Tracking", action: nil, keyEquivalent: "")
+    trackingStatusItem.isEnabled = false
+    trackingStatusItem.tag = 102  // Tag to find and update this item
+    menu.addItem(trackingStatusItem)
     
     menu.addItem(NSMenuItem.separator())
     
@@ -106,6 +206,26 @@ func setupMenuBar() {
     windowItem.isEnabled = false
     windowItem.tag = 101  // Tag to find and update this item
     menu.addItem(windowItem)
+    
+    menu.addItem(NSMenuItem.separator())
+    
+    // Matched project/activity info
+    let projectItem = NSMenuItem(title: "Project: (no match)", action: nil, keyEquivalent: "")
+    projectItem.isEnabled = false
+    projectItem.tag = 103
+    menu.addItem(projectItem)
+    
+    let activityItem = NSMenuItem(title: "Activity: (no match)", action: nil, keyEquivalent: "")
+    activityItem.isEnabled = false
+    activityItem.tag = 104
+    menu.addItem(activityItem)
+    
+    // Unmatched events count (hidden if 0)
+    let unmatchedItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    unmatchedItem.isEnabled = false
+    unmatchedItem.tag = 105
+    unmatchedItem.isHidden = true  // Hidden until we have unmatched events
+    menu.addItem(unmatchedItem)
     
     menu.addItem(NSMenuItem.separator())
     
@@ -224,6 +344,108 @@ func getWifiSSIDViaSystemProfiler() -> String {
     return ""
 }
 
+/// Glob pattern matching (case-insensitive)
+/// Supports * (any sequence) and ? (single character)
+func matchGlob(pattern: String, text: String) -> Bool {
+    let patternLower = pattern.lowercased()
+    let textLower = text.lowercased()
+    
+    var pi = patternLower.startIndex
+    var ti = textLower.startIndex
+    var starIdx: String.Index? = nil
+    var matchIdx: String.Index? = nil
+    
+    while ti < textLower.endIndex {
+        if pi < patternLower.endIndex {
+            let pc = patternLower[pi]
+            let tc = textLower[ti]
+            
+            if pc == "*" {
+                starIdx = pi
+                matchIdx = ti
+                pi = patternLower.index(after: pi)
+                continue
+            } else if pc == "?" || pc == tc {
+                pi = patternLower.index(after: pi)
+                ti = textLower.index(after: ti)
+                continue
+            }
+        }
+        
+        // No match - backtrack if we have a star
+        if let star = starIdx, let match = matchIdx {
+            pi = patternLower.index(after: star)
+            matchIdx = textLower.index(after: match)
+            ti = matchIdx!
+        } else {
+            return false
+        }
+    }
+    
+    // Check remaining pattern is all stars
+    while pi < patternLower.endIndex && patternLower[pi] == "*" {
+        pi = patternLower.index(after: pi)
+    }
+    
+    return pi >= patternLower.endIndex
+}
+
+/// Check if tracking should be active based on current WiFi
+/// Returns true if we should track, false if paused
+func shouldTrack(currentWifi: String) -> Bool {
+    if workWifiPatterns.isEmpty {
+        // No patterns configured - always track
+        return true
+    }
+    
+    // Check if current WiFi matches any configured pattern
+    return workWifiPatterns.contains { pattern in
+        matchGlob(pattern: pattern, text: currentWifi)
+    }
+}
+
+/// Update tracking state and menubar icon
+func updateTrackingState(currentWifi: String) {
+    let shouldBeTracking = shouldTrack(currentWifi: currentWifi)
+    
+    if trackingPaused != !shouldBeTracking {
+        trackingPaused = !shouldBeTracking
+        updateMenuBarIcon()
+        
+        if trackingPaused {
+            NSLog("[TimeTracker] Tracking paused - not on configured WiFi")
+        } else {
+            NSLog("[TimeTracker] Tracking resumed - on configured WiFi")
+        }
+    }
+}
+
+/// Update the menubar icon and status text based on tracking state
+func updateMenuBarIcon() {
+    DispatchQueue.main.async {
+        guard let button = statusItem?.button else { return }
+        
+        // Update icon
+        let iconName = trackingPaused ? "clock.badge.xmark" : "clock.fill"
+        button.image = NSImage(systemSymbolName: iconName, accessibilityDescription: "Time Tracker")
+        button.image?.isTemplate = true
+        
+        // Update status text in menu
+        if let menu = statusItem?.menu, let statusMenuItem = menu.item(withTag: 102) {
+            if trackingPaused {
+                if !workWifiPatterns.isEmpty {
+                    let patternsStr = workWifiPatterns.joined(separator: ", ")
+                    statusMenuItem.title = "Status: Paused (not on \(patternsStr))"
+                } else {
+                    statusMenuItem.title = "Status: Paused"
+                }
+            } else {
+                statusMenuItem.title = "Status: Tracking"
+            }
+        }
+    }
+}
+
 func handleAppChange(_ app: NSRunningApplication) {
     // Remove old observer if exists
     if let obs = lastObserver {
@@ -246,17 +468,22 @@ func handleAppChange(_ app: NSRunningApplication) {
     let windowTitle = (titleValue as? String) ?? ""
     let wifiSSID = getCurrentWifiSSID()
     
-    // Update menu bar
+    // Update tracking state based on WiFi
+    updateTrackingState(currentWifi: wifiSSID)
+    
+    // Update menu bar (always show current app/window)
     updateMenuBar(appName: appName, windowTitle: windowTitle)
     
     // Set up title change observer for this app
     setupTitleObserver(for: app)
     
-    // Call back to Zig
-    appName.withCString { cApp in
-        windowTitle.withCString { cTitle in
-            wifiSSID.withCString { cWifi in
-                globalCallback?(cApp, cTitle, cWifi, 0)  // error_code = 0 (success)
+    // Only call back to Zig if not paused
+    if !trackingPaused {
+        appName.withCString { cApp in
+            windowTitle.withCString { cTitle in
+                wifiSSID.withCString { cWifi in
+                    globalCallback?(cApp, cTitle, cWifi, 0)  // error_code = 0 (success)
+                }
             }
         }
     }
@@ -309,13 +536,19 @@ func axCallback(observer: AXObserver, element: AXUIElement, notification: CFStri
         let windowTitle = (titleValue as? String) ?? ""
         let wifiSSID = getCurrentWifiSSID()
         
-        // Update menu bar
+        // Update tracking state based on WiFi
+        updateTrackingState(currentWifi: wifiSSID)
+        
+        // Update menu bar (always show current app/window)
         updateMenuBar(appName: appName, windowTitle: windowTitle)
         
-        appName.withCString { cApp in
-            windowTitle.withCString { cTitle in
-                wifiSSID.withCString { cWifi in
-                    globalCallback?(cApp, cTitle, cWifi, 0)
+        // Only call back to Zig if not paused
+        if !trackingPaused {
+            appName.withCString { cApp in
+                windowTitle.withCString { cTitle in
+                    wifiSSID.withCString { cWifi in
+                        globalCallback?(cApp, cTitle, cWifi, 0)
+                    }
                 }
             }
         }
