@@ -48,6 +48,9 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/domain/rule.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{
+            .{ .name = "glob", .module = domain_glob_module },
+        },
     });
 
     // Hierarchy types - pure domain types
@@ -259,6 +262,9 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/entrypoint/config.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{
+            .{ .name = "glob", .module = domain_glob_module },
+        },
     });
 
     // App Context - wires everything together
@@ -528,6 +534,9 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/domain/rule_test.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{ .name = "glob", .module = domain_glob_module },
+            },
         }),
     });
     test_step.dependOn(&b.addRunArtifact(domain_rule_tests).step);
@@ -716,6 +725,9 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/entrypoint/config.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{ .name = "glob", .module = domain_glob_module },
+            },
         }),
     });
     test_step.dependOn(&b.addRunArtifact(config_tests).step);
@@ -847,9 +859,6 @@ pub fn build(b: *std.Build) void {
     buffered_repo_tests.root_module.addLibraryPath(duckdb_lib_path);
     linkDuckDbStatic(buffered_repo_tests);
     test_step.dependOn(&b.addRunArtifact(buffered_repo_tests).step);
-
-    // Suppress unused variable warnings for domain modules not yet used
-    _ = domain_glob_module;
 }
 
 fn linkDuckDbStatic(compile: *std.Build.Step.Compile) void {

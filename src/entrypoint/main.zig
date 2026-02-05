@@ -29,8 +29,9 @@ const DuckDbEventRepository = @import("duckdb_event_repository").DuckDbEventRepo
 // Import functions from Swift bridge
 extern fn check_accessibility() bool;
 extern fn start_listening(cb: *const fn ([*c]const u8, [*c]const u8, [*c]const u8, i32) callconv(.c) void) void;
-extern fn set_tracking_wifi(ssid: [*c]const u8) void;
-extern fn clear_tracking_wifi() void;
+extern fn add_work_wifi(pattern: [*c]const u8) void;
+extern fn clear_work_wifis() void;
+extern fn get_wifi_ssid() ?[*:0]const u8;
 extern fn update_matched_info(project: [*c]const u8, activity: [*c]const u8) void;
 extern fn clear_matched_info() void;
 extern fn update_unmatched_count(count: i64) void;
@@ -75,6 +76,8 @@ pub fn main() !void {
         runProjects(allocator, args[2..]);
     } else if (std.mem.eql(u8, command, "config")) {
         runConfig(allocator, args[2..]);
+    } else if (std.mem.eql(u8, command, "wifi")) {
+        runWifi(allocator, args[2..]);
     } else if (std.mem.eql(u8, command, "help") or std.mem.eql(u8, command, "--help") or std.mem.eql(u8, command, "-h")) {
         printUsage();
     } else {
@@ -97,6 +100,7 @@ fn printUsage() void {
         \\  review         Interactively review and map unmapped events
         \\  projects       Manage active project context
         \\  config         View and edit configuration
+        \\  wifi           Manage work WiFi networks for location-based tracking
         \\  help           Show this help message
         \\
         \\Options for summary/report:
@@ -121,6 +125,12 @@ fn printUsage() void {
         \\  config set <key> <v>  Set a setting value
         \\  config unset <key>    Reset to default
         \\
+        \\WiFi subcommands:
+        \\  wifi list             List configured work WiFi patterns
+        \\  wifi add              Add current WiFi to work list
+        \\  wifi add <pattern>    Add a pattern (supports * and ? globs)
+        \\  wifi remove <pattern> Remove a pattern from work list
+        \\
         \\Examples:
         \\  tt daemon              # Start tracking in background
         \\  tt summary --today
@@ -129,7 +139,8 @@ fn printUsage() void {
         \\  tt rules list
         \\  tt review
         \\  tt projects add
-        \\  tt config set tracking-wifi "MyHomeNetwork"
+        \\  tt wifi add            # Add current WiFi network
+        \\  tt wifi add "Office*"  # Add pattern matching Office, Office-5G, etc.
         \\
     ;
     std.debug.print("{s}", .{usage});
@@ -891,6 +902,106 @@ fn runConfigUnset(allocator: std.mem.Allocator, key: [:0]const u8) void {
 }
 
 // =============================================================================
+// WIFI COMMAND
+// =============================================================================
+
+fn runWifi(allocator: std.mem.Allocator, args: []const [:0]const u8) void {
+    if (args.len < 1) {
+        runWifiList(allocator);
+        return;
+    }
+
+    const subcommand = args[0];
+
+    if (std.mem.eql(u8, subcommand, "list")) {
+        runWifiList(allocator);
+    } else if (std.mem.eql(u8, subcommand, "add")) {
+        if (args.len < 2) {
+            // No pattern provided - use current WiFi
+            runWifiAddCurrent(allocator);
+        } else {
+            runWifiAdd(allocator, args[1]);
+        }
+    } else if (std.mem.eql(u8, subcommand, "remove")) {
+        if (args.len < 2) {
+            std.debug.print("Usage: tt wifi remove <pattern>\n", .{});
+            return;
+        }
+        runWifiRemove(allocator, args[1]);
+    } else {
+        std.debug.print("Unknown wifi subcommand: {s}\n", .{subcommand});
+        std.debug.print("Usage: tt wifi <list|add|remove>\n", .{});
+    }
+}
+
+fn runWifiList(allocator: std.mem.Allocator) void {
+    const wifis = config.getWorkWifis(allocator) catch |err| {
+        std.debug.print("Failed to load config: {}\n", .{err});
+        return;
+    };
+    defer config.freeWorkWifis(allocator, wifis);
+
+    std.debug.print("\n=== Work WiFi Patterns ===\n\n", .{});
+
+    if (wifis.len == 0) {
+        std.debug.print("  (none configured - tracking on all networks)\n", .{});
+    } else {
+        for (wifis, 1..) |pattern, i| {
+            std.debug.print("  {d}. {s}\n", .{ i, pattern });
+        }
+    }
+
+    // Show current WiFi
+    if (get_wifi_ssid()) |ssid| {
+        const current_ssid = std.mem.span(ssid);
+        std.debug.print("\nCurrent WiFi: {s}\n", .{current_ssid});
+    } else {
+        std.debug.print("\nCurrent WiFi: (not connected or unknown)\n", .{});
+    }
+
+    std.debug.print("\n", .{});
+}
+
+fn runWifiAddCurrent(allocator: std.mem.Allocator) void {
+    const ssid_ptr = get_wifi_ssid();
+    if (ssid_ptr == null) {
+        std.debug.print("Could not detect current WiFi network.\n", .{});
+        std.debug.print("Usage: tt wifi add <pattern>\n", .{});
+        return;
+    }
+
+    const ssid = std.mem.span(ssid_ptr.?);
+    config.addWorkWifi(allocator, ssid) catch |err| {
+        std.debug.print("Failed to add WiFi: {}\n", .{err});
+        return;
+    };
+
+    std.debug.print("Added work WiFi: {s}\n", .{ssid});
+}
+
+fn runWifiAdd(allocator: std.mem.Allocator, pattern: [:0]const u8) void {
+    config.addWorkWifi(allocator, pattern) catch |err| {
+        std.debug.print("Failed to add WiFi pattern: {}\n", .{err});
+        return;
+    };
+
+    std.debug.print("Added work WiFi pattern: {s}\n", .{pattern});
+}
+
+fn runWifiRemove(allocator: std.mem.Allocator, pattern: [:0]const u8) void {
+    const removed = config.removeWorkWifi(allocator, pattern) catch |err| {
+        std.debug.print("Failed to remove WiFi pattern: {}\n", .{err});
+        return;
+    };
+
+    if (removed) {
+        std.debug.print("Removed work WiFi pattern: {s}\n", .{pattern});
+    } else {
+        std.debug.print("Pattern not found: {s}\n", .{pattern});
+    }
+}
+
+// =============================================================================
 // DAEMON COMMAND
 // =============================================================================
 
@@ -1043,26 +1154,31 @@ fn runDaemon(allocator: std.mem.Allocator) void {
     defer cfg.deinit(allocator);
 
     // Configure WiFi-based tracking
-    if (cfg.tracking_wifi) |wifi| {
-        std.debug.print("Tracking WiFi: {s}\n", .{wifi});
-        // Null-terminate for C interop
-        var wifi_buf: [128]u8 = undefined;
-        if (wifi.len < wifi_buf.len) {
-            @memcpy(wifi_buf[0..wifi.len], wifi);
-            wifi_buf[wifi.len] = 0;
-            set_tracking_wifi(&wifi_buf);
+    if (cfg.work_wifis.len > 0) {
+        std.debug.print("Work WiFi patterns: ", .{});
+        for (cfg.work_wifis, 0..) |pattern, i| {
+            if (i > 0) std.debug.print(", ", .{});
+            std.debug.print("{s}", .{pattern});
+            // Null-terminate for C interop
+            var pattern_buf: [128]u8 = undefined;
+            if (pattern.len < pattern_buf.len) {
+                @memcpy(pattern_buf[0..pattern.len], pattern);
+                pattern_buf[pattern.len] = 0;
+                add_work_wifi(&pattern_buf);
+            }
         }
+        std.debug.print("\n", .{});
     } else {
-        std.debug.print("Tracking WiFi: (all networks)\n", .{});
-        clear_tracking_wifi();
+        std.debug.print("Work WiFi: (all networks)\n", .{});
+        clear_work_wifis();
     }
 
     runDaemonCore(allocator);
 }
 
 fn runDaemonWithDefaults(allocator: std.mem.Allocator) void {
-    std.debug.print("Tracking WiFi: (all networks)\n", .{});
-    clear_tracking_wifi();
+    std.debug.print("Work WiFi: (all networks)\n", .{});
+    clear_work_wifis();
     runDaemonCore(allocator);
 }
 

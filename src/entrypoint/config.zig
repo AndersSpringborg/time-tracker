@@ -3,20 +3,40 @@
 //! Manages user settings stored in ~/.config/time-tracker/config.json
 
 const std = @import("std");
+const glob = @import("glob");
 
 /// Configuration settings for Time Tracker
 pub const Config = struct {
-    /// WiFi SSID that triggers tracking (null = track on all networks)
-    tracking_wifi: ?[]const u8 = null,
+    /// List of WiFi patterns that trigger tracking (empty = track on all networks)
+    /// Supports glob patterns: * matches any sequence, ? matches single char
+    work_wifis: []const []const u8 = &[_][]const u8{},
     /// Whether tracking is globally enabled
     enabled: bool = true,
 
     /// Free any allocated memory
     pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
-        if (self.tracking_wifi) |wifi| {
+        for (self.work_wifis) |wifi| {
             allocator.free(wifi);
         }
-        self.tracking_wifi = null;
+        if (self.work_wifis.len > 0) {
+            allocator.free(self.work_wifis);
+        }
+        self.work_wifis = &[_][]const u8{};
+    }
+
+    /// Check if a WiFi SSID matches any configured work WiFi pattern
+    pub fn matchesWorkWifi(self: *const Config, ssid: []const u8) bool {
+        if (self.work_wifis.len == 0) {
+            // No patterns configured = track everywhere
+            return true;
+        }
+
+        for (self.work_wifis) |pattern| {
+            if (glob.match(pattern, ssid)) {
+                return true;
+            }
+        }
+        return false;
     }
 };
 
@@ -97,9 +117,33 @@ fn parseConfig(allocator: std.mem.Allocator, content: []const u8) ConfigError!Co
     if (parsed.value == .object) {
         const obj = parsed.value.object;
 
-        if (obj.get("tracking_wifi")) |wifi_value| {
+        // Parse work_wifis array
+        if (obj.get("work_wifis")) |wifis_value| {
+            if (wifis_value == .array) {
+                var wifi_list: std.ArrayListUnmanaged([]const u8) = .empty;
+                errdefer {
+                    for (wifi_list.items) |w| allocator.free(w);
+                    wifi_list.deinit(allocator);
+                }
+
+                for (wifis_value.array.items) |item| {
+                    if (item == .string) {
+                        const wifi = allocator.dupe(u8, item.string) catch return error.OutOfMemory;
+                        wifi_list.append(allocator, wifi) catch return error.OutOfMemory;
+                    }
+                }
+
+                config.work_wifis = wifi_list.toOwnedSlice(allocator) catch return error.OutOfMemory;
+            }
+        } else if (obj.get("tracking_wifi")) |wifi_value| {
+            // Backwards compatibility: migrate old tracking_wifi to work_wifis
             if (wifi_value == .string) {
-                config.tracking_wifi = allocator.dupe(u8, wifi_value.string) catch return error.OutOfMemory;
+                var wifi_list = allocator.alloc([]const u8, 1) catch return error.OutOfMemory;
+                wifi_list[0] = allocator.dupe(u8, wifi_value.string) catch {
+                    allocator.free(wifi_list);
+                    return error.OutOfMemory;
+                };
+                config.work_wifis = wifi_list;
             }
         }
 
@@ -121,36 +165,156 @@ pub fn save(allocator: std.mem.Allocator, cfg: Config) ConfigError!void {
     const file = std.fs.createFileAbsolute(path, .{}) catch return error.FileWriteError;
     defer file.close();
 
-    // Build JSON content
-    var content_buf: [1024]u8 = undefined;
-    var content_len: usize = 0;
+    // Build JSON content dynamically
+    var content: std.ArrayListUnmanaged(u8) = .empty;
+    defer content.deinit(allocator);
 
     // Start JSON object
-    const header = "{\n";
-    @memcpy(content_buf[content_len..][0..header.len], header);
-    content_len += header.len;
+    content.appendSlice(allocator, "{\n") catch return error.OutOfMemory;
 
-    // Add tracking_wifi
-    if (cfg.tracking_wifi) |wifi| {
-        const wifi_line = std.fmt.bufPrint(content_buf[content_len..], "  \"tracking_wifi\": \"{s}\",\n", .{wifi}) catch return error.FileWriteError;
-        content_len += wifi_line.len;
-    } else {
-        const null_line = "  \"tracking_wifi\": null,\n";
-        @memcpy(content_buf[content_len..][0..null_line.len], null_line);
-        content_len += null_line.len;
+    // Add work_wifis array
+    content.appendSlice(allocator, "  \"work_wifis\": [") catch return error.OutOfMemory;
+    for (cfg.work_wifis, 0..) |wifi, i| {
+        if (i > 0) {
+            content.appendSlice(allocator, ", ") catch return error.OutOfMemory;
+        }
+        content.append(allocator, '"') catch return error.OutOfMemory;
+        // Escape any special JSON characters in the WiFi name
+        for (wifi) |ch| {
+            switch (ch) {
+                '"' => content.appendSlice(allocator, "\\\"") catch return error.OutOfMemory,
+                '\\' => content.appendSlice(allocator, "\\\\") catch return error.OutOfMemory,
+                '\n' => content.appendSlice(allocator, "\\n") catch return error.OutOfMemory,
+                '\r' => content.appendSlice(allocator, "\\r") catch return error.OutOfMemory,
+                '\t' => content.appendSlice(allocator, "\\t") catch return error.OutOfMemory,
+                else => content.append(allocator, ch) catch return error.OutOfMemory,
+            }
+        }
+        content.append(allocator, '"') catch return error.OutOfMemory;
     }
+    content.appendSlice(allocator, "],\n") catch return error.OutOfMemory;
 
     // Add enabled
-    const enabled_line = std.fmt.bufPrint(content_buf[content_len..], "  \"enabled\": {}\n", .{cfg.enabled}) catch return error.FileWriteError;
-    content_len += enabled_line.len;
+    const enabled_str = if (cfg.enabled) "true" else "false";
+    content.appendSlice(allocator, "  \"enabled\": ") catch return error.OutOfMemory;
+    content.appendSlice(allocator, enabled_str) catch return error.OutOfMemory;
+    content.appendSlice(allocator, "\n") catch return error.OutOfMemory;
 
     // Close JSON object
-    const footer = "}\n";
-    @memcpy(content_buf[content_len..][0..footer.len], footer);
-    content_len += footer.len;
+    content.appendSlice(allocator, "}\n") catch return error.OutOfMemory;
 
     // Write to file
-    _ = file.pwriteAll(content_buf[0..content_len], 0) catch return error.FileWriteError;
+    _ = file.pwriteAll(content.items, 0) catch return error.FileWriteError;
+}
+
+/// Add a WiFi pattern to the work_wifis list
+pub fn addWorkWifi(allocator: std.mem.Allocator, pattern: []const u8) ConfigError!void {
+    var config = try load(allocator);
+    defer config.deinit(allocator);
+
+    // Check if pattern already exists
+    for (config.work_wifis) |existing| {
+        if (std.mem.eql(u8, existing, pattern)) {
+            // Already exists, nothing to do
+            return;
+        }
+    }
+
+    // Create new array with added pattern
+    var new_wifis = allocator.alloc([]const u8, config.work_wifis.len + 1) catch return error.OutOfMemory;
+    errdefer allocator.free(new_wifis);
+
+    // Copy existing patterns
+    for (config.work_wifis, 0..) |wifi, i| {
+        new_wifis[i] = allocator.dupe(u8, wifi) catch return error.OutOfMemory;
+    }
+
+    // Add new pattern
+    new_wifis[config.work_wifis.len] = allocator.dupe(u8, pattern) catch return error.OutOfMemory;
+
+    // Free old array and update config
+    for (config.work_wifis) |wifi| {
+        allocator.free(wifi);
+    }
+    if (config.work_wifis.len > 0) {
+        allocator.free(config.work_wifis);
+    }
+    config.work_wifis = new_wifis;
+
+    try save(allocator, config);
+}
+
+/// Remove a WiFi pattern from the work_wifis list
+pub fn removeWorkWifi(allocator: std.mem.Allocator, pattern: []const u8) ConfigError!bool {
+    var cfg = try load(allocator);
+    defer cfg.deinit(allocator);
+
+    // Find the pattern
+    var found_idx: ?usize = null;
+    for (cfg.work_wifis, 0..) |existing, i| {
+        if (std.mem.eql(u8, existing, pattern)) {
+            found_idx = i;
+            break;
+        }
+    }
+
+    if (found_idx == null) {
+        return false; // Pattern not found
+    }
+
+    if (cfg.work_wifis.len == 1) {
+        // Last pattern - set empty and let deinit clean up the old data
+        // Note: cfg.deinit will free the old work_wifis
+        const new_config = Config{ .enabled = cfg.enabled };
+        try save(allocator, new_config);
+    } else {
+        // Create new array without the pattern
+        var new_wifis = allocator.alloc([]const u8, cfg.work_wifis.len - 1) catch return error.OutOfMemory;
+        errdefer allocator.free(new_wifis);
+
+        var new_idx: usize = 0;
+        for (cfg.work_wifis, 0..) |wifi, i| {
+            if (i == found_idx.?) {
+                continue; // Skip the one being removed
+            }
+            new_wifis[new_idx] = allocator.dupe(u8, wifi) catch return error.OutOfMemory;
+            new_idx += 1;
+        }
+
+        // Save with new array
+        const new_config = Config{ .work_wifis = new_wifis, .enabled = cfg.enabled };
+        try save(allocator, new_config);
+
+        // Free the duplicated strings and array (we don't need them after save)
+        for (new_wifis) |wifi| {
+            allocator.free(wifi);
+        }
+        allocator.free(new_wifis);
+    }
+
+    return true;
+}
+
+/// Get all work WiFi patterns
+pub fn getWorkWifis(allocator: std.mem.Allocator) ConfigError![]const []const u8 {
+    var cfg = try load(allocator);
+    defer cfg.deinit(allocator);
+
+    // Duplicate everything so caller owns it
+    var result = allocator.alloc([]const u8, cfg.work_wifis.len) catch return error.OutOfMemory;
+    for (cfg.work_wifis, 0..) |wifi, i| {
+        result[i] = allocator.dupe(u8, wifi) catch return error.OutOfMemory;
+    }
+
+    return result;
+}
+
+/// Free work wifis returned by getWorkWifis
+pub fn freeWorkWifis(allocator: std.mem.Allocator, wifis: []const []const u8) void {
+    for (wifis) |wifi| {
+        allocator.free(wifi);
+    }
+    allocator.free(wifis);
 }
 
 /// Get a specific config value as a string (for CLI display)
@@ -161,11 +325,26 @@ pub fn getValue(allocator: std.mem.Allocator, key: []const u8) ConfigError!?[]co
         mutable_config.deinit(allocator);
     }
 
-    if (std.mem.eql(u8, key, "tracking-wifi") or std.mem.eql(u8, key, "tracking_wifi")) {
-        if (config.tracking_wifi) |wifi| {
-            return allocator.dupe(u8, wifi) catch return error.OutOfMemory;
+    if (std.mem.eql(u8, key, "work-wifis") or std.mem.eql(u8, key, "work_wifis")) {
+        if (config.work_wifis.len == 0) {
+            return null;
         }
-        return null;
+        // Return comma-separated list
+        var total_len: usize = 0;
+        for (config.work_wifis) |wifi| {
+            total_len += wifi.len + 2; // ", "
+        }
+        var result = allocator.alloc(u8, total_len) catch return error.OutOfMemory;
+        var pos: usize = 0;
+        for (config.work_wifis, 0..) |wifi, i| {
+            if (i > 0) {
+                @memcpy(result[pos..][0..2], ", ");
+                pos += 2;
+            }
+            @memcpy(result[pos..][0..wifi.len], wifi);
+            pos += wifi.len;
+        }
+        return result[0..pos];
     } else if (std.mem.eql(u8, key, "enabled")) {
         return if (config.enabled)
             allocator.dupe(u8, "true") catch return error.OutOfMemory
@@ -181,14 +360,10 @@ pub fn setValue(allocator: std.mem.Allocator, key: []const u8, value: []const u8
     var config = try load(allocator);
     defer config.deinit(allocator);
 
-    if (std.mem.eql(u8, key, "tracking-wifi") or std.mem.eql(u8, key, "tracking_wifi")) {
-        if (config.tracking_wifi) |old| {
-            allocator.free(old);
-        }
-        config.tracking_wifi = allocator.dupe(u8, value) catch return error.OutOfMemory;
-    } else if (std.mem.eql(u8, key, "enabled")) {
+    if (std.mem.eql(u8, key, "enabled")) {
         config.enabled = std.mem.eql(u8, value, "true") or std.mem.eql(u8, value, "1");
     }
+    // Note: work_wifis should be managed via addWorkWifi/removeWorkWifi
 
     try save(allocator, config);
 }
@@ -198,11 +373,14 @@ pub fn unsetValue(allocator: std.mem.Allocator, key: []const u8) ConfigError!voi
     var config = try load(allocator);
     defer config.deinit(allocator);
 
-    if (std.mem.eql(u8, key, "tracking-wifi") or std.mem.eql(u8, key, "tracking_wifi")) {
-        if (config.tracking_wifi) |old| {
-            allocator.free(old);
+    if (std.mem.eql(u8, key, "work-wifis") or std.mem.eql(u8, key, "work_wifis")) {
+        for (config.work_wifis) |wifi| {
+            allocator.free(wifi);
         }
-        config.tracking_wifi = null;
+        if (config.work_wifis.len > 0) {
+            allocator.free(config.work_wifis);
+        }
+        config.work_wifis = &[_][]const u8{};
     } else if (std.mem.eql(u8, key, "enabled")) {
         config.enabled = true; // default
     }
@@ -220,13 +398,30 @@ pub fn listAll(allocator: std.mem.Allocator) ConfigError![]const ConfigEntry {
 
     var entries = allocator.alloc(ConfigEntry, 2) catch return error.OutOfMemory;
 
+    // Build work_wifis display string
+    var work_wifis_str: ?[]const u8 = null;
+    if (config.work_wifis.len > 0) {
+        var total_len: usize = 0;
+        for (config.work_wifis) |wifi| {
+            total_len += wifi.len + 2;
+        }
+        var result = allocator.alloc(u8, total_len) catch return error.OutOfMemory;
+        var pos: usize = 0;
+        for (config.work_wifis, 0..) |wifi, i| {
+            if (i > 0) {
+                @memcpy(result[pos..][0..2], ", ");
+                pos += 2;
+            }
+            @memcpy(result[pos..][0..wifi.len], wifi);
+            pos += wifi.len;
+        }
+        work_wifis_str = result[0..pos];
+    }
+
     entries[0] = ConfigEntry{
-        .key = "tracking-wifi",
-        .value = if (config.tracking_wifi) |wifi|
-            allocator.dupe(u8, wifi) catch return error.OutOfMemory
-        else
-            null,
-        .description = "WiFi SSID that triggers tracking (null = all networks)",
+        .key = "work-wifis",
+        .value = work_wifis_str,
+        .description = "WiFi patterns that trigger tracking (glob: * and ? supported)",
     };
 
     entries[1] = ConfigEntry{
@@ -268,41 +463,68 @@ pub fn freeEntries(allocator: std.mem.Allocator, entries: []const ConfigEntry) v
 
 test "Config default values" {
     const config = Config{};
-    try std.testing.expectEqual(@as(?[]const u8, null), config.tracking_wifi);
+    try std.testing.expectEqual(@as(usize, 0), config.work_wifis.len);
     try std.testing.expect(config.enabled);
+}
+
+test "Config.matchesWorkWifi empty list matches all" {
+    const config = Config{};
+    try std.testing.expect(config.matchesWorkWifi("AnyNetwork"));
+    try std.testing.expect(config.matchesWorkWifi(""));
+}
+
+test "Config.matchesWorkWifi exact match" {
+    var wifis = [_][]const u8{"HomeWifi"};
+    const config = Config{ .work_wifis = &wifis };
+    try std.testing.expect(config.matchesWorkWifi("HomeWifi"));
+    try std.testing.expect(config.matchesWorkWifi("homewifi")); // case insensitive
+    try std.testing.expect(!config.matchesWorkWifi("OfficeWifi"));
+}
+
+test "Config.matchesWorkWifi glob pattern" {
+    var wifis = [_][]const u8{ "Office*", "Home-?" };
+    const config = Config{ .work_wifis = &wifis };
+    try std.testing.expect(config.matchesWorkWifi("Office-5G"));
+    try std.testing.expect(config.matchesWorkWifi("Office"));
+    try std.testing.expect(config.matchesWorkWifi("Home-A"));
+    try std.testing.expect(!config.matchesWorkWifi("Home-AB")); // ? matches single char
+    try std.testing.expect(!config.matchesWorkWifi("CoffeeShop"));
 }
 
 test "parseConfig empty content returns defaults" {
     const config = try parseConfig(std.testing.allocator, "");
-    try std.testing.expectEqual(@as(?[]const u8, null), config.tracking_wifi);
+    try std.testing.expectEqual(@as(usize, 0), config.work_wifis.len);
     try std.testing.expect(config.enabled);
 }
 
-test "parseConfig valid JSON" {
+test "parseConfig work_wifis array" {
     const json =
         \\{
-        \\  "tracking_wifi": "MyNetwork",
+        \\  "work_wifis": ["Home", "Office*"],
         \\  "enabled": false
         \\}
     ;
     var config = try parseConfig(std.testing.allocator, json);
     defer config.deinit(std.testing.allocator);
 
-    try std.testing.expectEqualStrings("MyNetwork", config.tracking_wifi.?);
+    try std.testing.expectEqual(@as(usize, 2), config.work_wifis.len);
+    try std.testing.expectEqualStrings("Home", config.work_wifis[0]);
+    try std.testing.expectEqualStrings("Office*", config.work_wifis[1]);
     try std.testing.expect(!config.enabled);
 }
 
-test "parseConfig null wifi" {
+test "parseConfig backwards compatibility with tracking_wifi" {
     const json =
         \\{
-        \\  "tracking_wifi": null,
+        \\  "tracking_wifi": "OldNetwork",
         \\  "enabled": true
         \\}
     ;
     var config = try parseConfig(std.testing.allocator, json);
     defer config.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(@as(?[]const u8, null), config.tracking_wifi);
+    try std.testing.expectEqual(@as(usize, 1), config.work_wifis.len);
+    try std.testing.expectEqualStrings("OldNetwork", config.work_wifis[0]);
     try std.testing.expect(config.enabled);
 }
 

@@ -1,5 +1,5 @@
 const std = @import("std");
-const glob = @import("glob.zig");
+const glob = @import("glob");
 
 /// Input for creating a new mapping rule.
 /// This is the data required to create a rule, before it has an ID.

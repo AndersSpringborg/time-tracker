@@ -21,7 +21,7 @@ var currentWindowTitle: String = ""
 
 // Tracking state
 var trackingPaused: Bool = false
-var configuredTrackingWifi: String? = nil
+var workWifiPatterns: [String] = []
 
 // --- EXPORTED FUNCTIONS ---
 
@@ -39,19 +39,22 @@ public func get_wifi_ssid() -> UnsafePointer<CChar>? {
     return nil
 }
 
-@_cdecl("set_tracking_wifi")
-public func set_tracking_wifi(_ ssid: UnsafePointer<CChar>?) {
-    if let ssidPtr = ssid {
-        configuredTrackingWifi = String(cString: ssidPtr)
-        NSLog("[TimeTracker] Tracking WiFi set to: %@", configuredTrackingWifi ?? "nil")
+@_cdecl("add_work_wifi")
+public func add_work_wifi(_ pattern: UnsafePointer<CChar>?) {
+    if let patternPtr = pattern {
+        let patternStr = String(cString: patternPtr)
+        if !workWifiPatterns.contains(patternStr) {
+            workWifiPatterns.append(patternStr)
+            NSLog("[TimeTracker] Added work WiFi pattern: %@", patternStr)
+        }
     }
 }
 
-@_cdecl("clear_tracking_wifi")
-public func clear_tracking_wifi() {
-    configuredTrackingWifi = nil
+@_cdecl("clear_work_wifis")
+public func clear_work_wifis() {
+    workWifiPatterns.removeAll()
     trackingPaused = false
-    NSLog("[TimeTracker] Tracking WiFi cleared - tracking on all networks")
+    NSLog("[TimeTracker] Cleared all work WiFi patterns - tracking on all networks")
 }
 
 // Current matched project/activity
@@ -341,16 +344,64 @@ func getWifiSSIDViaSystemProfiler() -> String {
     return ""
 }
 
+/// Glob pattern matching (case-insensitive)
+/// Supports * (any sequence) and ? (single character)
+func matchGlob(pattern: String, text: String) -> Bool {
+    let patternLower = pattern.lowercased()
+    let textLower = text.lowercased()
+    
+    var pi = patternLower.startIndex
+    var ti = textLower.startIndex
+    var starIdx: String.Index? = nil
+    var matchIdx: String.Index? = nil
+    
+    while ti < textLower.endIndex {
+        if pi < patternLower.endIndex {
+            let pc = patternLower[pi]
+            let tc = textLower[ti]
+            
+            if pc == "*" {
+                starIdx = pi
+                matchIdx = ti
+                pi = patternLower.index(after: pi)
+                continue
+            } else if pc == "?" || pc == tc {
+                pi = patternLower.index(after: pi)
+                ti = textLower.index(after: ti)
+                continue
+            }
+        }
+        
+        // No match - backtrack if we have a star
+        if let star = starIdx, let match = matchIdx {
+            pi = patternLower.index(after: star)
+            matchIdx = textLower.index(after: match)
+            ti = matchIdx!
+        } else {
+            return false
+        }
+    }
+    
+    // Check remaining pattern is all stars
+    while pi < patternLower.endIndex && patternLower[pi] == "*" {
+        pi = patternLower.index(after: pi)
+    }
+    
+    return pi >= patternLower.endIndex
+}
+
 /// Check if tracking should be active based on current WiFi
 /// Returns true if we should track, false if paused
 func shouldTrack(currentWifi: String) -> Bool {
-    guard let requiredWifi = configuredTrackingWifi else {
-        // No WiFi configured - always track
+    if workWifiPatterns.isEmpty {
+        // No patterns configured - always track
         return true
     }
     
-    // Check if current WiFi matches configured WiFi
-    return currentWifi == requiredWifi
+    // Check if current WiFi matches any configured pattern
+    return workWifiPatterns.contains { pattern in
+        matchGlob(pattern: pattern, text: currentWifi)
+    }
 }
 
 /// Update tracking state and menubar icon
@@ -382,8 +433,9 @@ func updateMenuBarIcon() {
         // Update status text in menu
         if let menu = statusItem?.menu, let statusMenuItem = menu.item(withTag: 102) {
             if trackingPaused {
-                if let requiredWifi = configuredTrackingWifi {
-                    statusMenuItem.title = "Status: Paused (not on \(requiredWifi))"
+                if !workWifiPatterns.isEmpty {
+                    let patternsStr = workWifiPatterns.joined(separator: ", ")
+                    statusMenuItem.title = "Status: Paused (not on \(patternsStr))"
                 } else {
                     statusMenuItem.title = "Status: Paused"
                 }
