@@ -1,6 +1,6 @@
 const std = @import("std");
-const Event = @import("event").Event;
-const DuckDbRepository = @import("duckdb_repository").DuckDbRepository;
+const Event = @import("domain_event").Event;
+const DuckDbRepository = @import("legacy_repository").DuckDbRepository;
 
 /// Get current time in milliseconds
 fn getTimestampMs() i64 {

@@ -1,6 +1,6 @@
 const std = @import("std");
-const BufferedEvent = @import("buffered_repository").BufferedEvent;
-const Event = @import("event").Event;
+const BufferedEvent = @import("buffered_repository.zig").BufferedEvent;
+const Event = @import("domain_event").Event;
 
 test "BufferedEvent.fromEvent copies data correctly" {
     const event = Event{

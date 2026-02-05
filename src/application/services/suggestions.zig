@@ -1,7 +1,7 @@
 const std = @import("std");
 const migrations = @import("migrations");
 pub const c = migrations.c;
-const scoring = @import("scoring");
+const scoring = @import("domain_scoring");
 const SuggestionScorer = scoring.SuggestionScorer;
 const ScoredSuggestion = scoring.ScoredSuggestion;
 

@@ -1,5 +1,5 @@
 const std = @import("std");
-const Event = @import("event").Event;
+const Event = @import("domain_event").Event;
 
 /// Generic repository interface using function pointers
 pub fn Repository(comptime Context: type) type {

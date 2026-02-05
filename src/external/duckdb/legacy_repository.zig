@@ -1,5 +1,5 @@
 const std = @import("std");
-const Event = @import("event").Event;
+const Event = @import("domain_event").Event;
 const migrations = @import("migrations");
 const Migrator = migrations.Migrator;
 const c = migrations.c;

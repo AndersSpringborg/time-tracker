@@ -1,5 +1,5 @@
 const std = @import("std");
-const suggestions = @import("suggestions");
+const suggestions = @import("suggestions.zig");
 const SuggestionEngine = suggestions.SuggestionEngine;
 const Suggestion = suggestions.Suggestion;
 const migrations = @import("migrations");

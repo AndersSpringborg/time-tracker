@@ -1,6 +1,6 @@
 const std = @import("std");
-const Tracker = @import("tracker").Tracker;
-const Event = @import("event").Event;
+const Tracker = @import("tracker.zig").Tracker;
+const Event = @import("domain_event").Event;
 
 /// Mock repository that records the last saved event (copies strings)
 const MockRepository = struct {

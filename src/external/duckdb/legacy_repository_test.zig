@@ -1,6 +1,6 @@
 const std = @import("std");
-const Event = @import("event").Event;
-const DuckDbRepository = @import("duckdb_repository").DuckDbRepository;
+const Event = @import("domain_event").Event;
+const DuckDbRepository = @import("legacy_repository.zig").DuckDbRepository;
 
 test "DuckDbRepository.init creates events table" {
     var repo = try DuckDbRepository.initInMemory();

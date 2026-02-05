@@ -9,6 +9,16 @@ pub fn build(b: *std.Build) void {
     const duckdb_lib_path: std.Build.LazyPath = .{ .cwd_relative = "vendor/duckdb/lib" };
 
     // =======================================================================
+    // EXTERNAL DEPENDENCIES
+    // =======================================================================
+
+    const vaxis_dep = b.dependency("vaxis", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const vaxis_module = vaxis_dep.module("vaxis");
+
+    // =======================================================================
     // NEW DOMAIN LAYER MODULES (Clean Architecture)
     // =======================================================================
 
@@ -146,9 +156,9 @@ pub fn build(b: *std.Build) void {
     // EXTERNAL LAYER MODULES (DuckDB implementations)
     // =======================================================================
 
-    // Migrations module (needed by external layer - moved here from legacy section)
+    // Migrations module (shared by all DuckDB-using modules)
     const migrations_module = b.createModule(.{
-        .root_source_file = b.path("src/core/storage/migrations.zig"),
+        .root_source_file = b.path("src/external/duckdb/migrations.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -274,32 +284,64 @@ pub fn build(b: *std.Build) void {
     app_context_module.addLibraryPath(duckdb_lib_path);
 
     // =======================================================================
-    // LEGACY MODULES (still in src/core/ - will be migrated later)
+    // APPLICATION LAYER SERVICES (Tracker, Suggestions)
     // =======================================================================
 
     const tracker_module = b.createModule(.{
-        .root_source_file = b.path("src/core/tracking/tracker.zig"),
+        .root_source_file = b.path("src/application/services/tracker.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "event", .module = domain_event_module },
+            .{ .name = "domain_event", .module = domain_event_module },
         },
     });
 
-    const duckdb_repo_module = b.createModule(.{
-        .root_source_file = b.path("src/core/storage/duckdb_repository.zig"),
+    const suggestions_module = b.createModule(.{
+        .root_source_file = b.path("src/application/services/suggestions.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "event", .module = domain_event_module },
+            .{ .name = "migrations", .module = migrations_module },
+            .{ .name = "domain_scoring", .module = domain_scoring_module },
+        },
+    });
+    suggestions_module.addIncludePath(duckdb_include_path);
+    suggestions_module.addLibraryPath(duckdb_lib_path);
+
+    // =======================================================================
+    // EXTERNAL LAYER - DAEMON-SPECIFIC MODULES
+    // =======================================================================
+
+    const legacy_repo_module = b.createModule(.{
+        .root_source_file = b.path("src/external/duckdb/legacy_repository.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "domain_event", .module = domain_event_module },
             .{ .name = "migrations", .module = migrations_module },
         },
     });
-    duckdb_repo_module.addIncludePath(duckdb_include_path);
-    duckdb_repo_module.addLibraryPath(duckdb_lib_path);
+    legacy_repo_module.addIncludePath(duckdb_include_path);
+    legacy_repo_module.addLibraryPath(duckdb_lib_path);
+
+    const buffered_repo_module = b.createModule(.{
+        .root_source_file = b.path("src/external/duckdb/buffered_repository.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "domain_event", .module = domain_event_module },
+            .{ .name = "legacy_repository", .module = legacy_repo_module },
+        },
+    });
+    buffered_repo_module.addIncludePath(duckdb_include_path);
+    buffered_repo_module.addLibraryPath(duckdb_lib_path);
+
+    // =======================================================================
+    // ENTRYPOINT LAYER - CLI UTILITIES
+    // =======================================================================
 
     const review_module = b.createModule(.{
-        .root_source_file = b.path("src/core/cli/review.zig"),
+        .root_source_file = b.path("src/entrypoint/cli/review.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -309,14 +351,28 @@ pub fn build(b: *std.Build) void {
     review_module.addIncludePath(duckdb_include_path);
     review_module.addLibraryPath(duckdb_lib_path);
 
+    // Review TUI - interactive event review with libvaxis
+    const review_tui_module = b.createModule(.{
+        .root_source_file = b.path("src/entrypoint/cli/review_tui.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "vaxis", .module = vaxis_module },
+            .{ .name = "review", .module = review_module },
+            .{ .name = "migrations", .module = migrations_module },
+        },
+    });
+    review_tui_module.addIncludePath(duckdb_include_path);
+    review_tui_module.addLibraryPath(duckdb_lib_path);
+
     const terminal_module = b.createModule(.{
-        .root_source_file = b.path("src/core/cli/terminal.zig"),
+        .root_source_file = b.path("src/entrypoint/cli/terminal.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     const picker_module = b.createModule(.{
-        .root_source_file = b.path("src/core/cli/picker.zig"),
+        .root_source_file = b.path("src/entrypoint/cli/picker.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -327,52 +383,43 @@ pub fn build(b: *std.Build) void {
     picker_module.addIncludePath(duckdb_include_path);
     picker_module.addLibraryPath(duckdb_lib_path);
 
-    const suggestions_module = b.createModule(.{
-        .root_source_file = b.path("src/core/suggestions/suggestions.zig"),
+    // =======================================================================
+    // UNIFIED BINARY (CLI + Daemon with Swift integration)
+    // =======================================================================
+
+    // --- 1. Compile Zig to object file with all modules ---
+    const unified_module = b.createModule(.{
+        .root_source_file = b.path("src/entrypoint/main.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
+            // Clean architecture modules
+            .{ .name = "app_context", .module = app_context_module },
+            .{ .name = "query_repository", .module = query_repository_interface },
+            .{ .name = "hierarchy_repository", .module = hierarchy_repository_interface },
+            .{ .name = "domain_rule", .module = domain_rule_module },
+            .{ .name = "config", .module = config_module },
+            // Legacy CLI modules
+            .{ .name = "review", .module = review_module },
+            .{ .name = "review_tui", .module = review_tui_module },
+            .{ .name = "picker", .module = picker_module },
             .{ .name = "migrations", .module = migrations_module },
-            .{ .name = "scoring", .module = domain_scoring_module },
+            // Daemon modules
+            .{ .name = "tracker", .module = tracker_module },
+            .{ .name = "buffered_repository", .module = buffered_repo_module },
+            // DuckDB repositories for menubar rule matching
+            .{ .name = "duckdb_rule_repository", .module = duckdb_rule_repository },
+            .{ .name = "duckdb_hierarchy_repository", .module = duckdb_hierarchy_repository },
+            .{ .name = "duckdb_event_repository", .module = duckdb_event_repository },
         },
     });
-    suggestions_module.addIncludePath(duckdb_include_path);
-    suggestions_module.addLibraryPath(duckdb_lib_path);
+    unified_module.addIncludePath(duckdb_include_path);
+    unified_module.addLibraryPath(duckdb_lib_path);
 
-    const buffered_repo_module = b.createModule(.{
-        .root_source_file = b.path("src/core/storage/buffered_repository.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "event", .module = domain_event_module },
-            .{ .name = "duckdb_repository", .module = duckdb_repo_module },
-        },
-    });
-    buffered_repo_module.addIncludePath(duckdb_include_path);
-    buffered_repo_module.addLibraryPath(duckdb_lib_path);
-
-    // --- 1. Compile Zig to object file ---
-    // The daemon needs tracker, buffered_repository, config, and rule matching
     const zig_obj = b.addObject(.{
         .name = "main",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/core/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "tracker", .module = tracker_module },
-                .{ .name = "buffered_repository", .module = buffered_repo_module },
-                .{ .name = "config", .module = config_module },
-                .{ .name = "domain_rule", .module = domain_rule_module },
-                .{ .name = "duckdb_rule_repository", .module = duckdb_rule_repository },
-                .{ .name = "duckdb_hierarchy_repository", .module = duckdb_hierarchy_repository },
-                .{ .name = "duckdb_event_repository", .module = duckdb_event_repository },
-                .{ .name = "migrations", .module = migrations_module },
-            },
-        }),
+        .root_module = unified_module,
     });
-    zig_obj.root_module.addIncludePath(duckdb_include_path);
-    zig_obj.root_module.addLibraryPath(duckdb_lib_path);
 
     // --- 2. Compile Swift Bridge to object file ---
     const swift_cmd = b.addSystemCommand(&.{
@@ -419,14 +466,14 @@ pub fn build(b: *std.Build) void {
 
     // Output binary
     link_cmd.addArg("-o");
-    const exe_output = link_cmd.addOutputFileArg("time_tracker");
+    const exe_output = link_cmd.addOutputFileArg("tt");
 
     // --- 4. Install the binary ---
-    const install = b.addInstallBinFile(exe_output, "time_tracker");
+    const install = b.addInstallBinFile(exe_output, "tt");
     b.getInstallStep().dependOn(&install.step);
 
     // --- Run step ---
-    const run_step = b.step("run", "Run the tracker");
+    const run_step = b.step("run", "Run the time tracker");
     const run_cmd = std.Build.Step.Run.create(b, &.{});
     run_cmd.addFileArg(exe_output);
     run_step.dependOn(&run_cmd.step);
@@ -434,45 +481,6 @@ pub fn build(b: *std.Build) void {
 
     if (b.args) |args| {
         run_cmd.addArgs(args);
-    }
-
-    // =======================================================================
-    // CLI-ONLY EXECUTABLE (no Swift/daemon - uses new clean architecture)
-    // =======================================================================
-    const cli_module = b.createModule(.{
-        .root_source_file = b.path("src/entrypoint/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "app_context", .module = app_context_module },
-            .{ .name = "query_repository", .module = query_repository_interface },
-            .{ .name = "hierarchy_repository", .module = hierarchy_repository_interface },
-            .{ .name = "domain_rule", .module = domain_rule_module },
-            .{ .name = "config", .module = config_module },
-            // Legacy modules for commands not yet fully migrated
-            .{ .name = "review", .module = review_module },
-            .{ .name = "picker", .module = picker_module },
-            .{ .name = "migrations", .module = migrations_module },
-        },
-    });
-    cli_module.addIncludePath(duckdb_include_path);
-    cli_module.addLibraryPath(duckdb_lib_path);
-
-    const cli_exe = b.addExecutable(.{
-        .name = "tt",
-        .root_module = cli_module,
-    });
-    linkDuckDbStatic(cli_exe);
-
-    const cli_install = b.addInstallArtifact(cli_exe, .{});
-    b.getInstallStep().dependOn(&cli_install.step);
-
-    // Run step for CLI
-    const cli_run_step = b.step("cli", "Run the CLI-only version (no daemon)");
-    const cli_run_cmd = b.addRunArtifact(cli_exe);
-    cli_run_step.dependOn(&cli_run_cmd.step);
-    if (b.args) |args| {
-        cli_run_cmd.addArgs(args);
     }
 
     // =======================================================================
@@ -731,45 +739,43 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(app_context_tests).step);
 
     // -----------------------------------------------------------------------
-    // LEGACY TESTS (still in src/core/)
+    // MIGRATED TESTS (formerly in src/core/)
     // -----------------------------------------------------------------------
 
-    // Tracker tests
+    // Tracker tests (now in application/services/)
     const tracker_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/core/tracking/tracker_test.zig"),
+            .root_source_file = b.path("src/application/services/tracker_test.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "event", .module = domain_event_module },
-                .{ .name = "tracker", .module = tracker_module },
+                .{ .name = "domain_event", .module = domain_event_module },
             },
         }),
     });
     test_step.dependOn(&b.addRunArtifact(tracker_tests).step);
 
-    // DuckDB Repository tests
-    const duckdb_repo_tests = b.addTest(.{
+    // Legacy Repository tests (now in external/duckdb/)
+    const legacy_repo_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/core/storage/duckdb_repository_test.zig"),
+            .root_source_file = b.path("src/external/duckdb/legacy_repository_test.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "event", .module = domain_event_module },
+                .{ .name = "domain_event", .module = domain_event_module },
                 .{ .name = "migrations", .module = migrations_module },
-                .{ .name = "duckdb_repository", .module = duckdb_repo_module },
             },
         }),
     });
-    duckdb_repo_tests.root_module.addIncludePath(duckdb_include_path);
-    duckdb_repo_tests.root_module.addLibraryPath(duckdb_lib_path);
-    linkDuckDbStatic(duckdb_repo_tests);
-    test_step.dependOn(&b.addRunArtifact(duckdb_repo_tests).step);
+    legacy_repo_tests.root_module.addIncludePath(duckdb_include_path);
+    legacy_repo_tests.root_module.addLibraryPath(duckdb_lib_path);
+    linkDuckDbStatic(legacy_repo_tests);
+    test_step.dependOn(&b.addRunArtifact(legacy_repo_tests).step);
 
-    // Migrations tests
+    // Migrations tests (now in external/duckdb/)
     const migrations_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/core/storage/migrations_test.zig"),
+            .root_source_file = b.path("src/external/duckdb/migrations_test.zig"),
             .target = target,
             .optimize = optimize,
         }),
@@ -779,10 +785,10 @@ pub fn build(b: *std.Build) void {
     linkDuckDbStatic(migrations_tests);
     test_step.dependOn(&b.addRunArtifact(migrations_tests).step);
 
-    // Review tests
+    // Review tests (now in entrypoint/cli/)
     const review_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/core/cli/review_test.zig"),
+            .root_source_file = b.path("src/entrypoint/cli/review_test.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
@@ -796,10 +802,10 @@ pub fn build(b: *std.Build) void {
     linkDuckDbStatic(review_tests);
     test_step.dependOn(&b.addRunArtifact(review_tests).step);
 
-    // Terminal tests
+    // Terminal tests (now in entrypoint/cli/)
     const terminal_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/core/cli/terminal_test.zig"),
+            .root_source_file = b.path("src/entrypoint/cli/terminal_test.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
@@ -809,15 +815,15 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(terminal_tests).step);
 
-    // Suggestions tests
+    // Suggestions tests (now in application/services/)
     const suggestions_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/core/suggestions/suggestions_test.zig"),
+            .root_source_file = b.path("src/application/services/suggestions_test.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "migrations", .module = migrations_module },
-                .{ .name = "suggestions", .module = suggestions_module },
+                .{ .name = "domain_scoring", .module = domain_scoring_module },
             },
         }),
     });
@@ -826,15 +832,14 @@ pub fn build(b: *std.Build) void {
     linkDuckDbStatic(suggestions_tests);
     test_step.dependOn(&b.addRunArtifact(suggestions_tests).step);
 
-    // Buffered Repository tests
+    // Buffered Repository tests (now in external/duckdb/)
     const buffered_repo_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/core/storage/buffered_repository_test.zig"),
+            .root_source_file = b.path("src/external/duckdb/buffered_repository_test.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "event", .module = domain_event_module },
-                .{ .name = "buffered_repository", .module = buffered_repo_module },
+                .{ .name = "domain_event", .module = domain_event_module },
             },
         }),
     });
