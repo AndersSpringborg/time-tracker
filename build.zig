@@ -146,9 +146,9 @@ pub fn build(b: *std.Build) void {
     // EXTERNAL LAYER MODULES (DuckDB implementations)
     // =======================================================================
 
-    // Migrations module (needed by external layer - moved here from legacy section)
+    // Migrations module (shared by external layer)
     const migrations_module = b.createModule(.{
-        .root_source_file = b.path("src/core/storage/migrations.zig"),
+        .root_source_file = b.path("src/external/duckdb/migrations.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -267,11 +267,12 @@ pub fn build(b: *std.Build) void {
     app_context_module.addLibraryPath(duckdb_lib_path);
 
     // =======================================================================
-    // LEGACY MODULES (still in src/core/ - will be migrated later)
+    // LEGACY MODULES (migrated to new locations)
     // =======================================================================
 
+    // Tracker service (used by daemon)
     const tracker_module = b.createModule(.{
-        .root_source_file = b.path("src/core/tracking/tracker.zig"),
+        .root_source_file = b.path("src/application/services/tracker.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -279,8 +280,9 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    const duckdb_repo_module = b.createModule(.{
-        .root_source_file = b.path("src/core/storage/duckdb_repository.zig"),
+    // Legacy DuckDB repository (used by daemon's buffered repository)
+    const legacy_repo_module = b.createModule(.{
+        .root_source_file = b.path("src/external/duckdb/legacy_repository.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -288,8 +290,8 @@ pub fn build(b: *std.Build) void {
             .{ .name = "migrations", .module = migrations_module },
         },
     });
-    duckdb_repo_module.addIncludePath(duckdb_include_path);
-    duckdb_repo_module.addLibraryPath(duckdb_lib_path);
+    legacy_repo_module.addIncludePath(duckdb_include_path);
+    legacy_repo_module.addLibraryPath(duckdb_lib_path);
 
     const review_module = b.createModule(.{
         .root_source_file = b.path("src/core/cli/review.zig"),
@@ -302,14 +304,15 @@ pub fn build(b: *std.Build) void {
     review_module.addIncludePath(duckdb_include_path);
     review_module.addLibraryPath(duckdb_lib_path);
 
+    // Terminal and picker (use entrypoint/cli versions)
     const terminal_module = b.createModule(.{
-        .root_source_file = b.path("src/core/cli/terminal.zig"),
+        .root_source_file = b.path("src/entrypoint/cli/terminal.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     const picker_module = b.createModule(.{
-        .root_source_file = b.path("src/core/cli/picker.zig"),
+        .root_source_file = b.path("src/entrypoint/cli/picker.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -333,12 +336,12 @@ pub fn build(b: *std.Build) void {
     suggestions_module.addLibraryPath(duckdb_lib_path);
 
     const buffered_repo_module = b.createModule(.{
-        .root_source_file = b.path("src/core/storage/buffered_repository.zig"),
+        .root_source_file = b.path("src/external/duckdb/buffered_repository.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "event", .module = domain_event_module },
-            .{ .name = "duckdb_repository", .module = duckdb_repo_module },
+            .{ .name = "legacy_repository", .module = legacy_repo_module },
         },
     });
     buffered_repo_module.addIncludePath(duckdb_include_path);
@@ -707,13 +710,13 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(app_context_tests).step);
 
     // -----------------------------------------------------------------------
-    // LEGACY TESTS (still in src/core/)
+    // LEGACY TESTS (migrated to new locations)
     // -----------------------------------------------------------------------
 
     // Tracker tests
     const tracker_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/core/tracking/tracker_test.zig"),
+            .root_source_file = b.path("src/application/services/tracker_test.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
@@ -724,28 +727,28 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(tracker_tests).step);
 
-    // DuckDB Repository tests
-    const duckdb_repo_tests = b.addTest(.{
+    // Legacy DuckDB Repository tests
+    const legacy_repo_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/core/storage/duckdb_repository_test.zig"),
+            .root_source_file = b.path("src/external/duckdb/legacy_repository_test.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "event", .module = domain_event_module },
                 .{ .name = "migrations", .module = migrations_module },
-                .{ .name = "duckdb_repository", .module = duckdb_repo_module },
+                .{ .name = "legacy_repository", .module = legacy_repo_module },
             },
         }),
     });
-    duckdb_repo_tests.root_module.addIncludePath(duckdb_include_path);
-    duckdb_repo_tests.root_module.addLibraryPath(duckdb_lib_path);
-    linkDuckDbStatic(duckdb_repo_tests);
-    test_step.dependOn(&b.addRunArtifact(duckdb_repo_tests).step);
+    legacy_repo_tests.root_module.addIncludePath(duckdb_include_path);
+    legacy_repo_tests.root_module.addLibraryPath(duckdb_lib_path);
+    linkDuckDbStatic(legacy_repo_tests);
+    test_step.dependOn(&b.addRunArtifact(legacy_repo_tests).step);
 
-    // Migrations tests
+    // Migrations tests (new location)
     const migrations_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/core/storage/migrations_test.zig"),
+            .root_source_file = b.path("src/external/duckdb/migrations_test.zig"),
             .target = target,
             .optimize = optimize,
         }),
@@ -755,7 +758,7 @@ pub fn build(b: *std.Build) void {
     linkDuckDbStatic(migrations_tests);
     test_step.dependOn(&b.addRunArtifact(migrations_tests).step);
 
-    // Review tests
+    // Review tests (still in src/core/ - not yet migrated)
     const review_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/cli/review_test.zig"),
@@ -772,10 +775,10 @@ pub fn build(b: *std.Build) void {
     linkDuckDbStatic(review_tests);
     test_step.dependOn(&b.addRunArtifact(review_tests).step);
 
-    // Terminal tests
+    // Terminal tests (using entrypoint/cli version)
     const terminal_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/core/cli/terminal_test.zig"),
+            .root_source_file = b.path("src/entrypoint/cli/terminal_test.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
@@ -785,7 +788,7 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(terminal_tests).step);
 
-    // Suggestions tests
+    // Suggestions tests (still in src/core/ - not yet migrated)
     const suggestions_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/suggestions/suggestions_test.zig"),
@@ -802,10 +805,10 @@ pub fn build(b: *std.Build) void {
     linkDuckDbStatic(suggestions_tests);
     test_step.dependOn(&b.addRunArtifact(suggestions_tests).step);
 
-    // Buffered Repository tests
+    // Buffered Repository tests (new location)
     const buffered_repo_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/core/storage/buffered_repository_test.zig"),
+            .root_source_file = b.path("src/external/duckdb/buffered_repository_test.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
