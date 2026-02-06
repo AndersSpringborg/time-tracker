@@ -199,3 +199,69 @@ test "searchFullHierarchy returns concatenated path" {
     try testing.expect(std.mem.containsAtLeast(u8, results[0].display_path, 1, "Acme Corp"));
     try testing.expect(std.mem.containsAtLeast(u8, results[0].display_path, 1, "Coding"));
 }
+
+test "getUnmappedEventsForDateFiltered excludes events under 2s" {
+    const conn = try setupTestDb();
+    try insertTestHierarchy(conn);
+
+    try execQuery(conn, "INSERT INTO events (timestamp_ms, app_name, window_title, wifi_ssid, duration_ms) VALUES (3600000, 'Code', 'short', 'Office', 1500)");
+    try execQuery(conn, "INSERT INTO events (timestamp_ms, app_name, window_title, wifi_ssid, duration_ms) VALUES (3601000, 'Code', 'long', 'Office', 2500)");
+
+    var reviewer = review.Reviewer.init(conn, testing.allocator);
+    const dates = try reviewer.getDatesWithUnmappedEvents();
+    defer testing.allocator.free(dates);
+    try testing.expect(dates.len > 0);
+
+    const events = try reviewer.getUnmappedEventsForDateFiltered(dates[0].slice(), 2000);
+    defer testing.allocator.free(events);
+
+    try testing.expectEqual(@as(usize, 1), events.len);
+    try testing.expect(events[0].duration_ms >= 2000);
+}
+
+test "getHourlyUnmappedSummaryForDate aggregates counts and duration" {
+    const conn = try setupTestDb();
+    try insertTestHierarchy(conn);
+
+    try execQuery(conn, "INSERT INTO events (timestamp_ms, app_name, window_title, wifi_ssid, duration_ms) VALUES (3600000, 'Code', 'A', 'Office', 10000)");
+    try execQuery(conn, "INSERT INTO events (timestamp_ms, app_name, window_title, wifi_ssid, duration_ms) VALUES (3602000, 'Code', 'B', 'Office', 20000)");
+    try execQuery(conn, "INSERT INTO events (timestamp_ms, app_name, window_title, wifi_ssid, duration_ms) VALUES (7200000, 'Slack', 'C', 'Office', 30000)");
+
+    var reviewer = review.Reviewer.init(conn, testing.allocator);
+    const dates = try reviewer.getDatesWithUnmappedEvents();
+    defer testing.allocator.free(dates);
+    try testing.expect(dates.len > 0);
+
+    const buckets = try reviewer.getHourlyUnmappedSummaryForDate(dates[0].slice(), 0);
+    defer testing.allocator.free(buckets);
+
+    try testing.expectEqual(@as(usize, 2), buckets.len);
+
+    var total_count: i64 = 0;
+    var total_duration: i64 = 0;
+    for (buckets) |bucket| {
+        total_count += bucket.event_count;
+        total_duration += bucket.total_duration_ms;
+    }
+
+    try testing.expectEqual(@as(i64, 3), total_count);
+    try testing.expectEqual(@as(i64, 60000), total_duration);
+}
+
+test "discardEvent marks only one event manually mapped" {
+    const conn = try setupTestDb();
+    try insertTestHierarchy(conn);
+    try insertTestEvents(conn);
+
+    var reviewer = review.Reviewer.init(conn, testing.allocator);
+
+    const before = try reviewer.getUnmappedEvents();
+    defer testing.allocator.free(before);
+    try testing.expectEqual(@as(usize, 3), before.len);
+
+    try reviewer.discardEvent(before[0].id);
+
+    const after = try reviewer.getUnmappedEvents();
+    defer testing.allocator.free(after);
+    try testing.expectEqual(@as(usize, 2), after.len);
+}

@@ -357,6 +357,17 @@ pub fn build(b: *std.Build) void {
     review_module.addIncludePath(duckdb_include_path);
     review_module.addLibraryPath(duckdb_lib_path);
 
+    const review_mode_usecase = b.createModule(.{
+        .root_source_file = b.path("src/application/usecases/review_mode.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "review", .module = review_module },
+        },
+    });
+    review_mode_usecase.addIncludePath(duckdb_include_path);
+    review_mode_usecase.addLibraryPath(duckdb_lib_path);
+
     // Review TUI - interactive event review with libvaxis
     const review_tui_module = b.createModule(.{
         .root_source_file = b.path("src/entrypoint/cli/review_tui.zig"),
@@ -365,6 +376,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "vaxis", .module = vaxis_module },
             .{ .name = "review", .module = review_module },
+            .{ .name = "review_mode_usecase", .module = review_mode_usecase },
             .{ .name = "migrations", .module = migrations_module },
         },
     });
@@ -619,6 +631,24 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(manage_project_tests).step);
+
+    // Review mode use case tests
+    const review_mode_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/application/usecases/review_mode_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "review", .module = review_module },
+                .{ .name = "migrations", .module = migrations_module },
+                .{ .name = "review_mode_usecase", .module = review_mode_usecase },
+            },
+        }),
+    });
+    review_mode_tests.root_module.addIncludePath(duckdb_include_path);
+    review_mode_tests.root_module.addLibraryPath(duckdb_lib_path);
+    linkDuckDbStatic(review_mode_tests);
+    test_step.dependOn(&b.addRunArtifact(review_mode_tests).step);
 
     // -----------------------------------------------------------------------
     // EXTERNAL LAYER TESTS (DuckDB implementations)
