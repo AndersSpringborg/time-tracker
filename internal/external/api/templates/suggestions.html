@@ -1,0 +1,19 @@
+{{define "suggestions"}}
+<section class="card">
+  <h2>Auto Categorize Suggestions</h2>
+  <form class="inline-form" hx-get="/partials/suggestions" hx-target="#suggestions-table" hx-swap="innerHTML">
+    <label>Date (optional) <input type="text" name="date" placeholder="YYYY-MM-DD"></label>
+    <label>Min Duration ms <input type="number" name="min_duration_ms" value="2000"></label>
+    <label>Limit <input type="number" name="limit" value="50"></label>
+    <button type="submit">Analyze</button>
+  </form>
+  <form class="inline-form" hx-post="/suggestions/auto-apply" hx-target="#suggestions-table" hx-swap="innerHTML">
+    <label>Min Confidence <input type="number" name="min_confidence" value="85"></label>
+    <label>Apply Now <input type="checkbox" name="apply_now" value="1" checked></label>
+    <button type="submit">Accept All Above Threshold</button>
+  </form>
+</section>
+<section class="card">
+  <div id="suggestions-table" hx-get="/partials/suggestions" hx-trigger="load" hx-swap="innerHTML">Loading...</div>
+</section>
+{{end}}

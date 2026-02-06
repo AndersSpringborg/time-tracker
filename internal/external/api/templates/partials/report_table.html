@@ -1,0 +1,34 @@
+{{define "partials/report_table"}}
+<div class="stack">
+  <p>Total tracked: <strong>{{formatDuration .Report.TotalMS}}</strong></p>
+  <p class="muted">Excluded noisy events: {{.Report.ExcludedEvents}}</p>
+</div>
+<div class="split">
+  <div>
+    <h3>By Project</h3>
+    <table>
+      <thead><tr><th>Project</th><th>Duration</th></tr></thead>
+      <tbody>
+      {{range .Report.ByProject}}
+        <tr><td>{{.Name}}</td><td>{{formatDuration .TotalMS}}</td></tr>
+      {{else}}
+        <tr><td colspan="2" class="muted">No rows</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+  </div>
+  <div>
+    <h3>By App</h3>
+    <table>
+      <thead><tr><th>App</th><th>Duration</th></tr></thead>
+      <tbody>
+      {{range .Report.ByApp}}
+        <tr><td>{{.Name}}</td><td>{{formatDuration .TotalMS}}</td></tr>
+      {{else}}
+        <tr><td colspan="2" class="muted">No rows</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}

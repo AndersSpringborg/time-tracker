@@ -16,3 +16,4 @@ zig-out/
 # Distribution build artifacts
 dist/stable_time_tracker
 dist/
+tracker

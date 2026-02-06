@@ -1,0 +1,47 @@
+{{define "partials/suggestions_table"}}
+{{if .AutoApplySummary}}<p class="flash">{{.AutoApplySummary}}</p>{{end}}
+<table>
+  <thead>
+    <tr>
+      <th>Pattern</th>
+      <th>Target</th>
+      <th>Confidence</th>
+      <th>Impact</th>
+      <th>Evidence</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {{range .Suggestions}}
+    <tr>
+      <td>
+        app: <code>{{.AppPattern}}</code><br>
+        {{if .TitlePattern}}title: <code>{{.TitlePattern}}</code>{{else}}title: <code>*</code>{{end}}
+      </td>
+      <td>{{.DisplayPath}}</td>
+      <td>{{.Confidence}}%</td>
+      <td>{{.ImpactCount}} events / {{formatDuration .ImpactDurationMS}}</td>
+      <td>{{.EvidenceCount}}</td>
+      <td>
+        <form hx-post="/suggestions/accept" hx-target="#suggestions-table" hx-swap="innerHTML">
+          <input type="hidden" name="suggestion_type" value="{{.SuggestionType}}">
+          <input type="hidden" name="app_pattern" value="{{.AppPattern}}">
+          <input type="hidden" name="title_pattern" value="{{if .TitlePattern}}{{.TitlePattern}}{{end}}">
+          <input type="hidden" name="activity_id" value="{{.ActivityID}}">
+          <input type="hidden" name="kind_id" value="{{.KindID}}">
+          <input type="hidden" name="display_path" value="{{.DisplayPath}}">
+          <input type="hidden" name="confidence" value="{{.Confidence}}">
+          <input type="hidden" name="impact_count" value="{{.ImpactCount}}">
+          <input type="hidden" name="impact_duration_ms" value="{{.ImpactDurationMS}}">
+          <input type="hidden" name="evidence_count" value="{{.EvidenceCount}}">
+          <label>Apply now <input type="checkbox" name="apply_now" value="1" checked></label>
+          <button type="submit">Accept</button>
+        </form>
+      </td>
+    </tr>
+  {{else}}
+    <tr><td colspan="6" class="muted">No suggestions for current scope</td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}

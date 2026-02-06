@@ -1,0 +1,10 @@
+{{define "partials/collector_status"}}
+<div class="status {{.StateClass}}">
+  <div><strong>Collector:</strong> {{.State}}</div>
+  <div class="actions">
+    <button hx-post="/collector/start" hx-target="#collector-status" hx-swap="innerHTML">Start</button>
+    <button hx-post="/collector/stop" hx-target="#collector-status" hx-swap="innerHTML">Stop</button>
+  </div>
+  {{if .PID}}<div class="muted">PID: {{.PID}}</div>{{end}}
+</div>
+{{end}}

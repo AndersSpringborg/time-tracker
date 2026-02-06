@@ -1,0 +1,22 @@
+{{define "partials/dashboard_panel"}}
+<div class="split">
+  <div>
+    <h2>Today</h2>
+    <p class="metric">{{formatDuration .Dashboard.TodayTotalMS}}</p>
+    <p class="muted">Tracked events: {{.Dashboard.TrackedEvents}}, Excluded as noise: {{.Dashboard.ExcludedEvents}}</p>
+    <p class="muted">Current project: {{.Dashboard.CurrentProject}}</p>
+  </div>
+  <div id="collector-status" hx-get="/collector/status" hx-trigger="load, every 10s" hx-swap="innerHTML">Loading collector status...</div>
+</div>
+<h3>Top apps</h3>
+<table>
+  <thead><tr><th>App</th><th>Duration</th></tr></thead>
+  <tbody>
+  {{range .Dashboard.TopApps}}
+    <tr><td>{{.Name}}</td><td>{{formatDuration .TotalMS}}</td></tr>
+  {{else}}
+    <tr><td colspan="2" class="muted">No data yet</td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}

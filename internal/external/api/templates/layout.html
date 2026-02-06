@@ -1,0 +1,29 @@
+{{define "layout"}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{.Title}}</title>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Time Tracker</div>
+    <nav>
+      <a href="/dashboard" {{if eq .Page "dashboard"}}class="active"{{end}}>Dashboard</a>
+      <a href="/reports" {{if eq .Page "reports"}}class="active"{{end}}>Reports</a>
+      <a href="/rules" {{if eq .Page "rules"}}class="active"{{end}}>Rules</a>
+      <a href="/suggestions" {{if eq .Page "suggestions"}}class="active"{{end}}>Suggestions</a>
+      <a href="/projects" {{if eq .Page "projects"}}class="active"{{end}}>Projects</a>
+      <a href="/settings" {{if eq .Page "settings"}}class="active"{{end}}>Settings</a>
+    </nav>
+  </header>
+  <main class="shell">
+    {{if .Flash}}<section class="flash">{{.Flash}}</section>{{end}}
+    {{.BodyHTML}}
+  </main>
+</body>
+</html>
+{{end}}

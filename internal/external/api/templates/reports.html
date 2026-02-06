@@ -1,0 +1,15 @@
+{{define "reports"}}
+<section class="card">
+  <h2>Reports</h2>
+  <form class="inline-form" hx-get="/partials/reports" hx-target="#reports-table" hx-swap="innerHTML">
+    <label for="range">Range</label>
+    <select name="range" id="range">
+      <option value="today" {{if eq .Range "today"}}selected{{end}}>Today</option>
+      <option value="week" {{if eq .Range "week"}}selected{{end}}>Last 7 Days</option>
+      <option value="all" {{if eq .Range "all"}}selected{{end}}>All time</option>
+    </select>
+    <button type="submit">Refresh</button>
+  </form>
+  <div id="reports-table" hx-get="/partials/reports?range={{.Range}}" hx-trigger="load" hx-swap="innerHTML">Loading...</div>
+</section>
+{{end}}

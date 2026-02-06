@@ -1,0 +1,19 @@
+{{define "settings"}}
+<section class="card">
+  <h2>Settings</h2>
+  <form class="grid-form" method="post" action="/settings">
+    <label>Tracking Enabled <input type="checkbox" name="enabled" value="1" {{if .Config.Enabled}}checked{{end}}></label>
+    <label>Weighted Bucket Minutes <input type="number" name="weighted_bucket_minutes" value="{{.Config.WeightedBucketMinutes}}"></label>
+    <label>Weighted Switch Minutes <input type="number" name="weighted_switch_minutes" value="{{.Config.WeightedSwitchMinutes}}"></label>
+    <label>Noise Bucket Minutes <input type="number" name="noise_bucket_minutes" value="{{.Config.NoiseBucketMinutes}}"></label>
+    <label>Noise Switch Minutes <input type="number" name="noise_switch_minutes" value="{{.Config.NoiseSwitchMinutes}}"></label>
+    <label>Noise App Patterns (one per line)
+      <textarea name="noise_app_patterns" rows="6">{{.NoisePatternsText}}</textarea>
+    </label>
+    <label>Work WiFi Patterns (one per line)
+      <textarea name="work_wifis" rows="6">{{.WorkWifisText}}</textarea>
+    </label>
+    <button type="submit">Save</button>
+  </form>
+</section>
+{{end}}

@@ -1,0 +1,20 @@
+{{define "rules"}}
+<section class="card">
+  <h2>Add Rule</h2>
+  <form class="grid-form" hx-post="/rules" hx-target="#rules-table" hx-swap="innerHTML">
+    <label>Priority <input type="number" name="priority" value="100"></label>
+    <label>App Pattern <input type="text" name="app_pattern" placeholder="*Code*"></label>
+    <label>Title Pattern <input type="text" name="title_pattern" placeholder="*github*"></label>
+    <label>Activity ID <input type="number" name="activity_id" placeholder="optional"></label>
+    <label>Kind ID <input type="number" name="kind_id" placeholder="optional"></label>
+    <label>Global Rule <input type="checkbox" name="is_global" value="1"></label>
+    <label>Global Kind Name <input type="text" name="kind_name" placeholder="meeting"></label>
+    <label>Follow Current Project <input type="checkbox" name="follow_previous" value="1"></label>
+    <button type="submit">Add Rule</button>
+  </form>
+</section>
+<section class="card">
+  <h2>Rules</h2>
+  <div id="rules-table" hx-get="/partials/rules" hx-trigger="load" hx-swap="innerHTML">Loading...</div>
+</section>
+{{end}}

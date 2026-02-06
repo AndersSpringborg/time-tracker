@@ -1,0 +1,28 @@
+{{define "partials/rules_table"}}
+<table>
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Priority</th>
+      <th>App Pattern</th>
+      <th>Title Pattern</th>
+      <th>Action</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Rules}}
+    <tr>
+      <td>{{.ID}}</td>
+      <td>{{.Priority}}</td>
+      <td>{{.AppPattern}}</td>
+      <td>{{.TitlePattern}}</td>
+      <td>{{.DisplayTarget}}</td>
+      <td><button hx-post="/rules/{{.ID}}/delete" hx-target="#rules-table" hx-swap="innerHTML">Delete</button></td>
+    </tr>
+    {{else}}
+    <tr><td colspan="6" class="muted">No rules</td></tr>
+    {{end}}
+  </tbody>
+</table>
+{{end}}

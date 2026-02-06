@@ -1,0 +1,33 @@
+{{define "partials/projects_panel"}}
+<div class="split">
+  <div>
+    <h2>Active Projects</h2>
+    <table>
+      <thead><tr><th>Project</th><th>Started</th><th></th></tr></thead>
+      <tbody>
+      {{range .ActiveProjects}}
+        <tr>
+          <td>{{.Customer}} > {{.Project}}</td>
+          <td>{{.StartedAt}}</td>
+          <td><button hx-post="/projects/{{.ProjectID}}/end" hx-target="#projects-panel" hx-swap="innerHTML">End</button></td>
+        </tr>
+      {{else}}
+        <tr><td colspan="3" class="muted">No active projects</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+    <button hx-post="/projects/clear" hx-target="#projects-panel" hx-swap="innerHTML">End All</button>
+  </div>
+  <div>
+    <h2>Activate Project</h2>
+    <form hx-post="/projects/activate" hx-target="#projects-panel" hx-swap="innerHTML">
+      <select name="project_id">
+        {{range .AllProjects}}
+          <option value="{{.ProjectID}}">{{.Customer}} > {{.Project}}</option>
+        {{end}}
+      </select>
+      <button type="submit">Activate</button>
+    </form>
+  </div>
+</div>
+{{end}}
