@@ -928,6 +928,25 @@ pub fn build(b: *std.Build) void {
     linkDuckDbStatic(review_tests);
     test_step.dependOn(&b.addRunArtifact(review_tests).step);
 
+    // Review TUI tests (sanitization helpers)
+    const review_tui_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/entrypoint/cli/review_tui.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "vaxis", .module = vaxis_module },
+                .{ .name = "review", .module = review_module },
+                .{ .name = "review_mode_usecase", .module = review_mode_usecase },
+                .{ .name = "migrations", .module = migrations_module },
+            },
+        }),
+    });
+    review_tui_tests.root_module.addIncludePath(duckdb_include_path);
+    review_tui_tests.root_module.addLibraryPath(duckdb_lib_path);
+    linkDuckDbStatic(review_tui_tests);
+    test_step.dependOn(&b.addRunArtifact(review_tui_tests).step);
+
     // Terminal tests (now in entrypoint/cli/)
     const terminal_tests = b.addTest(.{
         .root_module = b.createModule(.{

@@ -858,18 +858,52 @@ fn sanitizeForDisplay(input: []const u8, out: []u8) []const u8 {
     while (i < input.len and o < out.len) {
         const b = input[i];
 
-        // Remove ANSI CSI escapes: ESC [ ... <final>.
+        // Remove common ANSI/terminal escapes that can leak into window titles.
         if (b == 0x1b) {
             i += 1;
-            if (i < input.len and input[i] == '[') {
-                i += 1;
-                while (i < input.len) : (i += 1) {
-                    const ch = input[i];
-                    if (ch >= 0x40 and ch <= 0x7e) {
-                        i += 1;
-                        break;
+            if (i >= input.len) break;
+
+            const esc_type = input[i];
+            switch (esc_type) {
+                // CSI: ESC [ ... <final>
+                '[' => {
+                    i += 1;
+                    while (i < input.len) : (i += 1) {
+                        const ch = input[i];
+                        if (ch >= 0x40 and ch <= 0x7e) {
+                            i += 1;
+                            break;
+                        }
                     }
-                }
+                },
+                // OSC: ESC ] ... BEL or ST(ESC \)
+                ']' => {
+                    i += 1;
+                    while (i < input.len) : (i += 1) {
+                        if (input[i] == 0x07) {
+                            i += 1;
+                            break;
+                        }
+                        if (input[i] == 0x1b and i + 1 < input.len and input[i + 1] == '\\') {
+                            i += 2;
+                            break;
+                        }
+                    }
+                },
+                // DCS / PM / APC: ESC P,^,_ ... ST(ESC \)
+                'P', '^', '_' => {
+                    i += 1;
+                    while (i < input.len) : (i += 1) {
+                        if (input[i] == 0x1b and i + 1 < input.len and input[i + 1] == '\\') {
+                            i += 2;
+                            break;
+                        }
+                    }
+                },
+                // Other 2-byte escapes: drop sequence starter and next byte.
+                else => {
+                        i += 1;
+                },
             }
             continue;
         }
@@ -887,6 +921,28 @@ fn sanitizeForDisplay(input: []const u8, out: []u8) []const u8 {
     }
 
     return out[0..o];
+}
+
+test "sanitizeForDisplay strips CSI escapes and keeps ASCII text" {
+    const input = "abc\x1b[38;5;6mhello\x1b[0mxyz";
+    var out: [64]u8 = undefined;
+    const clean = sanitizeForDisplay(input, &out);
+    try std.testing.expectEqualStrings("abchelloxyz", clean);
+}
+
+test "sanitizeForDisplay strips OSC escapes" {
+    const input = "pre\x1b]0;window title\x07post";
+    var out: [64]u8 = undefined;
+    const clean = sanitizeForDisplay(input, &out);
+    try std.testing.expectEqualStrings("prepost", clean);
+}
+
+test "sanitizeForDisplay removes controls and replaces non-ascii" {
+    // "a" + bell + "b" + utf8 emoji + "c"
+    const input = "a\x07b\xf0\x9f\x94\x94c";
+    var out: [64]u8 = undefined;
+    const clean = sanitizeForDisplay(input, &out);
+    try std.testing.expectEqualStrings("ab????c", clean);
 }
 
 fn fillHourStats(stats: *[24]HourStats, buckets: []HourBucket) void {
