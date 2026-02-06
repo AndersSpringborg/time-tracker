@@ -819,15 +819,10 @@ fn convertToRows(allocator: std.mem.Allocator, groups: []GroupedEvent) ![]EventR
             .duration = undefined,
         };
 
-        // Copy app name
-        const app_len = @min(group.app_name.len, 255);
-        @memcpy(rows[i].app_buf[0..app_len], group.app_name[0..app_len]);
-        rows[i].app_name = rows[i].app_buf[0..app_len];
-
-        // Copy and truncate window title
-        const title_len = @min(group.window_title.len, 60);
-        @memcpy(rows[i].title_buf[0..title_len], group.window_title[0..title_len]);
-        rows[i].window_title = rows[i].title_buf[0..title_len];
+        // Copy app/title while stripping control and ANSI bytes for safe TUI output.
+        rows[i].app_name = sanitizeForDisplay(group.app_name, &rows[i].app_buf);
+        const clean_title = sanitizeForDisplay(group.window_title, &rows[i].title_buf);
+        rows[i].window_title = clean_title[0..@min(clean_title.len, 60)];
 
         // Format count
         const count_str = std.fmt.bufPrint(&rows[i].count_buf, "{d}", .{group.event_count}) catch "?";
@@ -853,6 +848,43 @@ fn formatDuration(ms: i64, buf: []u8) []const u8 {
     } else {
         return std.fmt.bufPrint(buf, "{d}s", .{seconds}) catch "?";
     }
+}
+
+/// Strip ANSI escape sequences and non-printable control bytes.
+fn sanitizeForDisplay(input: []const u8, out: []u8) []const u8 {
+    var i: usize = 0;
+    var o: usize = 0;
+
+    while (i < input.len and o < out.len) {
+        const b = input[i];
+
+        // Remove ANSI CSI escapes: ESC [ ... <final>.
+        if (b == 0x1b) {
+            i += 1;
+            if (i < input.len and input[i] == '[') {
+                i += 1;
+                while (i < input.len) : (i += 1) {
+                    const ch = input[i];
+                    if (ch >= 0x40 and ch <= 0x7e) {
+                        i += 1;
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        if ((b < 0x20 and b != ' ') or b == 0x7f) {
+            i += 1;
+            continue;
+        }
+
+        out[o] = b;
+        o += 1;
+        i += 1;
+    }
+
+    return out[0..o];
 }
 
 fn fillHourStats(stats: *[24]HourStats, buckets: []HourBucket) void {
@@ -972,13 +1004,17 @@ fn drawTimeline(table_win: vaxis.Window, app: *App) void {
         const time_text = formatTimeOfDay(event.timestamp_ms, &time_buf);
         const duration_text = formatDuration(event.duration_ms, &duration_buf);
 
-        const title_max = @min(event.window_title.len, 42);
-        const app_max = @min(event.app_name.len, 14);
+        var app_clean_buf: [256]u8 = undefined;
+        var title_clean_buf: [512]u8 = undefined;
+        const clean_app = sanitizeForDisplay(event.app_name, &app_clean_buf);
+        const clean_title = sanitizeForDisplay(event.window_title, &title_clean_buf);
+        const title_max = @min(clean_title.len, 42);
+        const app_max = @min(clean_app.len, 14);
         var line_buf: [256]u8 = undefined;
         const line = std.fmt.bufPrint(
             &line_buf,
             " {s} {s:<14} {s:<42} {s:>8}",
-            .{ time_text, event.app_name[0..app_max], event.window_title[0..title_max], duration_text },
+            .{ time_text, clean_app[0..app_max], clean_title[0..title_max], duration_text },
         ) catch " ...";
         _ = table_win.print(&.{.{ .text = line, .style = .{ .fg = fg, .bg = row_bg } }}, .{
             .col_offset = events_col_x,
@@ -1182,8 +1218,11 @@ pub fn run(allocator: std.mem.Allocator, conn: c.duckdb_connection) !void {
 
             // Current selection info
             if (app.getCurrentSelection()) |selection| {
+                var app_clean_buf: [60]u8 = undefined;
+                const clean_app = sanitizeForDisplay(selection.app_name, &app_clean_buf);
+                const app_max = @min(clean_app.len, 40);
                 var app_buf: [60]u8 = undefined;
-                const app_text = std.fmt.bufPrint(&app_buf, " App: {s}", .{selection.app_name[0..@min(selection.app_name.len, 40)]}) catch " App: ...";
+                const app_text = std.fmt.bufPrint(&app_buf, " App: {s}", .{clean_app[0..app_max]}) catch " App: ...";
                 _ = modal_win.print(&.{.{ .text = app_text, .style = .{ .fg = .{ .rgb = .{ 180, 180, 180 } } } }}, .{ .row_offset = 3 });
             }
 
