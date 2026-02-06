@@ -972,25 +972,6 @@ fn padAscii(buf: []u8, width: usize, text: []const u8, text_align: Align) []cons
     return buf[0..w];
 }
 
-fn writeAsciiCells(
-    table_win: vaxis.Window,
-    col_start: u16,
-    row: u16,
-    text: []const u8,
-    fg: vaxis.Color,
-    bg: vaxis.Color,
-) void {
-    for (text, 0..) |ch, idx| {
-        const col = col_start + @as(u16, @intCast(idx));
-        if (col >= table_win.width) break;
-        var g: [1]u8 = .{ch};
-        table_win.writeCell(col, row, .{
-            .char = .{ .grapheme = g[0..1] },
-            .style = .{ .fg = fg, .bg = bg },
-        });
-    }
-}
-
 test "padAscii left aligns and pads" {
     var buf: [16]u8 = undefined;
     const out = padAscii(&buf, 6, "ab", .left);
@@ -1161,28 +1142,44 @@ fn drawTimeline(table_win: vaxis.Window, app: *App) void {
             const app_col = time_col + time_w + sep;
             const title_col = app_col + app_w + sep;
             const dur_col = title_col + title_w + sep;
+            const field_style = vaxis.Style{ .fg = fg, .bg = row_bg };
 
             var time_field: [16]u8 = undefined;
             const time_out = padAscii(&time_field, time_w, time_text, .left);
-            writeAsciiCells(table_win, time_col, row, time_out, fg, row_bg);
+            _ = table_win.print(&.{.{ .text = time_out, .style = field_style }}, .{
+                .col_offset = time_col,
+                .row_offset = row,
+            });
 
             var app_field: [32]u8 = undefined;
             const app_out = padAscii(&app_field, app_w, clean_app, .left);
-            writeAsciiCells(table_win, app_col, row, app_out, fg, row_bg);
+            _ = table_win.print(&.{.{ .text = app_out, .style = field_style }}, .{
+                .col_offset = app_col,
+                .row_offset = row,
+            });
 
             var title_field: [256]u8 = undefined;
             const title_out = padAscii(&title_field, title_w, clean_title, .left);
-            writeAsciiCells(table_win, title_col, row, title_out, fg, row_bg);
+            _ = table_win.print(&.{.{ .text = title_out, .style = field_style }}, .{
+                .col_offset = title_col,
+                .row_offset = row,
+            });
 
             var dur_field: [16]u8 = undefined;
             const dur_out = padAscii(&dur_field, dur_w, duration_text, .right);
-            writeAsciiCells(table_win, dur_col, row, dur_out, fg, row_bg);
+            _ = table_win.print(&.{.{ .text = dur_out, .style = field_style }}, .{
+                .col_offset = dur_col,
+                .row_offset = row,
+            });
         } else {
             // Narrow fallback: keep deterministic rendering with time + clipped title.
             var fallback_buf: [256]u8 = undefined;
             const available = @max(@as(usize, 0), table_win.width - events_col_x);
             const fallback = padAscii(&fallback_buf, available, clean_title, .left);
-            writeAsciiCells(table_win, events_col_x, row, fallback, fg, row_bg);
+            _ = table_win.print(&.{.{ .text = fallback, .style = .{ .fg = fg, .bg = row_bg } }}, .{
+                .col_offset = events_col_x,
+                .row_offset = row,
+            });
         }
 
         row += 1;
