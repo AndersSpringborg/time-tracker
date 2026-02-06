@@ -35,6 +35,20 @@ const EventRow = struct {
     duration_buf: [32]u8 = undefined,
 };
 
+/// Timeline row for stable, fixed-width rendering
+const TimelineRow = struct {
+    time_text: []const u8,
+    app_name: []const u8,
+    window_title: []const u8,
+    duration: []const u8,
+    hour: u8,
+
+    time_buf: [16]u8 = undefined,
+    app_buf: [256]u8 = undefined,
+    title_buf: [512]u8 = undefined,
+    duration_buf: [20]u8 = undefined,
+};
+
 /// UI Mode
 const Mode = enum {
     normal,
@@ -66,6 +80,7 @@ const App = struct {
     groups: []GroupedEvent,
     rows: []EventRow,
     timeline_events: []UnmappedEvent,
+    timeline_rows: []TimelineRow,
     timeline_cursor: usize = 0,
     hour_stats: [24]HourStats = [_]HourStats{.{}} ** 24,
     view_mode: ViewMode = .grouped,
@@ -108,6 +123,7 @@ const App = struct {
         const groups = try usecase.getGroupedEventsForDate(current_date);
         const rows = try convertToRows(allocator, groups);
         const timeline_events = try usecase.getTimelineEventsForDate(current_date);
+        const timeline_rows = try convertToTimelineRows(allocator, timeline_events);
 
         var hour_stats: [24]HourStats = [_]HourStats{.{}} ** 24;
         const hour_buckets = try usecase.getHourlySummaryForDate(current_date);
@@ -120,6 +136,7 @@ const App = struct {
             .groups = groups,
             .rows = rows,
             .timeline_events = timeline_events,
+            .timeline_rows = timeline_rows,
             .hour_stats = hour_stats,
             .dates = dates,
             .current_date_idx = 0,
@@ -140,6 +157,7 @@ const App = struct {
         self.allocator.free(self.rows);
         self.allocator.free(self.groups);
         self.allocator.free(self.timeline_events);
+        self.allocator.free(self.timeline_rows);
         self.allocator.free(self.dates);
         self.freeSearchResults();
         self.freeSuggestions();
@@ -168,11 +186,13 @@ const App = struct {
         self.allocator.free(self.rows);
         self.allocator.free(self.groups);
         self.allocator.free(self.timeline_events);
+        self.allocator.free(self.timeline_rows);
 
         if (self.dates.len == 0) {
             self.rows = try self.allocator.alloc(EventRow, 0);
             self.groups = try self.allocator.alloc(GroupedEvent, 0);
             self.timeline_events = try self.allocator.alloc(UnmappedEvent, 0);
+            self.timeline_rows = try self.allocator.alloc(TimelineRow, 0);
             self.table_ctx.row = 0;
             self.timeline_cursor = 0;
             self.hour_stats = [_]HourStats{.{}} ** 24;
@@ -183,6 +203,7 @@ const App = struct {
         self.groups = try self.usecase.getGroupedEventsForDate(date);
         self.rows = try convertToRows(self.allocator, self.groups);
         self.timeline_events = try self.usecase.getTimelineEventsForDate(date);
+        self.timeline_rows = try convertToTimelineRows(self.allocator, self.timeline_events);
 
         self.hour_stats = [_]HourStats{.{}} ** 24;
         const hour_buckets = try self.usecase.getHourlySummaryForDate(date);
@@ -192,8 +213,8 @@ const App = struct {
         if (self.table_ctx.row >= self.rows.len) {
             self.table_ctx.row = @intCast(self.rows.len -| 1);
         }
-        if (self.timeline_cursor >= self.timeline_events.len) {
-            self.timeline_cursor = self.timeline_events.len -| 1;
+        if (self.timeline_cursor >= self.timeline_rows.len) {
+            self.timeline_cursor = self.timeline_rows.len -| 1;
         }
     }
 
@@ -271,7 +292,7 @@ const App = struct {
     }
 
     fn hasVisibleRows(self: *const App) bool {
-        return if (self.view_mode == .grouped) self.rows.len > 0 else self.timeline_events.len > 0;
+        return if (self.view_mode == .grouped) self.rows.len > 0 else self.timeline_rows.len > 0;
     }
 
     fn toggleViewMode(self: *App) void {
@@ -755,7 +776,7 @@ const App = struct {
                 if (self.table_ctx.row < self.rows.len -| 1) {
                     self.table_ctx.row +|= 1;
                 }
-            } else if (self.timeline_cursor < self.timeline_events.len -| 1) {
+            } else if (self.timeline_cursor < self.timeline_rows.len -| 1) {
                 self.timeline_cursor +|= 1;
             }
         }
@@ -769,8 +790,8 @@ const App = struct {
                 }
             } else {
                 self.timeline_cursor +|= 20;
-                if (self.timeline_cursor >= self.timeline_events.len) {
-                    self.timeline_cursor = self.timeline_events.len -| 1;
+                if (self.timeline_cursor >= self.timeline_rows.len) {
+                    self.timeline_cursor = self.timeline_rows.len -| 1;
                 }
             }
         }
@@ -795,8 +816,8 @@ const App = struct {
                 if (self.rows.len > 0) {
                     self.table_ctx.row = @intCast(self.rows.len - 1);
                 }
-            } else if (self.timeline_events.len > 0) {
-                self.timeline_cursor = self.timeline_events.len - 1;
+            } else if (self.timeline_rows.len > 0) {
+                self.timeline_cursor = self.timeline_rows.len - 1;
             }
         }
 
@@ -835,8 +856,29 @@ fn convertToRows(allocator: std.mem.Allocator, groups: []GroupedEvent) ![]EventR
     return rows;
 }
 
+fn convertToTimelineRows(allocator: std.mem.Allocator, events: []const UnmappedEvent) ![]TimelineRow {
+    const rows = try allocator.alloc(TimelineRow, events.len);
+    for (events, 0..) |event, i| {
+        rows[i] = TimelineRow{
+            .time_text = undefined,
+            .app_name = undefined,
+            .window_title = undefined,
+            .duration = undefined,
+            .hour = hourFromTimestampMs(event.timestamp_ms),
+        };
+
+        rows[i].time_text = formatTimeOfDay(event.timestamp_ms, &rows[i].time_buf);
+        rows[i].duration = formatDuration(event.duration_ms, &rows[i].duration_buf);
+
+        rows[i].app_name = sanitizeForDisplay(event.app_name, &rows[i].app_buf);
+        rows[i].window_title = sanitizeForDisplay(event.window_title, &rows[i].title_buf);
+    }
+    return rows;
+}
+
 fn formatDuration(ms: i64, buf: []u8) []const u8 {
-    const total_seconds = @divFloor(ms, 1000);
+    const total_seconds_i64 = @max(@as(i64, 0), @divFloor(ms, 1000));
+    const total_seconds: u64 = @intCast(total_seconds_i64);
     const hours = @divFloor(total_seconds, 3600);
     const minutes = @divFloor(@mod(total_seconds, 3600), 60);
     const seconds = @mod(total_seconds, 60);
@@ -993,6 +1035,165 @@ test "padAscii clips by alignment" {
     try std.testing.expectEqualStrings("cdef", right);
 }
 
+const ascii_glyph_table: [128][1]u8 = blk: {
+    var table: [128][1]u8 = undefined;
+    for (&table, 0..) |*entry, idx| {
+        entry.* = .{@as(u8, @intCast(idx))};
+    }
+    break :blk table;
+};
+
+fn asciiGrapheme(byte: u8) []const u8 {
+    const safe_byte: u8 = if (byte >= 0x20 and byte <= 0x7e) byte else '?';
+    return ascii_glyph_table[safe_byte][0..1];
+}
+
+fn writeAsciiText(
+    table_win: vaxis.Window,
+    col: u16,
+    row: u16,
+    text: []const u8,
+    style: vaxis.Style,
+    max_width: u16,
+) void {
+    if (row >= table_win.height or col >= table_win.width) return;
+    const width: usize = @intCast(@min(max_width, table_win.width - col));
+
+    var i: usize = 0;
+    while (i < width and i < text.len) : (i += 1) {
+        table_win.writeCell(col + @as(u16, @intCast(i)), row, .{
+            .char = .{
+                .grapheme = asciiGrapheme(text[i]),
+                .width = 1,
+            },
+            .style = style,
+        });
+    }
+}
+
+fn writeAsciiPadded(
+    table_win: vaxis.Window,
+    col: u16,
+    row: u16,
+    width: u16,
+    text: []const u8,
+    text_align: Align,
+    style: vaxis.Style,
+) void {
+    if (row >= table_win.height or col >= table_win.width or width == 0) return;
+
+    const total: usize = @intCast(width);
+    const clipped = if (text.len > total)
+        switch (text_align) {
+            .left => text[0..total],
+            .right => text[text.len - total ..],
+        }
+    else
+        text;
+
+    const start: usize = switch (text_align) {
+        .left => 0,
+        .right => total - clipped.len,
+    };
+    const draw_width: usize = @intCast(@min(width, table_win.width - col));
+
+    for (0..draw_width) |i| {
+        const byte: u8 = if (i >= start and i < start + clipped.len) clipped[i - start] else ' ';
+        table_win.writeCell(col + @as(u16, @intCast(i)), row, .{
+            .char = .{
+                .grapheme = asciiGrapheme(byte),
+                .width = 1,
+            },
+            .style = style,
+        });
+    }
+}
+
+fn windowRowToAscii(win: vaxis.Window, row: u16, out: []u8) void {
+    for (out, 0..) |*ch, idx| {
+        const col: u16 = @intCast(idx);
+        const cell = win.readCell(col, row) orelse {
+            ch.* = ' ';
+            continue;
+        };
+        ch.* = if (cell.char.grapheme.len > 0) cell.char.grapheme[0] else ' ';
+    }
+}
+
+test "convertToTimelineRows sanitizes and formats timeline fields" {
+    const events = [_]UnmappedEvent{
+        .{
+            .id = 1,
+            .timestamp_ms = 82_805_000, // 23:00:05
+            .app_name = "Cal\x1b[31mendar",
+            .window_title = "he\x07llo\xf0\x9f\x94\x94",
+            .duration_ms = 2_500,
+        },
+    };
+
+    const rows = try convertToTimelineRows(std.testing.allocator, &events);
+    defer std.testing.allocator.free(rows);
+
+    try std.testing.expectEqual(@as(usize, 1), rows.len);
+    try std.testing.expectEqual(@as(u8, 23), rows[0].hour);
+    try std.testing.expectEqualStrings("23:00:05", rows[0].time_text);
+    try std.testing.expectEqualStrings("Calendar", rows[0].app_name);
+    try std.testing.expectEqualStrings("hello????", rows[0].window_title);
+    try std.testing.expectEqualStrings("2s", rows[0].duration);
+}
+
+test "writeAsciiPadded writes aligned ASCII cells" {
+    var screen = try vaxis.Screen.init(std.testing.allocator, .{
+        .rows = 1,
+        .cols = 6,
+        .x_pixel = 0,
+        .y_pixel = 0,
+    });
+    defer screen.deinit(std.testing.allocator);
+
+    const win = vaxis.Window{
+        .x_off = 0,
+        .y_off = 0,
+        .parent_x_off = 0,
+        .parent_y_off = 0,
+        .width = 6,
+        .height = 1,
+        .screen = &screen,
+    };
+    win.clear();
+
+    writeAsciiPadded(win, 0, 0, 6, "ab", .right, .{});
+    var out: [6]u8 = undefined;
+    windowRowToAscii(win, 0, &out);
+    try std.testing.expectEqualStrings("    ab", &out);
+}
+
+test "writeAsciiPadded clips left aligned text and replaces non-ascii" {
+    var screen = try vaxis.Screen.init(std.testing.allocator, .{
+        .rows = 1,
+        .cols = 4,
+        .x_pixel = 0,
+        .y_pixel = 0,
+    });
+    defer screen.deinit(std.testing.allocator);
+
+    const win = vaxis.Window{
+        .x_off = 0,
+        .y_off = 0,
+        .parent_x_off = 0,
+        .parent_y_off = 0,
+        .width = 4,
+        .height = 1,
+        .screen = &screen,
+    };
+    win.clear();
+
+    writeAsciiPadded(win, 0, 0, 4, "a\xffbcde", .left, .{});
+    var out: [4]u8 = undefined;
+    windowRowToAscii(win, 0, &out);
+    try std.testing.expectEqualStrings("a?bc", &out);
+}
+
 fn fillHourStats(stats: *[24]HourStats, buckets: []HourBucket) void {
     for (buckets) |bucket| {
         if (bucket.hour < 24) {
@@ -1013,9 +1214,9 @@ fn hourFromTimestampMs(timestamp_ms: i64) u8 {
 fn formatTimeOfDay(timestamp_ms: i64, buf: []u8) []const u8 {
     const total_seconds = @divFloor(timestamp_ms, 1000);
     const seconds_in_day = @mod(total_seconds, 24 * 3600);
-    const hours = @divFloor(seconds_in_day, 3600);
-    const minutes = @divFloor(@mod(seconds_in_day, 3600), 60);
-    const seconds = @mod(seconds_in_day, 60);
+    const hours: u8 = @intCast(@divFloor(seconds_in_day, 3600));
+    const minutes: u8 = @intCast(@divFloor(@mod(seconds_in_day, 3600), 60));
+    const seconds: u8 = @intCast(@mod(seconds_in_day, 60));
     return std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}:{d:0>2}", .{ hours, minutes, seconds }) catch "--:--:--";
 }
 
@@ -1037,7 +1238,14 @@ fn hourHighlightColor(duration_ms: i64, max_duration_ms: i64) vaxis.Color {
 
 fn drawTimeline(table_win: vaxis.Window, app: *App) void {
     if (table_win.width < 20) {
-        _ = table_win.print(&.{.{ .text = " Terminal too narrow for timeline view", .style = .{ .fg = .{ .rgb = .{ 180, 120, 120 } } } }}, .{});
+        writeAsciiText(
+            table_win,
+            0,
+            0,
+            " Terminal too narrow for timeline view",
+            .{ .fg = .{ .rgb = .{ 180, 120, 120 } } },
+            table_win.width,
+        );
         return;
     }
 
@@ -1068,32 +1276,41 @@ fn drawTimeline(table_win: vaxis.Window, app: *App) void {
             const dur_text = formatDuration(stats.total_duration_ms, &duration_buf);
             var hour_buf: [40]u8 = undefined;
             const hour_text = std.fmt.bufPrint(&hour_buf, " {d:0>2}:00 {s}", .{ hour_idx, dur_text }) catch " --:--";
-            _ = table_win.print(&.{.{ .text = hour_text, .style = .{ .fg = .{ .rgb = .{ 210, 210, 220 } }, .bg = bg } }}, .{
-                .row_offset = @intCast(y),
-                .col_offset = 0,
-            });
+            writeAsciiPadded(
+                table_win,
+                0,
+                @intCast(y),
+                hour_col_width,
+                hour_text,
+                .left,
+                .{ .fg = .{ .rgb = .{ 210, 210, 220 } }, .bg = bg },
+            );
         }
 
         table_win.writeCell(events_col_x - 1, @intCast(y), .{
-            .char = .{ .grapheme = "|" },
+            .char = .{ .grapheme = asciiGrapheme('|') },
             .style = .{ .fg = .{ .rgb = .{ 60, 60, 80 } } },
         });
     }
 
-    if (app.timeline_events.len == 0) {
-        _ = table_win.print(&.{.{ .text = "  No events for this date", .style = .{ .fg = .{ .rgb = .{ 128, 128, 128 } } } }}, .{
-            .col_offset = events_col_x,
-            .row_offset = 0,
-        });
+    if (app.timeline_rows.len == 0) {
+        writeAsciiText(
+            table_win,
+            events_col_x,
+            0,
+            "  No events for this date",
+            .{ .fg = .{ .rgb = .{ 128, 128, 128 } } },
+            table_win.width - events_col_x,
+        );
         return;
     }
 
     var row: u16 = 0;
-    for (app.timeline_events, 0..) |event, i| {
+    for (app.timeline_rows, 0..) |timeline_row, i| {
         if (row >= table_win.height) break;
 
         const selected = i == app.timeline_cursor;
-        const hour = hourFromTimestampMs(event.timestamp_ms);
+        const hour = timeline_row.hour;
         const hour_bg = hourHighlightColor(app.hour_stats[hour].total_duration_ms, max_hour_duration);
         const row_bg: vaxis.Color = if (selected) .{ .rgb = .{ 50, 80, 140 } } else hour_bg;
         const fg: vaxis.Color = if (selected) .{ .rgb = .{ 255, 255, 255 } } else .{ .rgb = .{ 200, 200, 200 } };
@@ -1104,16 +1321,6 @@ fn drawTimeline(table_win: vaxis.Window, app: *App) void {
                 .style = .{ .bg = row_bg },
             });
         }
-
-        var time_buf: [16]u8 = undefined;
-        var duration_buf: [20]u8 = undefined;
-        const time_text = formatTimeOfDay(event.timestamp_ms, &time_buf);
-        const duration_text = formatDuration(event.duration_ms, &duration_buf);
-
-        var app_clean_buf: [256]u8 = undefined;
-        var title_clean_buf: [512]u8 = undefined;
-        const clean_app = sanitizeForDisplay(event.app_name, &app_clean_buf);
-        const clean_title = sanitizeForDisplay(event.window_title, &title_clean_buf);
 
         // Render fixed-width columns to prevent wrapping/drift with malformed titles.
         const events_width = table_win.width - events_col_x;
@@ -1144,42 +1351,21 @@ fn drawTimeline(table_win: vaxis.Window, app: *App) void {
             const dur_col = title_col + title_w + sep;
             const field_style = vaxis.Style{ .fg = fg, .bg = row_bg };
 
-            var time_field: [16]u8 = undefined;
-            const time_out = padAscii(&time_field, time_w, time_text, .left);
-            _ = table_win.print(&.{.{ .text = time_out, .style = field_style }}, .{
-                .col_offset = time_col,
-                .row_offset = row,
-            });
-
-            var app_field: [32]u8 = undefined;
-            const app_out = padAscii(&app_field, app_w, clean_app, .left);
-            _ = table_win.print(&.{.{ .text = app_out, .style = field_style }}, .{
-                .col_offset = app_col,
-                .row_offset = row,
-            });
-
-            var title_field: [256]u8 = undefined;
-            const title_out = padAscii(&title_field, title_w, clean_title, .left);
-            _ = table_win.print(&.{.{ .text = title_out, .style = field_style }}, .{
-                .col_offset = title_col,
-                .row_offset = row,
-            });
-
-            var dur_field: [16]u8 = undefined;
-            const dur_out = padAscii(&dur_field, dur_w, duration_text, .right);
-            _ = table_win.print(&.{.{ .text = dur_out, .style = field_style }}, .{
-                .col_offset = dur_col,
-                .row_offset = row,
-            });
+            writeAsciiPadded(table_win, time_col, row, time_w, timeline_row.time_text, .left, field_style);
+            writeAsciiPadded(table_win, app_col, row, app_w, timeline_row.app_name, .left, field_style);
+            writeAsciiPadded(table_win, title_col, row, title_w, timeline_row.window_title, .left, field_style);
+            writeAsciiPadded(table_win, dur_col, row, dur_w, timeline_row.duration, .right, field_style);
         } else {
             // Narrow fallback: keep deterministic rendering with time + clipped title.
-            var fallback_buf: [256]u8 = undefined;
-            const available = @max(@as(usize, 0), table_win.width - events_col_x);
-            const fallback = padAscii(&fallback_buf, available, clean_title, .left);
-            _ = table_win.print(&.{.{ .text = fallback, .style = .{ .fg = fg, .bg = row_bg } }}, .{
-                .col_offset = events_col_x,
-                .row_offset = row,
-            });
+            writeAsciiPadded(
+                table_win,
+                events_col_x,
+                row,
+                table_win.width - events_col_x,
+                timeline_row.window_title,
+                .left,
+                .{ .fg = fg, .bg = row_bg },
+            );
         }
 
         row += 1;
@@ -1246,7 +1432,7 @@ pub fn run(allocator: std.mem.Allocator, conn: c.duckdb_connection) !void {
         const date_info_len = app.dates.len;
         const date_pos = app.current_date_idx + 1;
         const view_name = if (app.view_mode == .grouped) "Grouped" else "Timeline";
-        const item_count = if (app.view_mode == .grouped) app.rows.len else app.timeline_events.len;
+        const item_count = if (app.view_mode == .grouped) app.rows.len else app.timeline_rows.len;
         const item_label = if (app.view_mode == .grouped) "groups" else "events";
         const filter_state = if (app.usecase.isShortEventFilterEnabled()) "ON" else "OFF";
         const header_text = std.fmt.bufPrint(
