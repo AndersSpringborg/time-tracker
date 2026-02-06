@@ -945,6 +945,73 @@ test "sanitizeForDisplay removes controls and replaces non-ascii" {
     try std.testing.expectEqualStrings("ab????c", clean);
 }
 
+const Align = enum {
+    left,
+    right,
+};
+
+fn padAscii(buf: []u8, width: usize, text: []const u8, text_align: Align) []const u8 {
+    const w = @min(width, buf.len);
+    if (w == 0) return buf[0..0];
+
+    @memset(buf[0..w], ' ');
+
+    const src = if (text.len > w)
+        switch (text_align) {
+            .left => text[0..w],
+            .right => text[text.len - w ..],
+        }
+    else
+        text;
+
+    const start = switch (text_align) {
+        .left => 0,
+        .right => w - src.len,
+    };
+    @memcpy(buf[start .. start + src.len], src);
+    return buf[0..w];
+}
+
+fn writeAsciiCells(
+    table_win: vaxis.Window,
+    col_start: u16,
+    row: u16,
+    text: []const u8,
+    fg: vaxis.Color,
+    bg: vaxis.Color,
+) void {
+    for (text, 0..) |ch, idx| {
+        const col = col_start + @as(u16, @intCast(idx));
+        if (col >= table_win.width) break;
+        var g: [1]u8 = .{ch};
+        table_win.writeCell(col, row, .{
+            .char = .{ .grapheme = g[0..1] },
+            .style = .{ .fg = fg, .bg = bg },
+        });
+    }
+}
+
+test "padAscii left aligns and pads" {
+    var buf: [16]u8 = undefined;
+    const out = padAscii(&buf, 6, "ab", .left);
+    try std.testing.expectEqualStrings("ab    ", out);
+}
+
+test "padAscii right aligns and pads" {
+    var buf: [16]u8 = undefined;
+    const out = padAscii(&buf, 6, "ab", .right);
+    try std.testing.expectEqualStrings("    ab", out);
+}
+
+test "padAscii clips by alignment" {
+    var buf: [16]u8 = undefined;
+    const left = padAscii(&buf, 4, "abcdef", .left);
+    try std.testing.expectEqualStrings("abcd", left);
+
+    const right = padAscii(&buf, 4, "abcdef", .right);
+    try std.testing.expectEqualStrings("cdef", right);
+}
+
 fn fillHourStats(stats: *[24]HourStats, buckets: []HourBucket) void {
     for (buckets) |bucket| {
         if (bucket.hour < 24) {
@@ -1066,18 +1133,57 @@ fn drawTimeline(table_win: vaxis.Window, app: *App) void {
         var title_clean_buf: [512]u8 = undefined;
         const clean_app = sanitizeForDisplay(event.app_name, &app_clean_buf);
         const clean_title = sanitizeForDisplay(event.window_title, &title_clean_buf);
-        const title_max = @min(clean_title.len, 42);
-        const app_max = @min(clean_app.len, 14);
-        var line_buf: [256]u8 = undefined;
-        const line = std.fmt.bufPrint(
-            &line_buf,
-            " {s} {s:<14} {s:<42} {s:>8}",
-            .{ time_text, clean_app[0..app_max], clean_title[0..title_max], duration_text },
-        ) catch " ...";
-        _ = table_win.print(&.{.{ .text = line, .style = .{ .fg = fg, .bg = row_bg } }}, .{
-            .col_offset = events_col_x,
-            .row_offset = row,
-        });
+
+        // Render fixed-width columns to prevent wrapping/drift with malformed titles.
+        const events_width = table_win.width - events_col_x;
+        const time_w: u16 = 8;
+        const dur_w: u16 = 8;
+        const sep: u16 = 1;
+
+        const base_i32 = @as(i32, events_width) - @as(i32, time_w) - @as(i32, dur_w) - 3;
+        if (base_i32 > 0) {
+            var app_w_i32: i32 = @min(@as(i32, 14), @max(@as(i32, 4), @divFloor(base_i32, 4)));
+            var title_w_i32: i32 = base_i32 - app_w_i32;
+            if (title_w_i32 < 6) {
+                const need: i32 = 6 - title_w_i32;
+                if (app_w_i32 - need < 4) {
+                    app_w_i32 = 4;
+                } else {
+                    app_w_i32 -= need;
+                }
+                title_w_i32 = base_i32 - app_w_i32;
+            }
+
+            const app_w: u16 = @intCast(app_w_i32);
+            const title_w: u16 = @intCast(if (title_w_i32 < 0) @as(i32, 0) else title_w_i32);
+
+            const time_col = events_col_x;
+            const app_col = time_col + time_w + sep;
+            const title_col = app_col + app_w + sep;
+            const dur_col = title_col + title_w + sep;
+
+            var time_field: [16]u8 = undefined;
+            const time_out = padAscii(&time_field, time_w, time_text, .left);
+            writeAsciiCells(table_win, time_col, row, time_out, fg, row_bg);
+
+            var app_field: [32]u8 = undefined;
+            const app_out = padAscii(&app_field, app_w, clean_app, .left);
+            writeAsciiCells(table_win, app_col, row, app_out, fg, row_bg);
+
+            var title_field: [256]u8 = undefined;
+            const title_out = padAscii(&title_field, title_w, clean_title, .left);
+            writeAsciiCells(table_win, title_col, row, title_out, fg, row_bg);
+
+            var dur_field: [16]u8 = undefined;
+            const dur_out = padAscii(&dur_field, dur_w, duration_text, .right);
+            writeAsciiCells(table_win, dur_col, row, dur_out, fg, row_bg);
+        } else {
+            // Narrow fallback: keep deterministic rendering with time + clipped title.
+            var fallback_buf: [256]u8 = undefined;
+            const available = @max(@as(usize, 0), table_win.width - events_col_x);
+            const fallback = padAscii(&fallback_buf, available, clean_title, .left);
+            writeAsciiCells(table_win, events_col_x, row, fallback, fg, row_bg);
+        }
 
         row += 1;
     }
