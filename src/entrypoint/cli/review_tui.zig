@@ -850,7 +850,7 @@ fn formatDuration(ms: i64, buf: []u8) []const u8 {
     }
 }
 
-/// Strip ANSI escape sequences and non-printable control bytes.
+/// Strip ANSI escape sequences and emit only printable ASCII for stable TUI rendering.
 fn sanitizeForDisplay(input: []const u8, out: []u8) []const u8 {
     var i: usize = 0;
     var o: usize = 0;
@@ -874,12 +874,14 @@ fn sanitizeForDisplay(input: []const u8, out: []u8) []const u8 {
             continue;
         }
 
-        if ((b < 0x20 and b != ' ') or b == 0x7f) {
+        // Drop control bytes.
+        if (b < 0x20 or b == 0x7f) {
             i += 1;
             continue;
         }
 
-        out[o] = b;
+        // Keep printable ASCII; replace non-ASCII bytes to avoid invalid UTF-8 artifacts.
+        out[o] = if (b <= 0x7e) b else '?';
         o += 1;
         i += 1;
     }
