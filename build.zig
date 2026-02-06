@@ -67,6 +67,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // Time-weighted project bucketing algorithm
+    const domain_time_weighted_project_module = b.createModule(.{
+        .root_source_file = b.path("src/domain/time_weighted_project.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // =======================================================================
     // APPLICATION LAYER MODULES (Clean Architecture)
     // =======================================================================
@@ -152,6 +159,16 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "project_repository", .module = project_repository_interface },
+        },
+    });
+
+    // Time-weighted project use case
+    const time_weighted_project_usecase = b.createModule(.{
+        .root_source_file = b.path("src/application/usecases/time_weighted_project.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "time_weighted_project", .module = domain_time_weighted_project_module },
         },
     });
 
@@ -553,6 +570,16 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(domain_rule_tests).step);
 
+    // Time-weighted project domain tests
+    const domain_time_weighted_project_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/domain/time_weighted_project_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(domain_time_weighted_project_tests).step);
+
     // -----------------------------------------------------------------------
     // APPLICATION LAYER TESTS
     // -----------------------------------------------------------------------
@@ -649,6 +676,19 @@ pub fn build(b: *std.Build) void {
     review_mode_tests.root_module.addLibraryPath(duckdb_lib_path);
     linkDuckDbStatic(review_mode_tests);
     test_step.dependOn(&b.addRunArtifact(review_mode_tests).step);
+
+    // Time-weighted project use case tests
+    const time_weighted_project_usecase_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/application/usecases/time_weighted_project_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "time_weighted_project_usecase", .module = time_weighted_project_usecase },
+            },
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(time_weighted_project_usecase_tests).step);
 
     // -----------------------------------------------------------------------
     // EXTERNAL LAYER TESTS (DuckDB implementations)
