@@ -74,6 +74,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // Project event mapper - maps raw events to project-scoped events
+    const domain_project_event_mapper_module = b.createModule(.{
+        .root_source_file = b.path("src/domain/project_event_mapper.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // =======================================================================
     // APPLICATION LAYER MODULES (Clean Architecture)
     // =======================================================================
@@ -162,6 +169,13 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    // Query repository interface
+    const query_repository_interface = b.createModule(.{
+        .root_source_file = b.path("src/application/interfaces/query_repository.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // Time-weighted project use case
     const time_weighted_project_usecase = b.createModule(.{
         .root_source_file = b.path("src/application/usecases/time_weighted_project.zig"),
@@ -169,6 +183,18 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "time_weighted_project", .module = domain_time_weighted_project_module },
+        },
+    });
+
+    // Project-weighted report use case
+    const project_weighted_report_usecase = b.createModule(.{
+        .root_source_file = b.path("src/application/usecases/project_weighted_report.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "query_repository", .module = query_repository_interface },
+            .{ .name = "project_event_mapper", .module = domain_project_event_mapper_module },
+            .{ .name = "time_weighted_project_usecase", .module = time_weighted_project_usecase },
         },
     });
 
@@ -249,13 +275,6 @@ pub fn build(b: *std.Build) void {
     });
     duckdb_hierarchy_repository.addIncludePath(duckdb_include_path);
     duckdb_hierarchy_repository.addLibraryPath(duckdb_lib_path);
-
-    // Query repository interface
-    const query_repository_interface = b.createModule(.{
-        .root_source_file = b.path("src/application/interfaces/query_repository.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
 
     // DuckDB Query Repository
     const duckdb_query_repository = b.createModule(.{
@@ -434,6 +453,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "hierarchy_repository", .module = hierarchy_repository_interface },
             .{ .name = "domain_rule", .module = domain_rule_module },
             .{ .name = "config", .module = config_module },
+            .{ .name = "project_weighted_report_usecase", .module = project_weighted_report_usecase },
             // Legacy CLI modules
             .{ .name = "review", .module = review_module },
             .{ .name = "review_tui", .module = review_tui_module },
@@ -580,6 +600,16 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(domain_time_weighted_project_tests).step);
 
+    // Project event mapper domain tests
+    const domain_project_event_mapper_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/domain/project_event_mapper_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(domain_project_event_mapper_tests).step);
+
     // -----------------------------------------------------------------------
     // APPLICATION LAYER TESTS
     // -----------------------------------------------------------------------
@@ -689,6 +719,20 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(time_weighted_project_usecase_tests).step);
+
+    // Project-weighted report use case tests
+    const project_weighted_report_usecase_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/application/usecases/project_weighted_report_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "query_repository", .module = query_repository_interface },
+                .{ .name = "project_weighted_report_usecase", .module = project_weighted_report_usecase },
+            },
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(project_weighted_report_usecase_tests).step);
 
     // -----------------------------------------------------------------------
     // EXTERNAL LAYER TESTS (DuckDB implementations)

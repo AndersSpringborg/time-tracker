@@ -29,6 +29,14 @@ pub const TitleDetail = struct {
     total_ms: i64,
 };
 
+/// Event row with optional project mapping.
+/// `project_id == null` means the event is currently unmapped.
+pub const ProjectEventCandidate = struct {
+    timestamp_ms: i64,
+    duration_ms: i64,
+    project_id: ?i64,
+};
+
 /// Format a duration in milliseconds to a human-readable string.
 pub fn formatDurationMs(total_ms: i64, buf: []u8) []const u8 {
     const total_secs = @divFloor(total_ms, 1000);
@@ -56,8 +64,10 @@ pub const QueryRepository = struct {
         getTitleDetails: *const fn (*anyopaque, []const u8, TimeRange) QueryRepositoryError![]TitleDetail,
         getTotalTrackedTime: *const fn (*anyopaque, TimeRange) QueryRepositoryError!i64,
         getProjectName: *const fn (*anyopaque, i64) QueryRepositoryError!?[]const u8,
+        getProjectEventCandidates: *const fn (*anyopaque, TimeRange) QueryRepositoryError![]ProjectEventCandidate,
         freeAppSummaries: *const fn (*anyopaque, []AppSummary) void,
         freeTitleDetails: *const fn (*anyopaque, []TitleDetail) void,
+        freeProjectEventCandidates: *const fn (*anyopaque, []ProjectEventCandidate) void,
         freeName: *const fn (*anyopaque, []const u8) void,
     };
 
@@ -84,6 +94,12 @@ pub const QueryRepository = struct {
         return self.vtable.getProjectName(self.ptr, project_id);
     }
 
+    /// Get raw events with optional project mappings for weighted reporting.
+    /// Caller must call freeProjectEventCandidates() when done.
+    pub fn getProjectEventCandidates(self: QueryRepository, range: TimeRange) QueryRepositoryError![]ProjectEventCandidate {
+        return self.vtable.getProjectEventCandidates(self.ptr, range);
+    }
+
     /// Free app summaries returned by getAppSummary().
     pub fn freeAppSummaries(self: QueryRepository, summaries: []AppSummary) void {
         self.vtable.freeAppSummaries(self.ptr, summaries);
@@ -92,6 +108,11 @@ pub const QueryRepository = struct {
     /// Free title details returned by getTitleDetails().
     pub fn freeTitleDetails(self: QueryRepository, details: []TitleDetail) void {
         self.vtable.freeTitleDetails(self.ptr, details);
+    }
+
+    /// Free project event candidates returned by getProjectEventCandidates().
+    pub fn freeProjectEventCandidates(self: QueryRepository, candidates: []ProjectEventCandidate) void {
+        self.vtable.freeProjectEventCandidates(self.ptr, candidates);
     }
 
     /// Free name returned by getProjectName().
@@ -125,6 +146,11 @@ pub const QueryRepository = struct {
                 return self.getProjectName(project_id);
             }
 
+            fn getProjectEventCandidates(ptr: *anyopaque, range: TimeRange) QueryRepositoryError![]ProjectEventCandidate {
+                const self: Impl = @ptrCast(@alignCast(ptr));
+                return self.getProjectEventCandidates(range);
+            }
+
             fn freeAppSummaries(ptr: *anyopaque, summaries: []AppSummary) void {
                 const self: Impl = @ptrCast(@alignCast(ptr));
                 self.freeAppSummaries(summaries);
@@ -133,6 +159,11 @@ pub const QueryRepository = struct {
             fn freeTitleDetails(ptr: *anyopaque, details: []TitleDetail) void {
                 const self: Impl = @ptrCast(@alignCast(ptr));
                 self.freeTitleDetails(details);
+            }
+
+            fn freeProjectEventCandidates(ptr: *anyopaque, candidates: []ProjectEventCandidate) void {
+                const self: Impl = @ptrCast(@alignCast(ptr));
+                self.freeProjectEventCandidates(candidates);
             }
 
             fn freeName(ptr: *anyopaque, name: []const u8) void {
@@ -148,8 +179,10 @@ pub const QueryRepository = struct {
                 .getTitleDetails = gen.getTitleDetails,
                 .getTotalTrackedTime = gen.getTotalTrackedTime,
                 .getProjectName = gen.getProjectName,
+                .getProjectEventCandidates = gen.getProjectEventCandidates,
                 .freeAppSummaries = gen.freeAppSummaries,
                 .freeTitleDetails = gen.freeTitleDetails,
+                .freeProjectEventCandidates = gen.freeProjectEventCandidates,
                 .freeName = gen.freeName,
             },
         };

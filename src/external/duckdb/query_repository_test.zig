@@ -56,6 +56,31 @@ fn insertTestEvent(conn: c.duckdb_connection, app_name: []const u8, title: []con
     c.duckdb_destroy_result(&result);
 }
 
+fn execQuery(conn: c.duckdb_connection, sql: [:0]const u8) !void {
+    var result: c.duckdb_result = undefined;
+    if (c.duckdb_query(conn, sql.ptr, &result) == c.DuckDBError) {
+        c.duckdb_destroy_result(&result);
+        return error.QueryFailed;
+    }
+    c.duckdb_destroy_result(&result);
+}
+
+fn insertEventWithActivity(conn: c.duckdb_connection, timestamp_ms: i64, duration_ms: i64, activity_id: ?i64) !void {
+    var sql_buf: [256]u8 = undefined;
+    const sql = if (activity_id) |aid|
+        std.fmt.bufPrintZ(&sql_buf,
+            "INSERT INTO events (timestamp_ms, app_name, window_title, wifi_ssid, duration_ms, activity_id) VALUES ({d}, 'App', 'Title', '', {d}, {d})",
+            .{ timestamp_ms, duration_ms, aid },
+        ) catch return error.QueryFailed
+    else
+        std.fmt.bufPrintZ(&sql_buf,
+            "INSERT INTO events (timestamp_ms, app_name, window_title, wifi_ssid, duration_ms, activity_id) VALUES ({d}, 'App', 'Title', '', {d}, NULL)",
+            .{ timestamp_ms, duration_ms },
+        ) catch return error.QueryFailed;
+
+    try execQuery(conn, sql);
+}
+
 test "DuckDbQueryRepository gets app summary" {
     const conn = try openInMemoryDb();
     var repo = DuckDbQueryRepository.init(conn, std.testing.allocator);
@@ -140,4 +165,27 @@ test "DuckDbQueryRepository returns null for unknown project" {
 
     const name = try repo.getProjectName(99999);
     try std.testing.expect(name == null);
+}
+
+test "DuckDbQueryRepository gets project event candidates with nullable mappings" {
+    const conn = try openInMemoryDb();
+    var repo = DuckDbQueryRepository.init(conn, std.testing.allocator);
+
+    try execQuery(conn, "INSERT INTO customers (customer_id, name) VALUES (1, 'Acme')");
+    try execQuery(conn, "INSERT INTO projects (project_id, customer_id, name) VALUES (10, 1, 'Website'), (11, 1, 'API')");
+    try execQuery(conn, "INSERT INTO phases (phase_id, project_id, name) VALUES (100, 10, 'Build'), (101, 11, 'Build')");
+    try execQuery(conn, "INSERT INTO activities (activity_id, phase_id, name) VALUES (1000, 100, 'Coding'), (1001, 101, 'Coding')");
+
+    try insertEventWithActivity(conn, 1000, 60000, 1000);
+    try insertEventWithActivity(conn, 2000, 30000, null);
+    try insertEventWithActivity(conn, 3000, 90000, 1001);
+
+    const candidates = try repo.getProjectEventCandidates(.all);
+    defer repo.freeProjectEventCandidates(candidates);
+
+    try std.testing.expectEqual(@as(usize, 3), candidates.len);
+    try std.testing.expectEqual(@as(i64, 1000), candidates[0].timestamp_ms);
+    try std.testing.expectEqual(@as(?i64, 10), candidates[0].project_id);
+    try std.testing.expectEqual(@as(?i64, null), candidates[1].project_id);
+    try std.testing.expectEqual(@as(?i64, 11), candidates[2].project_id);
 }

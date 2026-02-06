@@ -5,6 +5,7 @@ const QueryRepositoryError = query_repo.QueryRepositoryError;
 const TimeRange = query_repo.TimeRange;
 const AppSummary = query_repo.AppSummary;
 const TitleDetail = query_repo.TitleDetail;
+const ProjectEventCandidate = query_repo.ProjectEventCandidate;
 const migrations = @import("migrations");
 const c = migrations.c;
 
@@ -222,6 +223,52 @@ pub const DuckDbQueryRepository = struct {
         return name_copy;
     }
 
+    pub fn getProjectEventCandidates(self: *DuckDbQueryRepository, range: TimeRange) QueryRepositoryError![]ProjectEventCandidate {
+        const where_clause = switch (range) {
+            .today => "WHERE e.timestamp_ms >= (extract(epoch from current_date) * 1000)",
+            .week => "WHERE e.timestamp_ms >= (extract(epoch from current_date - interval '7 days') * 1000)",
+            .all => "",
+        };
+
+        var query_buf: [1024]u8 = undefined;
+        const query = std.fmt.bufPrintZ(&query_buf,
+            \\SELECT e.timestamp_ms, e.duration_ms, ph.project_id
+            \\FROM events e
+            \\LEFT JOIN activities a ON e.activity_id = a.activity_id
+            \\LEFT JOIN phases ph ON a.phase_id = ph.phase_id
+            \\{s}
+            \\ORDER BY e.timestamp_ms ASC
+        , .{where_clause}) catch return QueryRepositoryError.QueryFailed;
+
+        var result: c.duckdb_result = undefined;
+        if (c.duckdb_query(self.conn, query.ptr, &result) == c.DuckDBError) {
+            return QueryRepositoryError.QueryFailed;
+        }
+        defer c.duckdb_destroy_result(&result);
+
+        const row_count = c.duckdb_row_count(&result);
+        if (row_count == 0) {
+            return &[_]ProjectEventCandidate{};
+        }
+
+        var candidates = self.allocator.alloc(ProjectEventCandidate, row_count) catch {
+            return QueryRepositoryError.OutOfMemory;
+        };
+
+        for (0..row_count) |i| {
+            const row: c.idx_t = @intCast(i);
+            const project_is_null = c.duckdb_value_is_null(&result, 2, row);
+
+            candidates[i] = .{
+                .timestamp_ms = c.duckdb_value_int64(&result, 0, row),
+                .duration_ms = c.duckdb_value_int64(&result, 1, row),
+                .project_id = if (project_is_null) null else c.duckdb_value_int64(&result, 2, row),
+            };
+        }
+
+        return candidates;
+    }
+
     pub fn freeAppSummaries(self: *DuckDbQueryRepository, summaries: []AppSummary) void {
         for (summaries) |s| {
             if (s.app_name.len > 0) {
@@ -240,6 +287,10 @@ pub const DuckDbQueryRepository = struct {
         self.allocator.free(details);
     }
 
+    pub fn freeProjectEventCandidates(self: *DuckDbQueryRepository, candidates: []ProjectEventCandidate) void {
+        self.allocator.free(candidates);
+    }
+
     pub fn freeName(self: *DuckDbQueryRepository, name: []const u8) void {
         self.allocator.free(@constCast(name));
     }
@@ -253,8 +304,10 @@ pub const DuckDbQueryRepository = struct {
                 .getTitleDetails = getTitleDetailsVtable,
                 .getTotalTrackedTime = getTotalTrackedTimeVtable,
                 .getProjectName = getProjectNameVtable,
+                .getProjectEventCandidates = getProjectEventCandidatesVtable,
                 .freeAppSummaries = freeAppSummariesVtable,
                 .freeTitleDetails = freeTitleDetailsVtable,
+                .freeProjectEventCandidates = freeProjectEventCandidatesVtable,
                 .freeName = freeNameVtable,
             },
         };
@@ -280,6 +333,11 @@ pub const DuckDbQueryRepository = struct {
         return self.getProjectName(project_id);
     }
 
+    fn getProjectEventCandidatesVtable(ptr: *anyopaque, range: TimeRange) QueryRepositoryError![]ProjectEventCandidate {
+        const self: *DuckDbQueryRepository = @ptrCast(@alignCast(ptr));
+        return self.getProjectEventCandidates(range);
+    }
+
     fn freeAppSummariesVtable(ptr: *anyopaque, summaries: []AppSummary) void {
         const self: *DuckDbQueryRepository = @ptrCast(@alignCast(ptr));
         self.freeAppSummaries(summaries);
@@ -288,6 +346,11 @@ pub const DuckDbQueryRepository = struct {
     fn freeTitleDetailsVtable(ptr: *anyopaque, details: []TitleDetail) void {
         const self: *DuckDbQueryRepository = @ptrCast(@alignCast(ptr));
         self.freeTitleDetails(details);
+    }
+
+    fn freeProjectEventCandidatesVtable(ptr: *anyopaque, candidates: []ProjectEventCandidate) void {
+        const self: *DuckDbQueryRepository = @ptrCast(@alignCast(ptr));
+        self.freeProjectEventCandidates(candidates);
     }
 
     fn freeNameVtable(ptr: *anyopaque, name: []const u8) void {
