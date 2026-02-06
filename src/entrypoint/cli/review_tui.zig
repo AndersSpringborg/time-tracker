@@ -1236,6 +1236,27 @@ fn hourHighlightColor(duration_ms: i64, max_duration_ms: i64) vaxis.Color {
     };
 }
 
+fn timelineViewportStart(total_rows: usize, cursor: usize, viewport_height: u16) usize {
+    const visible: usize = @intCast(viewport_height);
+    if (visible == 0 or total_rows <= visible) return 0;
+
+    const max_start = total_rows - visible;
+    const desired = (cursor + 1) -| visible;
+    return @min(desired, max_start);
+}
+
+test "timelineViewportStart follows cursor when it leaves viewport" {
+    try std.testing.expectEqual(@as(usize, 0), timelineViewportStart(100, 0, 20));
+    try std.testing.expectEqual(@as(usize, 0), timelineViewportStart(100, 19, 20));
+    try std.testing.expectEqual(@as(usize, 1), timelineViewportStart(100, 20, 20));
+    try std.testing.expectEqual(@as(usize, 80), timelineViewportStart(100, 99, 20));
+}
+
+test "timelineViewportStart handles short lists and zero-height view" {
+    try std.testing.expectEqual(@as(usize, 0), timelineViewportStart(5, 4, 20));
+    try std.testing.expectEqual(@as(usize, 0), timelineViewportStart(5, 4, 0));
+}
+
 fn drawTimeline(table_win: vaxis.Window, app: *App) void {
     if (table_win.width < 20) {
         writeAsciiText(
@@ -1305,8 +1326,10 @@ fn drawTimeline(table_win: vaxis.Window, app: *App) void {
         return;
     }
 
+    const viewport_start = timelineViewportStart(app.timeline_rows.len, app.timeline_cursor, table_win.height);
+
     var row: u16 = 0;
-    for (app.timeline_rows, 0..) |timeline_row, i| {
+    for (app.timeline_rows[viewport_start..], viewport_start..) |timeline_row, i| {
         if (row >= table_win.height) break;
 
         const selected = i == app.timeline_cursor;
