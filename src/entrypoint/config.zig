@@ -12,6 +12,10 @@ pub const Config = struct {
     work_wifis: []const []const u8 = &[_][]const u8{},
     /// Whether tracking is globally enabled
     enabled: bool = true,
+    /// Bucket size in minutes for weighted project reporting
+    weighted_bucket_minutes: i64 = 5,
+    /// Minimum persistence in minutes before switching weighted project focus
+    weighted_switch_minutes: i64 = 10,
 
     /// Free any allocated memory
     pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
@@ -46,6 +50,7 @@ pub const ConfigError = error{
     FileWriteError,
     ParseError,
     PathTooLong,
+    InvalidValue,
 };
 
 /// Get the config file path (~/.config/time-tracker/config.json)
@@ -152,6 +157,24 @@ fn parseConfig(allocator: std.mem.Allocator, content: []const u8) ConfigError!Co
                 config.enabled = enabled_value.bool;
             }
         }
+
+        if (obj.get("weighted_bucket_minutes")) |bucket_value| {
+            switch (bucket_value) {
+                .integer => |v| {
+                    if (v > 0) config.weighted_bucket_minutes = v;
+                },
+                else => {},
+            }
+        }
+
+        if (obj.get("weighted_switch_minutes")) |switch_value| {
+            switch (switch_value) {
+                .integer => |v| {
+                    if (v > 0) config.weighted_switch_minutes = v;
+                },
+                else => {},
+            }
+        }
     }
 
     return config;
@@ -198,6 +221,19 @@ pub fn save(allocator: std.mem.Allocator, cfg: Config) ConfigError!void {
     const enabled_str = if (cfg.enabled) "true" else "false";
     content.appendSlice(allocator, "  \"enabled\": ") catch return error.OutOfMemory;
     content.appendSlice(allocator, enabled_str) catch return error.OutOfMemory;
+    content.appendSlice(allocator, ",\n") catch return error.OutOfMemory;
+
+    // Add weighted report settings
+    content.appendSlice(allocator, "  \"weighted_bucket_minutes\": ") catch return error.OutOfMemory;
+    const bucket_str = std.fmt.allocPrint(allocator, "{d}", .{cfg.weighted_bucket_minutes}) catch return error.OutOfMemory;
+    defer allocator.free(bucket_str);
+    content.appendSlice(allocator, bucket_str) catch return error.OutOfMemory;
+    content.appendSlice(allocator, ",\n") catch return error.OutOfMemory;
+
+    content.appendSlice(allocator, "  \"weighted_switch_minutes\": ") catch return error.OutOfMemory;
+    const switch_str = std.fmt.allocPrint(allocator, "{d}", .{cfg.weighted_switch_minutes}) catch return error.OutOfMemory;
+    defer allocator.free(switch_str);
+    content.appendSlice(allocator, switch_str) catch return error.OutOfMemory;
     content.appendSlice(allocator, "\n") catch return error.OutOfMemory;
 
     // Close JSON object
@@ -265,7 +301,11 @@ pub fn removeWorkWifi(allocator: std.mem.Allocator, pattern: []const u8) ConfigE
     if (cfg.work_wifis.len == 1) {
         // Last pattern - set empty and let deinit clean up the old data
         // Note: cfg.deinit will free the old work_wifis
-        const new_config = Config{ .enabled = cfg.enabled };
+        const new_config = Config{
+            .enabled = cfg.enabled,
+            .weighted_bucket_minutes = cfg.weighted_bucket_minutes,
+            .weighted_switch_minutes = cfg.weighted_switch_minutes,
+        };
         try save(allocator, new_config);
     } else {
         // Create new array without the pattern
@@ -282,7 +322,12 @@ pub fn removeWorkWifi(allocator: std.mem.Allocator, pattern: []const u8) ConfigE
         }
 
         // Save with new array
-        const new_config = Config{ .work_wifis = new_wifis, .enabled = cfg.enabled };
+        const new_config = Config{
+            .work_wifis = new_wifis,
+            .enabled = cfg.enabled,
+            .weighted_bucket_minutes = cfg.weighted_bucket_minutes,
+            .weighted_switch_minutes = cfg.weighted_switch_minutes,
+        };
         try save(allocator, new_config);
 
         // Free the duplicated strings and array (we don't need them after save)
@@ -350,6 +395,10 @@ pub fn getValue(allocator: std.mem.Allocator, key: []const u8) ConfigError!?[]co
             allocator.dupe(u8, "true") catch return error.OutOfMemory
         else
             allocator.dupe(u8, "false") catch return error.OutOfMemory;
+    } else if (std.mem.eql(u8, key, "weighted-bucket-minutes") or std.mem.eql(u8, key, "weighted_bucket_minutes")) {
+        return std.fmt.allocPrint(allocator, "{d}", .{config.weighted_bucket_minutes}) catch return error.OutOfMemory;
+    } else if (std.mem.eql(u8, key, "weighted-switch-minutes") or std.mem.eql(u8, key, "weighted_switch_minutes")) {
+        return std.fmt.allocPrint(allocator, "{d}", .{config.weighted_switch_minutes}) catch return error.OutOfMemory;
     }
 
     return null;
@@ -362,6 +411,14 @@ pub fn setValue(allocator: std.mem.Allocator, key: []const u8, value: []const u8
 
     if (std.mem.eql(u8, key, "enabled")) {
         config.enabled = std.mem.eql(u8, value, "true") or std.mem.eql(u8, value, "1");
+    } else if (std.mem.eql(u8, key, "weighted-bucket-minutes") or std.mem.eql(u8, key, "weighted_bucket_minutes")) {
+        const parsed = std.fmt.parseInt(i64, value, 10) catch return error.InvalidValue;
+        if (parsed <= 0) return error.InvalidValue;
+        config.weighted_bucket_minutes = parsed;
+    } else if (std.mem.eql(u8, key, "weighted-switch-minutes") or std.mem.eql(u8, key, "weighted_switch_minutes")) {
+        const parsed = std.fmt.parseInt(i64, value, 10) catch return error.InvalidValue;
+        if (parsed <= 0) return error.InvalidValue;
+        config.weighted_switch_minutes = parsed;
     }
     // Note: work_wifis should be managed via addWorkWifi/removeWorkWifi
 
@@ -383,6 +440,10 @@ pub fn unsetValue(allocator: std.mem.Allocator, key: []const u8) ConfigError!voi
         config.work_wifis = &[_][]const u8{};
     } else if (std.mem.eql(u8, key, "enabled")) {
         config.enabled = true; // default
+    } else if (std.mem.eql(u8, key, "weighted-bucket-minutes") or std.mem.eql(u8, key, "weighted_bucket_minutes")) {
+        config.weighted_bucket_minutes = 5;
+    } else if (std.mem.eql(u8, key, "weighted-switch-minutes") or std.mem.eql(u8, key, "weighted_switch_minutes")) {
+        config.weighted_switch_minutes = 10;
     }
 
     try save(allocator, config);
@@ -396,7 +457,7 @@ pub fn listAll(allocator: std.mem.Allocator) ConfigError![]const ConfigEntry {
         mutable_config.deinit(allocator);
     }
 
-    var entries = allocator.alloc(ConfigEntry, 2) catch return error.OutOfMemory;
+    var entries = allocator.alloc(ConfigEntry, 4) catch return error.OutOfMemory;
 
     // Build work_wifis display string
     var work_wifis_str: ?[]const u8 = null;
@@ -433,6 +494,18 @@ pub fn listAll(allocator: std.mem.Allocator) ConfigError![]const ConfigEntry {
         .description = "Whether tracking is globally enabled",
     };
 
+    entries[2] = ConfigEntry{
+        .key = "weighted-bucket-minutes",
+        .value = std.fmt.allocPrint(allocator, "{d}", .{config.weighted_bucket_minutes}) catch return error.OutOfMemory,
+        .description = "Bucket size in minutes used for weighted project report",
+    };
+
+    entries[3] = ConfigEntry{
+        .key = "weighted-switch-minutes",
+        .value = std.fmt.allocPrint(allocator, "{d}", .{config.weighted_switch_minutes}) catch return error.OutOfMemory,
+        .description = "Minutes required before switching project focus in weighted report",
+    };
+
     return entries;
 }
 
@@ -465,6 +538,8 @@ test "Config default values" {
     const config = Config{};
     try std.testing.expectEqual(@as(usize, 0), config.work_wifis.len);
     try std.testing.expect(config.enabled);
+    try std.testing.expectEqual(@as(i64, 5), config.weighted_bucket_minutes);
+    try std.testing.expectEqual(@as(i64, 10), config.weighted_switch_minutes);
 }
 
 test "Config.matchesWorkWifi empty list matches all" {
@@ -501,7 +576,9 @@ test "parseConfig work_wifis array" {
     const json =
         \\{
         \\  "work_wifis": ["Home", "Office*"],
-        \\  "enabled": false
+        \\  "enabled": false,
+        \\  "weighted_bucket_minutes": 3,
+        \\  "weighted_switch_minutes": 7
         \\}
     ;
     var config = try parseConfig(std.testing.allocator, json);
@@ -511,6 +588,8 @@ test "parseConfig work_wifis array" {
     try std.testing.expectEqualStrings("Home", config.work_wifis[0]);
     try std.testing.expectEqualStrings("Office*", config.work_wifis[1]);
     try std.testing.expect(!config.enabled);
+    try std.testing.expectEqual(@as(i64, 3), config.weighted_bucket_minutes);
+    try std.testing.expectEqual(@as(i64, 7), config.weighted_switch_minutes);
 }
 
 test "parseConfig backwards compatibility with tracking_wifi" {

@@ -11,6 +11,7 @@ const hierarchy_repo = @import("hierarchy_repository");
 const domain_rule = @import("domain_rule");
 const Rule = domain_rule.Rule;
 const config = @import("config");
+const project_weighted_report_usecase = @import("project_weighted_report_usecase");
 
 // Legacy modules (still needed for complex workflows)
 const review = @import("review");
@@ -107,6 +108,7 @@ fn printUsage() void {
         \\  --today        Show only today's data (default)
         \\  --week         Show last 7 days
         \\  --all          Show all time
+        \\  --weighted-projects  Report by weighted project timeline
         \\
         \\Rules subcommands:
         \\  rules list     List all mapping rules
@@ -152,6 +154,11 @@ const TimeRange = enum {
     all,
 };
 
+const ReportView = enum {
+    detailed,
+    weighted_projects,
+};
+
 fn parseTimeRange(args: []const [:0]const u8) TimeRange {
     for (args) |arg| {
         if (std.mem.eql(u8, arg, "--week")) return .week;
@@ -159,6 +166,13 @@ fn parseTimeRange(args: []const [:0]const u8) TimeRange {
         if (std.mem.eql(u8, arg, "--today")) return .today;
     }
     return .today;
+}
+
+fn parseReportView(args: []const [:0]const u8) ReportView {
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--weighted-projects")) return .weighted_projects;
+    }
+    return .detailed;
 }
 
 fn formatDuration(ms: i64, buf: []u8) []const u8 {
@@ -267,6 +281,12 @@ fn runReport(allocator: std.mem.Allocator, args: []const [:0]const u8) void {
         .all => query_repo.TimeRange.all,
     };
 
+    const report_view = parseReportView(args);
+    if (report_view == .weighted_projects) {
+        runWeightedProjectReport(ctx, allocator, query_range, range_label);
+        return;
+    }
+
     // Get total time
     const total_ms = ctx.queryRepo.getTotalTrackedTime(query_range) catch 0;
     var total_buf: [32]u8 = undefined;
@@ -311,6 +331,60 @@ fn runReport(allocator: std.mem.Allocator, args: []const [:0]const u8) void {
     }
 
     std.debug.print("\n", .{});
+}
+
+fn runWeightedProjectReport(
+    ctx: *AppContext,
+    allocator: std.mem.Allocator,
+    query_range: query_repo.TimeRange,
+    range_label: []const u8,
+) void {
+    var cfg = config.load(allocator) catch config.Config{};
+    defer cfg.deinit(allocator);
+
+    const minute_ms: i64 = 60 * 1000;
+    var usecase = project_weighted_report_usecase.ProjectWeightedReportUseCase.init(
+        ctx.queryRepo.repository(),
+        .{
+            .bucket_size_ms = cfg.weighted_bucket_minutes * minute_ms,
+            .switch_threshold_ms = cfg.weighted_switch_minutes * minute_ms,
+        },
+    );
+
+    var report = usecase.run(allocator, query_range) catch |err| {
+        std.debug.print("Failed to compute weighted project report: {}\n", .{err});
+        return;
+    };
+    defer report.deinit(allocator);
+
+    std.debug.print("\n=== Weighted Project Report ({s}) ===\n\n", .{range_label});
+    std.debug.print(
+        "Bucket: {d}m  Switch threshold: {d}m\n",
+        .{ cfg.weighted_bucket_minutes, cfg.weighted_switch_minutes },
+    );
+    std.debug.print(
+        "Source events: {d}  Mapped events: {d}  Excluded unmapped: {d}\n\n",
+        .{ report.source_event_count, report.mapped_event_count, report.excluded_unmapped_count },
+    );
+
+    if (report.totals.len == 0) {
+        std.debug.print("No mapped project events available for this range.\n", .{});
+        return;
+    }
+
+    std.debug.print("{s:<45} {s:>12}\n", .{ "Project", "Time" });
+    std.debug.print("{s:-<45} {s:->12}\n", .{ "", "" });
+    for (report.totals) |total| {
+        const name = ctx.queryRepo.getProjectName(total.project_id) catch null;
+        defer if (name) |n| ctx.queryRepo.freeName(n);
+
+        const label = if (name) |n| n else "(unknown project)";
+        var dur_buf: [32]u8 = undefined;
+        const duration = formatDuration(total.total_ms, &dur_buf);
+        std.debug.print("{s:<45} {s:>12}\n", .{ label, duration });
+    }
+
+    std.debug.print("\nIntervals: {d}\n", .{report.intervals.len});
 }
 
 // =============================================================================
@@ -823,21 +897,21 @@ fn runConfig(allocator: std.mem.Allocator, args: []const [:0]const u8) void {
     } else if (std.mem.eql(u8, subcommand, "get")) {
         if (args.len < 2) {
             std.debug.print("Usage: tt config get <key>\n", .{});
-            std.debug.print("Available keys: tracking-wifi, enabled\n", .{});
+            std.debug.print("Available keys: work-wifis, enabled, weighted-bucket-minutes, weighted-switch-minutes\n", .{});
             return;
         }
         runConfigGet(allocator, args[1]);
     } else if (std.mem.eql(u8, subcommand, "set")) {
         if (args.len < 3) {
             std.debug.print("Usage: tt config set <key> <value>\n", .{});
-            std.debug.print("Available keys: tracking-wifi, enabled\n", .{});
+            std.debug.print("Available keys: work-wifis, enabled, weighted-bucket-minutes, weighted-switch-minutes\n", .{});
             return;
         }
         runConfigSet(allocator, args[1], args[2]);
     } else if (std.mem.eql(u8, subcommand, "unset")) {
         if (args.len < 2) {
             std.debug.print("Usage: tt config unset <key>\n", .{});
-            std.debug.print("Available keys: tracking-wifi, enabled\n", .{});
+            std.debug.print("Available keys: work-wifis, enabled, weighted-bucket-minutes, weighted-switch-minutes\n", .{});
             return;
         }
         runConfigUnset(allocator, args[1]);
