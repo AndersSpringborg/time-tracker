@@ -7,15 +7,15 @@ func TestLoadReturnsSortedMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
-	if len(migs) < 10 {
-		t.Fatalf("expected at least 10 migrations, got %d", len(migs))
+	if len(migs) < 11 {
+		t.Fatalf("expected at least 11 migrations, got %d", len(migs))
 	}
 
 	if migs[0].Version != 1 {
 		t.Fatalf("expected first version 1, got %d", migs[0].Version)
 	}
-	if migs[len(migs)-1].Version != 10 {
-		t.Fatalf("expected last version 10, got %d", migs[len(migs)-1].Version)
+	if migs[len(migs)-1].Version != 11 {
+		t.Fatalf("expected last version 11, got %d", migs[len(migs)-1].Version)
 	}
 }
 

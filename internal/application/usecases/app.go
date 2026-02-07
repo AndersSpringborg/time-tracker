@@ -8,4 +8,5 @@ type App struct {
 	Lifecycle *LifecycleUsecase
 	Review    *ReviewUsecase
 	Help      *HelpUsecase
+	Tidsreg   *TidsregImportUsecase
 }

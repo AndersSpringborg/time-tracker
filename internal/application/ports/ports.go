@@ -49,3 +49,16 @@ type ReviewRepository interface {
 	MapEventsByGroup(ctx context.Context, date, appName, windowTitle string, projectID, activityID int64) (int64, error)
 	DiscardEventsByGroup(ctx context.Context, date, appName, windowTitle string) (int64, error)
 }
+
+type TidsregGateway interface {
+	Authenticate(ctx context.Context, username, password string) (string, error)
+	ListCustomers(ctx context.Context, sessionCookie string, mode domain.TidsregMode) ([]domain.TidsregCustomer, error)
+	ListProjects(ctx context.Context, sessionCookie string, customerID int64, mode domain.TidsregMode) ([]domain.TidsregProject, error)
+	ListPhases(ctx context.Context, sessionCookie string, projectID int64, mode domain.TidsregMode) ([]domain.TidsregPhase, error)
+	ListActivities(ctx context.Context, sessionCookie string, phaseID int64, mode domain.TidsregMode) ([]domain.TidsregActivity, error)
+}
+
+type TidsregImportRepository interface {
+	UpsertImportedProject(ctx context.Context, in domain.ImportedProjectUpsert) (domain.ImportedProjectUpsertResult, error)
+	SyncImportedActivities(ctx context.Context, projectID int64, activities []domain.ImportedActivityUpsert) (domain.ImportedActivitySyncResult, error)
+}

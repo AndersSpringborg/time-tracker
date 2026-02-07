@@ -13,6 +13,7 @@ import (
 	"time-tracker/internal/external/configfs"
 	"time-tracker/internal/external/duckdb"
 	"time-tracker/internal/external/launchd"
+	"time-tracker/internal/external/tidsreg"
 	"time-tracker/internal/external/workerembed"
 )
 
@@ -64,6 +65,7 @@ func buildApp() (*usecases.App, *duckdb.Store, error) {
 		Review:    usecases.NewReviewUsecase(store),
 		Reports:   usecases.NewReportsUsecase(store, store, settingsRepo),
 		Help:      usecases.NewHelpUsecase(),
+		Tidsreg:   usecases.NewTidsregImportUsecase(tidsreg.New(), store),
 	}
 	return app, store, nil
 }

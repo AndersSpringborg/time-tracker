@@ -1,0 +1,17 @@
+{{define "partials/tidsreg_result"}}
+<div class="stack">
+  <h3>Import Completed</h3>
+  <p>{{.TidsregSummary}}</p>
+  <table>
+    <tbody>
+      <tr><th>Imported Project Phases</th><td>{{.TidsregResult.ImportedCandidates}}</td></tr>
+      <tr><th>Projects Created</th><td>{{.TidsregResult.ProjectsCreated}}</td></tr>
+      <tr><th>Projects Updated</th><td>{{.TidsregResult.ProjectsUpdated}}</td></tr>
+      <tr><th>Activities Created</th><td>{{.TidsregResult.ActivitiesCreated}}</td></tr>
+      <tr><th>Activities Updated</th><td>{{.TidsregResult.ActivitiesUpdated}}</td></tr>
+      <tr><th>Activities Deleted</th><td>{{.TidsregResult.ActivitiesDeleted}}</td></tr>
+    </tbody>
+  </table>
+  <button type="button" hx-get="/partials/tidsreg/login" hx-target="#tidsreg-flow" hx-swap="innerHTML">Import Again</button>
+</div>
+{{end}}

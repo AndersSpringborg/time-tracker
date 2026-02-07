@@ -64,3 +64,24 @@ func TestSuggestionsPartialRendersRows(t *testing.T) {
 		t.Fatalf("expected Accept button in body")
 	}
 }
+
+func TestIntegrationsPageRendersTidsregLoginForm(t *testing.T) {
+	s, err := New(&usecases.App{})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/integrations/tidsreg", nil)
+	rr := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "autocomplete=\"username\"") {
+		t.Fatalf("expected username autocomplete in body")
+	}
+	if !strings.Contains(body, "Load Customers") {
+		t.Fatalf("expected tidsreg login form in body")
+	}
+}

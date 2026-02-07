@@ -581,6 +581,125 @@ WHERE project_id IS NULL AND activity_id IS NULL AND manually_mapped = false
 	return n, nil
 }
 
+func (s *Store) UpsertImportedProject(ctx context.Context, in domain.ImportedProjectUpsert) (domain.ImportedProjectUpsertResult, error) {
+	var (
+		projectID int64
+		title     string
+		metadata  string
+	)
+	err := s.db.QueryRowContext(ctx, `
+SELECT project_id, title, metadata
+FROM projects
+WHERE source = ? AND external_customer_id = ? AND external_project_id = ? AND external_phase_id = ?
+LIMIT 1
+`, in.Source, in.ExternalCustomerID, in.ExternalProjectID, in.ExternalPhaseID).Scan(&projectID, &title, &metadata)
+	if err != nil {
+		if err != sql.ErrNoRows {
+			return domain.ImportedProjectUpsertResult{}, err
+		}
+		res, err := s.db.ExecContext(ctx, `
+INSERT INTO projects (title, metadata, source, external_customer_id, external_project_id, external_phase_id)
+VALUES (?, ?, ?, ?, ?, ?)
+`, in.Title, in.Metadata, in.Source, in.ExternalCustomerID, in.ExternalProjectID, in.ExternalPhaseID)
+		if err != nil {
+			return domain.ImportedProjectUpsertResult{}, err
+		}
+		insertedID, _ := res.LastInsertId()
+		if insertedID <= 0 {
+			if err := s.db.QueryRowContext(ctx, `
+SELECT project_id
+FROM projects
+WHERE source = ? AND external_customer_id = ? AND external_project_id = ? AND external_phase_id = ?
+LIMIT 1
+`, in.Source, in.ExternalCustomerID, in.ExternalProjectID, in.ExternalPhaseID).Scan(&insertedID); err != nil {
+				return domain.ImportedProjectUpsertResult{}, err
+			}
+		}
+		return domain.ImportedProjectUpsertResult{ProjectID: insertedID, Created: true, Updated: false}, nil
+	}
+
+	updated := false
+	if title != in.Title || metadata != in.Metadata {
+		if _, err := s.db.ExecContext(ctx, `UPDATE projects SET title = ?, metadata = ? WHERE project_id = ?`, in.Title, in.Metadata, projectID); err != nil {
+			return domain.ImportedProjectUpsertResult{}, err
+		}
+		updated = true
+	}
+	return domain.ImportedProjectUpsertResult{ProjectID: projectID, Created: false, Updated: updated}, nil
+}
+
+func (s *Store) SyncImportedActivities(ctx context.Context, projectID int64, activities []domain.ImportedActivityUpsert) (domain.ImportedActivitySyncResult, error) {
+	const source = "tidsreg"
+	externalIDs := make([]int64, 0, len(activities))
+	seenExternal := make(map[int64]struct{}, len(activities))
+	result := domain.ImportedActivitySyncResult{}
+
+	for _, activity := range activities {
+		if activity.ExternalActivityID <= 0 {
+			continue
+		}
+		if _, ok := seenExternal[activity.ExternalActivityID]; ok {
+			continue
+		}
+		seenExternal[activity.ExternalActivityID] = struct{}{}
+		externalIDs = append(externalIDs, activity.ExternalActivityID)
+
+		var (
+			activityID int64
+			title      string
+		)
+		err := s.db.QueryRowContext(ctx, `
+SELECT activity_id, title
+FROM activities
+WHERE source = ? AND project_id = ? AND external_activity_id = ?
+LIMIT 1
+`, source, projectID, activity.ExternalActivityID).Scan(&activityID, &title)
+		if err == nil {
+			if strings.TrimSpace(title) != strings.TrimSpace(activity.Title) {
+				if _, err := s.db.ExecContext(ctx, `UPDATE activities SET title = ? WHERE activity_id = ?`, activity.Title, activityID); err != nil {
+					return result, err
+				}
+				result.Updated++
+			}
+			continue
+		}
+		if err != sql.ErrNoRows {
+			return result, err
+		}
+
+		if _, err := s.db.ExecContext(ctx, `
+INSERT INTO activities (project_id, title, source, external_activity_id)
+VALUES (?, ?, ?, ?)
+`, projectID, activity.Title, source, activity.ExternalActivityID); err != nil {
+			return result, err
+		}
+		result.Created++
+	}
+
+	deleteQuery := `
+DELETE FROM activities
+WHERE project_id = ? AND source = ?
+  AND NOT EXISTS (SELECT 1 FROM mapping_rules mr WHERE mr.activity_id = activities.activity_id)
+`
+	deleteArgs := make([]any, 0, 2+len(externalIDs))
+	deleteArgs = append(deleteArgs, projectID, source)
+	if len(externalIDs) > 0 {
+		placeholders := make([]string, 0, len(externalIDs))
+		for _, id := range externalIDs {
+			placeholders = append(placeholders, "?")
+			deleteArgs = append(deleteArgs, id)
+		}
+		deleteQuery += ` AND external_activity_id NOT IN (` + strings.Join(placeholders, ",") + `)`
+	}
+	delRes, err := s.db.ExecContext(ctx, deleteQuery, deleteArgs...)
+	if err != nil {
+		return result, err
+	}
+	deleted, _ := delRes.RowsAffected()
+	result.Deleted = int(deleted)
+	return result, nil
+}
+
 func nullIfEmpty(value string) any {
 	value = strings.TrimSpace(value)
 	if value == "" {

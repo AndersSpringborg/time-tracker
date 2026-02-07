@@ -49,4 +49,12 @@ func TestMigrateHandlesLegacyKindsNewDependencyAtVersion9(t *testing.T) {
 	if titleColumnCount != 1 {
 		t.Fatalf("expected projects.title column after migration")
 	}
+
+	var sourceColumnCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name = 'source'`).Scan(&sourceColumnCount); err != nil {
+		t.Fatalf("inspect projects source column failed: %v", err)
+	}
+	if sourceColumnCount != 1 {
+		t.Fatalf("expected projects.source column after migration")
+	}
 }
