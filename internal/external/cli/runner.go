@@ -45,6 +45,7 @@ func (r *Runner) Run(ctx context.Context, args []string, stdout, stderr io.Write
 			return 1
 		}
 		fmt.Fprintln(stdout, "installed and started launchd worker")
+		r.printAccessibilityHint(stdout)
 		return 0
 	case "uninstall":
 		if err := r.App.Lifecycle.Uninstall(ctx); err != nil {
@@ -70,6 +71,12 @@ func (r *Runner) Run(ctx context.Context, args []string, stdout, stderr io.Write
 	case "status":
 		st := r.App.Lifecycle.Status(ctx)
 		fmt.Fprintf(stdout, "loaded=%v state=%s pid=%s\n", st.Loaded, st.State, st.PID)
+		if st.Loaded && st.PID == "" {
+			r.printAccessibilityHint(stdout)
+			if workerLogHasAccessibilityError() {
+				fmt.Fprintln(stdout, "worker log indicates missing Accessibility permission")
+			}
+		}
 		if st.Raw != "" {
 			fmt.Fprintln(stdout, st.Raw)
 		}
@@ -81,6 +88,10 @@ func (r *Runner) Run(ctx context.Context, args []string, stdout, stderr io.Write
 		fmt.Fprintf(stdout, "launch-agent: %s\n", r.LaunchAgentPath)
 		st := r.App.Lifecycle.Status(ctx)
 		fmt.Fprintf(stdout, "collector: loaded=%v state=%s pid=%s\n", st.Loaded, st.State, st.PID)
+		r.printAccessibilityHint(stdout)
+		if st.Loaded && st.PID == "" && workerLogHasAccessibilityError() {
+			fmt.Fprintln(stdout, "collector stderr: /tmp/time-tracker-worker.err.log (Accessibility permission missing)")
+		}
 		return 0
 	case "serve":
 		fs := flag.NewFlagSet("serve", flag.ContinueOnError)
@@ -754,13 +765,13 @@ func (r *Runner) printHelp(out io.Writer) {
 	fmt.Fprint(out, `Usage: tt <command> [options]
 
 Commands:
-  install        Install worker and launchd agent
+  install        Install worker and launchd agent (prints Accessibility steps)
   uninstall      Remove worker and launchd agent
   start          Start collector via launchd
   stop           Stop collector via launchd
-  status         Show launchd collector status
+  status         Show launchd collector status and permission hints
   serve          Start web UI (HTMX)
-  doctor         Print local paths and collector status
+  doctor         Print local paths, collector status, and known startup hints
   rules          Manage rules and auto-categorization suggestions
   projects       Manage current project context
   reports        Show report summaries (noise-filtered)
@@ -785,3 +796,26 @@ Examples:
 }
 
 var _ = os.Args
+
+func (r *Runner) printAccessibilityHint(out io.Writer) {
+	workerPath := strings.TrimSpace(r.WorkerPath)
+	if workerPath == "" {
+		workerPath = "~/.local/bin/tt-worker"
+	}
+	fmt.Fprintln(out, "accessibility: grant permission to the worker binary in System Settings -> Privacy & Security -> Accessibility")
+	fmt.Fprintf(out, "accessibility-worker: %s\n", workerPath)
+	fmt.Fprintln(out, "accessibility-note: keep the worker running; tracking starts automatically after permission is granted")
+}
+
+var workerErrLogPath = "/tmp/time-tracker-worker.err.log"
+
+func workerLogHasAccessibilityError() bool {
+	b, err := os.ReadFile(workerErrLogPath)
+	if err != nil || len(b) == 0 {
+		return false
+	}
+	if len(b) > 64*1024 {
+		b = b[len(b)-64*1024:]
+	}
+	return strings.Contains(string(b), "Accessibility permission required")
+}

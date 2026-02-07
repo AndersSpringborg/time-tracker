@@ -87,13 +87,18 @@ func (s *Service) Status(context.Context) domain.LifecycleStatus {
 	}
 	st.Loaded = true
 	st.Raw = strings.TrimSpace(out.String())
-	if strings.Contains(st.Raw, "state = running") {
-		st.State = "running"
-	} else {
-		st.State = "loaded"
-	}
+	st.State = "loaded"
 	for _, line := range strings.Split(st.Raw, "\n") {
 		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "state =") {
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 {
+				state := strings.TrimSpace(parts[1])
+				if state != "" {
+					st.State = state
+				}
+			}
+		}
 		if strings.HasPrefix(line, "pid =") {
 			parts := strings.SplitN(line, "=", 2)
 			if len(parts) == 2 {

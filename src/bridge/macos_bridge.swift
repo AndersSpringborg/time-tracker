@@ -13,6 +13,9 @@ public typealias EventCallback = @convention(c) (
 var globalCallback: EventCallback?
 var lastApp: NSRunningApplication?
 var lastObserver: AXObserver?
+var workspaceObserverInstalled: Bool = false
+var permissionPollTimer: Timer?
+var permissionDeniedReported: Bool = false
 
 // Menu bar status item
 var statusItem: NSStatusItem?
@@ -132,41 +135,72 @@ func updateMatchedInfoInMenu() {
 @_cdecl("start_listening")
 public func start_listening(callback: EventCallback) {
     globalCallback = callback
-    
-    // Check permissions first
-    if !AXIsProcessTrusted() {
-        "".withCString { empty in
-            callback(empty, empty, empty, 1)  // error_code = 1 (permission denied)
-        }
-        return
-    }
-    
+
     // Initialize NSApplication for menu bar support
     // This is needed for status bar items to work
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)  // No dock icon, just menu bar
-    
+
     // Set up the menu bar item
     setupMenuBar()
-    
-    // Watch for app switches
-    NSWorkspace.shared.notificationCenter.addObserver(
-        forName: NSWorkspace.didActivateApplicationNotification,
-        object: nil,
-        queue: .main
-    ) { note in
-        guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] 
-              as? NSRunningApplication else { return }
-        handleAppChange(app)
+
+    if AXIsProcessTrusted() {
+        beginTracking()
+    } else {
+        reportAccessibilityDenied()
+        updatePermissionRequiredUI()
+        startPermissionPoll()
     }
-    
+
+    // Start the RunLoop (blocks forever)
+    app.run()
+}
+
+func beginTracking() {
+    if !workspaceObserverInstalled {
+        // Watch for app switches
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey]
+                  as? NSRunningApplication else { return }
+            handleAppChange(app)
+        }
+        workspaceObserverInstalled = true
+    }
+
+    updateMenuBarIcon()
+
     // Report initial state
     if let frontApp = NSWorkspace.shared.frontmostApplication {
         handleAppChange(frontApp)
     }
-    
-    // Start the RunLoop (blocks forever)
-    app.run()
+}
+
+func reportAccessibilityDenied() {
+    guard !permissionDeniedReported else { return }
+    permissionDeniedReported = true
+
+    "".withCString { empty in
+        globalCallback?(empty, empty, empty, 1)  // error_code = 1 (permission denied)
+    }
+}
+
+func startPermissionPoll() {
+    if permissionPollTimer != nil {
+        return
+    }
+
+    permissionPollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { timer in
+        if AXIsProcessTrusted() {
+            timer.invalidate()
+            permissionPollTimer = nil
+            NSLog("[TimeTracker] Accessibility granted, enabling tracking")
+            beginTracking()
+        }
+    }
 }
 
 // --- MENU BAR ---
@@ -260,6 +294,25 @@ func updateMenuBar(appName: String, windowTitle: String) {
             } else {
                 windowItem.title = "Window: \(truncatedTitle)"
             }
+        }
+    }
+}
+
+func updatePermissionRequiredUI() {
+    DispatchQueue.main.async {
+        guard let button = statusItem?.button, let menu = statusItem?.menu else { return }
+
+        button.image = NSImage(systemSymbolName: "lock.trianglebadge.exclamationmark", accessibilityDescription: "Time Tracker")
+        button.image?.isTemplate = true
+
+        if let statusMenuItem = menu.item(withTag: 102) {
+            statusMenuItem.title = "Status: Waiting for Accessibility permission"
+        }
+        if let appItem = menu.item(withTag: 100) {
+            appItem.title = "App: (permission required)"
+        }
+        if let windowItem = menu.item(withTag: 101) {
+            windowItem.title = "Window: Grant access in System Settings"
         }
     }
 }

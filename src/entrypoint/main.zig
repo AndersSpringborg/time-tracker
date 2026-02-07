@@ -1641,7 +1641,8 @@ fn onEvent(
             \\Please grant access in:
             \\  System Settings → Privacy & Security → Accessibility
             \\
-            \\Add your Terminal app (or the binary) and restart.
+            \\Add the running binary (usually ~/.local/bin/tt-worker for launchd installs).
+            \\Keep the worker running; tracking will start automatically after permission is granted.
             \\
         , .{});
         return;
