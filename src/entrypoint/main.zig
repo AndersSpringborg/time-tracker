@@ -5,15 +5,12 @@ const c = migrations.c;
 
 const Tracker = @import("tracker").Tracker;
 const BufferedRepository = @import("buffered_repository").BufferedRepository;
-const DuckDbRuleRepository = @import("duckdb_rule_repository").DuckDbRuleRepository;
-const DuckDbHierarchyRepository = @import("duckdb_hierarchy_repository").DuckDbHierarchyRepository;
-const DuckDbEventRepository = @import("duckdb_event_repository").DuckDbEventRepository;
+const event_dto_mapper = @import("event_dto_mapper");
 
 extern fn check_accessibility() bool;
 extern fn start_listening(cb: *const fn ([*c]const u8, [*c]const u8, [*c]const u8, i32) callconv(.c) void) void;
 extern fn add_work_wifi(pattern: [*c]const u8) void;
 extern fn clear_work_wifis() void;
-extern fn update_matched_info(project: [*c]const u8, activity: [*c]const u8) void;
 extern fn clear_matched_info() void;
 extern fn update_unmatched_count(count: i64) void;
 
@@ -21,11 +18,6 @@ var global_tracker: ?*Tracker = null;
 var global_allocator: ?std.mem.Allocator = null;
 var global_db_path: ?[:0]const u8 = null;
 var global_daemon_db_path_buf: [640]u8 = undefined;
-
-const ActivityKind = struct {
-    activity_id: i64,
-    kind_id: i64,
-};
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -103,14 +95,14 @@ fn getTimestampMs() i64 {
     return sec_ms + nsec_ms;
 }
 
-fn getCurrentProjectId(conn: c.duckdb_connection) ?i64 {
+fn countUnmatchedEvents(conn: c.duckdb_connection) ?i64 {
     var result: c.duckdb_result = undefined;
     const sql =
-        \\SELECT project_id
-        \\FROM project_assignments
-        \\WHERE ended_at IS NULL
-        \\ORDER BY started_at DESC
-        \\LIMIT 1
+        \\SELECT COUNT(*)
+        \\FROM events
+        \\WHERE project_id IS NULL
+        \\  AND activity_id IS NULL
+        \\  AND manually_mapped = false
     ;
 
     if (c.duckdb_query(conn, sql, &result) == c.DuckDBError) {
@@ -119,42 +111,11 @@ fn getCurrentProjectId(conn: c.duckdb_connection) ?i64 {
     }
     defer c.duckdb_destroy_result(&result);
 
-    if (c.duckdb_row_count(&result) == 0) return null;
+    if (c.duckdb_row_count(&result) == 0) return 0;
     return c.duckdb_value_int64(&result, 0, 0);
 }
 
-fn getLastMappedActivityKind(conn: c.duckdb_connection) ?ActivityKind {
-    var result: c.duckdb_result = undefined;
-    const sql =
-        \\SELECT activity_id, kind_id
-        \\FROM events
-        \\WHERE activity_id IS NOT NULL AND kind_id IS NOT NULL
-        \\ORDER BY timestamp_ms DESC, id DESC
-        \\LIMIT 1
-    ;
-
-    if (c.duckdb_query(conn, sql, &result) == c.DuckDBError) {
-        c.duckdb_destroy_result(&result);
-        return null;
-    }
-    defer c.duckdb_destroy_result(&result);
-
-    if (c.duckdb_row_count(&result) == 0) return null;
-
-    return .{
-        .activity_id = c.duckdb_value_int64(&result, 0, 0),
-        .kind_id = c.duckdb_value_int64(&result, 1, 0),
-    };
-}
-
-fn updateUnmatchedCount(conn: c.duckdb_connection, allocator: std.mem.Allocator) void {
-    var event_repo = DuckDbEventRepository.init(conn, allocator);
-    const count = event_repo.countUnmatchedEvents();
-    update_unmatched_count(count);
-}
-
-fn matchAndUpdateMenubar(app: []const u8, title: []const u8) void {
-    const allocator = global_allocator orelse return;
+fn refreshMenubarState() void {
     const db_path = global_db_path orelse return;
 
     var db: c.duckdb_database = undefined;
@@ -170,56 +131,9 @@ fn matchAndUpdateMenubar(app: []const u8, title: []const u8) void {
     }
     defer c.duckdb_disconnect(&conn);
 
-    const current_project_id = getCurrentProjectId(conn);
-
-    var rule_repo = DuckDbRuleRepository.init(conn, allocator);
-    const match_result = rule_repo.findMatchWithContext(app, title, current_project_id) catch {
-        clear_matched_info();
-        return;
-    };
-
-    if (match_result) |match| {
-        const resolved_kind_id = switch (match.action) {
-            .map_kind => match.kind_id orelse {
-                clear_matched_info();
-                return;
-            },
-            .follow_previous => blk: {
-                const previous = getLastMappedActivityKind(conn) orelse {
-                    clear_matched_info();
-                    return;
-                };
-                break :blk previous.kind_id;
-            },
-        };
-
-        var hierarchy_repo_impl = DuckDbHierarchyRepository.init(conn, allocator);
-        const names = hierarchy_repo_impl.getProjectAndActivityForKind(resolved_kind_id) catch {
-            clear_matched_info();
-            return;
-        };
-        defer {
-            allocator.free(@constCast(names.project));
-            allocator.free(@constCast(names.activity));
-        }
-
-        var project_buf: [256]u8 = undefined;
-        var activity_buf: [256]u8 = undefined;
-
-        if (names.project.len < project_buf.len and names.activity.len < activity_buf.len) {
-            @memcpy(project_buf[0..names.project.len], names.project);
-            project_buf[names.project.len] = 0;
-
-            @memcpy(activity_buf[0..names.activity.len], names.activity);
-            activity_buf[names.activity.len] = 0;
-
-            update_matched_info(&project_buf, &activity_buf);
-        }
-    } else {
-        clear_matched_info();
-    }
-
-    updateUnmatchedCount(conn, allocator);
+    clear_matched_info();
+    const unmatched = countUnmatchedEvents(conn) orelse return;
+    update_unmatched_count(unmatched);
 }
 
 fn onEvent(
@@ -248,13 +162,40 @@ fn onEvent(
     const wifi = std.mem.span(c_wifi);
     const timestamp = getTimestampMs();
 
-    std.debug.print("[Event] App: {s} | Title: {s} | WiFi: {s}\n", .{ app, title, wifi });
+    const allocator = global_allocator orelse return;
+
+    const dto_payload = event_dto_mapper.EventDto{
+        .timestamp_ms = timestamp,
+        .app_name = app,
+        .window_title = title,
+        .wifi_ssid = wifi,
+        .duration_ms = 0,
+        .has_project_id = false,
+        .project_id = 0,
+        .has_activity_id = false,
+        .activity_id = 0,
+        .manually_mapped = false,
+    };
+
+    const encoded = event_dto_mapper.encode(allocator, dto_payload) catch |err| {
+        std.debug.print("Failed to encode event dto: {}\n", .{err});
+        return;
+    };
+    defer allocator.free(encoded);
+
+    const decoded = event_dto_mapper.decode(encoded) catch |err| {
+        std.debug.print("Failed to decode event dto: {}\n", .{err});
+        return;
+    };
+    const event = event_dto_mapper.toDomain(decoded);
+
+    std.debug.print("[Event] App: {s} | Title: {s} | WiFi: {s}\n", .{ event.app_name, event.window_title, event.wifi_ssid });
 
     if (global_tracker) |tracker| {
-        tracker.onEventWithWifi(app, title, wifi, timestamp);
+        tracker.onEventWithWifi(event.app_name, event.window_title, event.wifi_ssid, event.timestamp_ms);
     }
 
-    matchAndUpdateMenubar(app, title);
+    refreshMenubarState();
 }
 
 fn getDaemonDbPath() ![:0]const u8 {

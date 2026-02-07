@@ -1,0 +1,13 @@
+table EventDTO {
+  timestamp_ms: long;
+  app_name: string;
+  window_title: string;
+  wifi_ssid: string;
+  duration_ms: long;
+  has_project_id: bool;
+  project_id: long;
+  has_activity_id: bool;
+  activity_id: long;
+  manually_mapped: bool;
+}
+root_type EventDTO;

@@ -3,6 +3,11 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const flatbufferz_dep = b.dependency("flatbufferz", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const flatbufferz_module = flatbufferz_dep.module("flatbufferz");
 
     const duckdb_include_path: std.Build.LazyPath = .{ .cwd_relative = "vendor/duckdb/include" };
     const duckdb_lib_path: std.Build.LazyPath = .{ .cwd_relative = "vendor/duckdb/lib" };
@@ -75,6 +80,26 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
+            .{ .name = "domain_event", .module = domain_event_module },
+        },
+    });
+
+    const event_dto_generated_module = b.createModule(.{
+        .root_source_file = b.path("src/external/dto/flatbuffers/EventDTO.fb.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "flatbufferz", .module = flatbufferz_module },
+        },
+    });
+
+    const event_dto_mapper_module = b.createModule(.{
+        .root_source_file = b.path("src/external/dto/event_mapper.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "flatbufferz", .module = flatbufferz_module },
+            .{ .name = "event_dto_generated", .module = event_dto_generated_module },
             .{ .name = "domain_event", .module = domain_event_module },
         },
     });
@@ -162,6 +187,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "duckdb_rule_repository", .module = duckdb_rule_repository },
             .{ .name = "duckdb_hierarchy_repository", .module = duckdb_hierarchy_repository },
             .{ .name = "duckdb_event_repository", .module = duckdb_event_repository },
+            .{ .name = "event_dto_mapper", .module = event_dto_mapper_module },
         },
     });
     worker_module.addIncludePath(duckdb_include_path);
@@ -263,6 +289,18 @@ pub fn build(b: *std.Build) void {
         },
     }) });
     test_step.dependOn(&b.addRunArtifact(tracker_tests).step);
+
+    const event_dto_mapper_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/external/dto/event_mapper_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "flatbufferz", .module = flatbufferz_module },
+            .{ .name = "event_dto_generated", .module = event_dto_generated_module },
+            .{ .name = "domain_event", .module = domain_event_module },
+        },
+    }) });
+    test_step.dependOn(&b.addRunArtifact(event_dto_mapper_tests).step);
 
     // Keep zig test scope to worker-safe unit tests without external link-time coupling.
 }

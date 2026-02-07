@@ -4,6 +4,7 @@ go 1.25
 
 require (
 	github.com/duckdb/duckdb-go/v2 v2.5.5
+	github.com/google/flatbuffers v25.12.19+incompatible
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -17,7 +18,6 @@ require (
 	github.com/duckdb/duckdb-go-bindings/lib/windows-amd64 v0.3.3 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
-	github.com/google/flatbuffers v25.12.19+incompatible // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/klauspost/compress v1.18.3 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
