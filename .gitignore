@@ -1,3 +1,5 @@
+internal/worker/assets/*
+
 # Zig build artifacts
 .zig-cache/
 zig-out/
