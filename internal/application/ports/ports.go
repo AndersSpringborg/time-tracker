@@ -3,6 +3,7 @@ package ports
 import (
 	"context"
 
+	tidsregmodel "time-tracker/internal/application/integrations/tidsreg"
 	"time-tracker/internal/domain"
 )
 
@@ -58,10 +59,10 @@ type ReviewRepository interface {
 
 type TidsregGateway interface {
 	Authenticate(ctx context.Context, username, password string) (string, error)
-	ListCustomers(ctx context.Context, sessionCookie string, mode domain.TidsregMode) ([]domain.TidsregCustomer, error)
-	ListProjects(ctx context.Context, sessionCookie string, customerID int64, mode domain.TidsregMode) ([]domain.TidsregProject, error)
-	ListPhases(ctx context.Context, sessionCookie string, projectID int64, mode domain.TidsregMode) ([]domain.TidsregPhase, error)
-	ListActivities(ctx context.Context, sessionCookie string, phaseID int64, mode domain.TidsregMode) ([]domain.TidsregActivity, error)
+	ListCustomers(ctx context.Context, sessionCookie string, mode tidsregmodel.Mode) ([]tidsregmodel.Customer, error)
+	ListProjects(ctx context.Context, sessionCookie string, customerID int64, mode tidsregmodel.Mode) ([]tidsregmodel.Project, error)
+	ListPhases(ctx context.Context, sessionCookie string, projectID int64, mode tidsregmodel.Mode) ([]tidsregmodel.Phase, error)
+	ListActivities(ctx context.Context, sessionCookie string, phaseID int64, mode tidsregmodel.Mode) ([]tidsregmodel.Activity, error)
 }
 
 type TidsregImportRepository interface {

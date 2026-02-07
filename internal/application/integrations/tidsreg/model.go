@@ -1,4 +1,4 @@
-package domain
+package tidsreg
 
 import (
 	"fmt"
@@ -6,39 +6,39 @@ import (
 	"strings"
 )
 
-type TidsregMode int
+type Mode int
 
 const (
-	TidsregModeTime    TidsregMode = 0
-	TidsregModeVoucher TidsregMode = 2
+	ModeTime    Mode = 0
+	ModeVoucher Mode = 2
 )
 
-type TidsregCustomer struct {
+type Customer struct {
 	CustomerID int64
 	Name       string
 }
 
-type TidsregProject struct {
+type Project struct {
 	ProjectID    int64
 	CustomerID   int64
 	Name         string
 	CustomerName string
 }
 
-type TidsregPhase struct {
+type Phase struct {
 	PhaseID     int64
 	ProjectID   int64
 	Name        string
 	ProjectName string
 }
 
-type TidsregActivity struct {
+type Activity struct {
 	ActivityID int64
 	PhaseID    int64
 	Name       string
 }
 
-type TidsregImportCandidate struct {
+type ImportCandidate struct {
 	Key          string
 	CustomerID   int64
 	CustomerName string
@@ -47,17 +47,17 @@ type TidsregImportCandidate struct {
 	PhaseID      int64
 	PhaseName    string
 	TargetTitle  string
-	Activities   []TidsregActivity
+	Activities   []Activity
 }
 
-type TidsregImportPreview struct {
-	Mode          TidsregMode
-	Customers     []TidsregCustomer
-	Candidates    []TidsregImportCandidate
+type ImportPreview struct {
+	Mode          Mode
+	Customers     []Customer
+	Candidates    []ImportCandidate
 	GeneratedAtMS int64
 }
 
-type TidsregImportResult struct {
+type ImportResult struct {
 	ImportedCandidates int
 	ProjectsCreated    int
 	ProjectsUpdated    int
@@ -66,41 +66,14 @@ type TidsregImportResult struct {
 	ActivitiesDeleted  int
 }
 
-type ImportedProjectUpsert struct {
-	Source             string
-	ExternalCustomerID int64
-	ExternalProjectID  int64
-	ExternalPhaseID    int64
-	Title              string
-	Metadata           string
-}
-
-type ImportedProjectUpsertResult struct {
-	ProjectID int64
-	Created   bool
-	Updated   bool
-}
-
-type ImportedActivityUpsert struct {
-	Source             string
-	ExternalActivityID int64
-	Title              string
-}
-
-type ImportedActivitySyncResult struct {
-	Created int
-	Updated int
-	Deleted int
-}
-
-func ParseTidsregMode(v string) TidsregMode {
+func ParseMode(v string) Mode {
 	if strings.TrimSpace(v) == "2" {
-		return TidsregModeVoucher
+		return ModeVoucher
 	}
-	return TidsregModeTime
+	return ModeTime
 }
 
-func BuildTidsregImportKey(customerID, projectID, phaseID int64) string {
+func BuildImportKey(customerID, projectID, phaseID int64) string {
 	return fmt.Sprintf("%d:%d:%d", customerID, projectID, phaseID)
 }
 
@@ -123,8 +96,8 @@ func normalizeSegment(v string) string {
 	return strings.Join(strings.Fields(v), " ")
 }
 
-func NormalizeTidsregActivities(items []TidsregActivity) []TidsregActivity {
-	out := make([]TidsregActivity, 0, len(items))
+func NormalizeActivities(items []Activity) []Activity {
+	out := make([]Activity, 0, len(items))
 	seen := make(map[int64]struct{}, len(items))
 	for _, item := range items {
 		if item.ActivityID <= 0 {
@@ -150,7 +123,7 @@ func NormalizeTidsregActivities(items []TidsregActivity) []TidsregActivity {
 	return out
 }
 
-func FilterImportCandidates(preview TidsregImportPreview, selectedKeys []string) []TidsregImportCandidate {
+func FilterImportCandidates(preview ImportPreview, selectedKeys []string) []ImportCandidate {
 	if len(selectedKeys) == 0 {
 		return nil
 	}
@@ -161,7 +134,7 @@ func FilterImportCandidates(preview TidsregImportPreview, selectedKeys []string)
 			allowed[key] = struct{}{}
 		}
 	}
-	out := make([]TidsregImportCandidate, 0, len(preview.Candidates))
+	out := make([]ImportCandidate, 0, len(preview.Candidates))
 	for _, candidate := range preview.Candidates {
 		if _, ok := allowed[candidate.Key]; ok {
 			out = append(out, candidate)

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"time-tracker/internal/application/contracts"
+	tidsregmodel "time-tracker/internal/application/integrations/tidsreg"
 	"time-tracker/internal/application/usecases"
 	"time-tracker/internal/domain"
 	apidto "time-tracker/internal/external/api/dto"
@@ -48,9 +49,9 @@ type pageData struct {
 	DraftMinDuration  int64
 	DraftGroups       []domain.GroupedEvent
 	RuleSummary       string
-	TidsregCustomers  []domain.TidsregCustomer
-	TidsregPreview    domain.TidsregImportPreview
-	TidsregResult     domain.TidsregImportResult
+	TidsregCustomers  []tidsregmodel.Customer
+	TidsregPreview    tidsregmodel.ImportPreview
+	TidsregResult     tidsregmodel.ImportResult
 	TidsregSummary    string
 	TidsregError      string
 	TidsregMode       string
@@ -93,6 +94,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/projects/activate", s.handleProjectActivate)
 	mux.HandleFunc("/projects/clear", s.handleProjectClear)
 	mux.HandleFunc("/projects/", s.handleProjectEnd)
+	mux.HandleFunc("/integrations", s.handleIntegrationsPage)
 	mux.HandleFunc("/integrations/tidsreg", s.handleTidsregPage)
 	mux.HandleFunc("/partials/tidsreg/login", s.handleTidsregLoginPartial)
 	mux.HandleFunc("/integrations/tidsreg/session", s.handleTidsregSession)

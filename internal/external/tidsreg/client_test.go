@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"time-tracker/internal/domain"
+	tidsregmodel "time-tracker/internal/application/integrations/tidsreg"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -64,7 +64,7 @@ func TestListCustomersUsesModeAndCookie(t *testing.T) {
 		return response(http.StatusOK, map[string][]string{"Content-Type": {"application/json"}}, `[{"CustomerId":1,"Name":"Trifork"}]`), nil
 	})
 
-	customers, err := c.ListCustomers(context.Background(), "session=abc", domain.TidsregModeTime)
+	customers, err := c.ListCustomers(context.Background(), "session=abc", tidsregmodel.ModeTime)
 	if err != nil {
 		t.Fatalf("ListCustomers failed: %v", err)
 	}

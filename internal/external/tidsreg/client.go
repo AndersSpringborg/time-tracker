@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"time-tracker/internal/domain"
+	tidsregmodel "time-tracker/internal/application/integrations/tidsreg"
 )
 
 type Client struct {
@@ -70,7 +70,7 @@ func (c *Client) Authenticate(ctx context.Context, username, password string) (s
 	return strings.Join(parts, "; "), nil
 }
 
-func (c *Client) ListCustomers(ctx context.Context, sessionCookie string, mode domain.TidsregMode) ([]domain.TidsregCustomer, error) {
+func (c *Client) ListCustomers(ctx context.Context, sessionCookie string, mode tidsregmodel.Mode) ([]tidsregmodel.Customer, error) {
 	var payload []struct {
 		CustomerID int64  `json:"CustomerId"`
 		Name       string `json:"Name"`
@@ -78,14 +78,14 @@ func (c *Client) ListCustomers(ctx context.Context, sessionCookie string, mode d
 	if err := c.getJSON(ctx, sessionCookie, "/Find/SelectCustomers?mode="+strconv.Itoa(int(mode)), &payload); err != nil {
 		return nil, err
 	}
-	out := make([]domain.TidsregCustomer, 0, len(payload))
+	out := make([]tidsregmodel.Customer, 0, len(payload))
 	for _, item := range payload {
-		out = append(out, domain.TidsregCustomer{CustomerID: item.CustomerID, Name: item.Name})
+		out = append(out, tidsregmodel.Customer{CustomerID: item.CustomerID, Name: item.Name})
 	}
 	return out, nil
 }
 
-func (c *Client) ListProjects(ctx context.Context, sessionCookie string, customerID int64, mode domain.TidsregMode) ([]domain.TidsregProject, error) {
+func (c *Client) ListProjects(ctx context.Context, sessionCookie string, customerID int64, mode tidsregmodel.Mode) ([]tidsregmodel.Project, error) {
 	var payload []struct {
 		ProjectID int64  `json:"ProjectId"`
 		Name      string `json:"Name"`
@@ -94,14 +94,14 @@ func (c *Client) ListProjects(ctx context.Context, sessionCookie string, custome
 	if err := c.getJSON(ctx, sessionCookie, path, &payload); err != nil {
 		return nil, err
 	}
-	out := make([]domain.TidsregProject, 0, len(payload))
+	out := make([]tidsregmodel.Project, 0, len(payload))
 	for _, item := range payload {
-		out = append(out, domain.TidsregProject{ProjectID: item.ProjectID, CustomerID: customerID, Name: item.Name})
+		out = append(out, tidsregmodel.Project{ProjectID: item.ProjectID, CustomerID: customerID, Name: item.Name})
 	}
 	return out, nil
 }
 
-func (c *Client) ListPhases(ctx context.Context, sessionCookie string, projectID int64, mode domain.TidsregMode) ([]domain.TidsregPhase, error) {
+func (c *Client) ListPhases(ctx context.Context, sessionCookie string, projectID int64, mode tidsregmodel.Mode) ([]tidsregmodel.Phase, error) {
 	var payload []struct {
 		PhaseID int64  `json:"PhaseId"`
 		Name    string `json:"Name"`
@@ -110,14 +110,14 @@ func (c *Client) ListPhases(ctx context.Context, sessionCookie string, projectID
 	if err := c.getJSON(ctx, sessionCookie, path, &payload); err != nil {
 		return nil, err
 	}
-	out := make([]domain.TidsregPhase, 0, len(payload))
+	out := make([]tidsregmodel.Phase, 0, len(payload))
 	for _, item := range payload {
-		out = append(out, domain.TidsregPhase{PhaseID: item.PhaseID, ProjectID: projectID, Name: item.Name})
+		out = append(out, tidsregmodel.Phase{PhaseID: item.PhaseID, ProjectID: projectID, Name: item.Name})
 	}
 	return out, nil
 }
 
-func (c *Client) ListActivities(ctx context.Context, sessionCookie string, phaseID int64, mode domain.TidsregMode) ([]domain.TidsregActivity, error) {
+func (c *Client) ListActivities(ctx context.Context, sessionCookie string, phaseID int64, mode tidsregmodel.Mode) ([]tidsregmodel.Activity, error) {
 	var payload []struct {
 		ActivityID int64  `json:"ActivityId"`
 		Name       string `json:"Name"`
@@ -126,9 +126,9 @@ func (c *Client) ListActivities(ctx context.Context, sessionCookie string, phase
 	if err := c.getJSON(ctx, sessionCookie, path, &payload); err != nil {
 		return nil, err
 	}
-	out := make([]domain.TidsregActivity, 0, len(payload))
+	out := make([]tidsregmodel.Activity, 0, len(payload))
 	for _, item := range payload {
-		out = append(out, domain.TidsregActivity{ActivityID: item.ActivityID, PhaseID: phaseID, Name: item.Name})
+		out = append(out, tidsregmodel.Activity{ActivityID: item.ActivityID, PhaseID: phaseID, Name: item.Name})
 	}
 	return out, nil
 }

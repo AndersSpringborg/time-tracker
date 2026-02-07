@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"time-tracker/internal/application/contracts"
+	tidsregmodel "time-tracker/internal/application/integrations/tidsreg"
 	"time-tracker/internal/domain"
 )
 
@@ -13,10 +14,10 @@ type fakeTidsregGateway struct {
 	authCookie string
 	authErr    error
 
-	customers  []domain.TidsregCustomer
-	projects   map[int64][]domain.TidsregProject
-	phases     map[int64][]domain.TidsregPhase
-	activities map[int64][]domain.TidsregActivity
+	customers  []tidsregmodel.Customer
+	projects   map[int64][]tidsregmodel.Project
+	phases     map[int64][]tidsregmodel.Phase
+	activities map[int64][]tidsregmodel.Activity
 }
 
 func (f *fakeTidsregGateway) Authenticate(context.Context, string, string) (string, error) {
@@ -29,19 +30,19 @@ func (f *fakeTidsregGateway) Authenticate(context.Context, string, string) (stri
 	return f.authCookie, nil
 }
 
-func (f *fakeTidsregGateway) ListCustomers(context.Context, string, domain.TidsregMode) ([]domain.TidsregCustomer, error) {
+func (f *fakeTidsregGateway) ListCustomers(context.Context, string, tidsregmodel.Mode) ([]tidsregmodel.Customer, error) {
 	return f.customers, nil
 }
 
-func (f *fakeTidsregGateway) ListProjects(_ context.Context, _ string, customerID int64, _ domain.TidsregMode) ([]domain.TidsregProject, error) {
+func (f *fakeTidsregGateway) ListProjects(_ context.Context, _ string, customerID int64, _ tidsregmodel.Mode) ([]tidsregmodel.Project, error) {
 	return f.projects[customerID], nil
 }
 
-func (f *fakeTidsregGateway) ListPhases(_ context.Context, _ string, projectID int64, _ domain.TidsregMode) ([]domain.TidsregPhase, error) {
+func (f *fakeTidsregGateway) ListPhases(_ context.Context, _ string, projectID int64, _ tidsregmodel.Mode) ([]tidsregmodel.Phase, error) {
 	return f.phases[projectID], nil
 }
 
-func (f *fakeTidsregGateway) ListActivities(_ context.Context, _ string, phaseID int64, _ domain.TidsregMode) ([]domain.TidsregActivity, error) {
+func (f *fakeTidsregGateway) ListActivities(_ context.Context, _ string, phaseID int64, _ tidsregmodel.Mode) ([]tidsregmodel.Activity, error) {
 	return f.activities[phaseID], nil
 }
 
@@ -65,14 +66,14 @@ func (f *fakeTidsregImportRepo) SyncImportedActivities(_ context.Context, projec
 
 func TestTidsregImportUsecaseBuildsPreview(t *testing.T) {
 	gateway := &fakeTidsregGateway{
-		customers: []domain.TidsregCustomer{{CustomerID: 1, Name: "Trifork"}},
-		projects: map[int64][]domain.TidsregProject{
+		customers: []tidsregmodel.Customer{{CustomerID: 1, Name: "Trifork"}},
+		projects: map[int64][]tidsregmodel.Project{
 			1: {{ProjectID: 10, CustomerID: 1, Name: "Portal"}},
 		},
-		phases: map[int64][]domain.TidsregPhase{
+		phases: map[int64][]tidsregmodel.Phase{
 			10: {{PhaseID: 100, ProjectID: 10, Name: "Development"}},
 		},
-		activities: map[int64][]domain.TidsregActivity{
+		activities: map[int64][]tidsregmodel.Activity{
 			100: {{ActivityID: 1000, PhaseID: 100, Name: "Coding"}},
 		},
 	}
@@ -80,7 +81,7 @@ func TestTidsregImportUsecaseBuildsPreview(t *testing.T) {
 
 	previewRes, err := uc.BuildPreview(context.Background(), contracts.TidsregBuildPreviewRequest{
 		SessionCookie:       "session=ok",
-		Mode:                domain.TidsregModeTime,
+		Mode:                tidsregmodel.ModeTime,
 		Customers:           gateway.customers,
 		SelectedCustomerIDs: []int64{1},
 	})
@@ -102,14 +103,14 @@ func TestTidsregImportUsecaseBuildsPreview(t *testing.T) {
 func TestTidsregImportUsecaseCommitPersistsSelectedCandidates(t *testing.T) {
 	repo := &fakeTidsregImportRepo{}
 	uc := NewTidsregImportUsecase(&fakeTidsregGateway{}, repo)
-	preview := domain.TidsregImportPreview{Candidates: []domain.TidsregImportCandidate{
+	preview := tidsregmodel.ImportPreview{Candidates: []tidsregmodel.ImportCandidate{
 		{
 			Key:          "1:10:100",
 			CustomerID:   1,
 			ProjectID:    10,
 			PhaseID:      100,
 			TargetTitle:  "A > B > C",
-			Activities:   []domain.TidsregActivity{{ActivityID: 1000, Name: "Coding"}},
+			Activities:   []tidsregmodel.Activity{{ActivityID: 1000, Name: "Coding"}},
 			CustomerName: "A",
 			ProjectName:  "B",
 			PhaseName:    "C",
@@ -142,14 +143,14 @@ func TestTidsregImportUsecaseAuthenticateValidation(t *testing.T) {
 	if _, err := uc.AuthenticateAndListCustomers(context.Background(), contracts.TidsregAuthenticateRequest{
 		Username: "",
 		Password: "",
-		Mode:     domain.TidsregModeTime,
+		Mode:     tidsregmodel.ModeTime,
 	}); err == nil {
 		t.Fatalf("expected validation error")
 	}
 	if _, err := uc.AuthenticateAndListCustomers(context.Background(), contracts.TidsregAuthenticateRequest{
 		Username: "u",
 		Password: "p",
-		Mode:     domain.TidsregModeTime,
+		Mode:     tidsregmodel.ModeTime,
 	}); err == nil {
 		t.Fatalf("expected auth error")
 	}

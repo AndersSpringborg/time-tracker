@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"time-tracker/internal/application/contracts"
-	"time-tracker/internal/domain"
+	tidsregmodel "time-tracker/internal/application/integrations/tidsreg"
 )
 
 const (
@@ -20,9 +20,9 @@ const (
 
 type tidsregSessionData struct {
 	Cookie    string
-	Mode      domain.TidsregMode
-	Customers []domain.TidsregCustomer
-	Preview   *domain.TidsregImportPreview
+	Mode      tidsregmodel.Mode
+	Customers []tidsregmodel.Customer
+	Preview   *tidsregmodel.ImportPreview
 	ExpiresAt time.Time
 }
 
@@ -90,8 +90,12 @@ func randomID() string {
 	return hex.EncodeToString(b)
 }
 
+func (s *Server) handleIntegrationsPage(w http.ResponseWriter, r *http.Request) {
+	s.render(w, "layout", pageData{Title: "Integrations", Page: "integrations", Body: "integrations"})
+}
+
 func (s *Server) handleTidsregPage(w http.ResponseWriter, r *http.Request) {
-	s.render(w, "layout", pageData{Title: "Integrations", Page: "integrations_tidsreg", Body: "integrations_tidsreg", TidsregMode: "0"})
+	s.render(w, "layout", pageData{Title: "Tidsreg Integration", Page: "integrations_tidsreg", Body: "integrations_tidsreg", TidsregMode: "0"})
 }
 
 func (s *Server) handleTidsregLoginPartial(w http.ResponseWriter, r *http.Request) {
@@ -117,7 +121,7 @@ func (s *Server) handleTidsregSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	modeRaw := strings.TrimSpace(r.Form.Get("mode"))
-	mode := domain.ParseTidsregMode(modeRaw)
+	mode := tidsregmodel.ParseMode(modeRaw)
 	username := strings.TrimSpace(r.Form.Get("username"))
 	password := r.Form.Get("password")
 

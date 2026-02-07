@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"time-tracker/internal/application/contracts"
+	tidsregmodel "time-tracker/internal/application/integrations/tidsreg"
 	"time-tracker/internal/application/ports"
 	"time-tracker/internal/domain"
 )
@@ -65,7 +66,7 @@ func (u *TidsregImportUsecase) BuildPreview(ctx context.Context, req contracts.T
 		return contracts.TidsregBuildPreviewResponse{}, fmt.Errorf("select at least one valid customer")
 	}
 
-	selectedCustomers := make([]domain.TidsregCustomer, 0, len(selectedSet))
+	selectedCustomers := make([]tidsregmodel.Customer, 0, len(selectedSet))
 	for _, customer := range req.Customers {
 		if _, ok := selectedSet[customer.CustomerID]; ok {
 			selectedCustomers = append(selectedCustomers, customer)
@@ -82,10 +83,10 @@ func (u *TidsregImportUsecase) BuildPreview(ctx context.Context, req contracts.T
 		return strings.ToLower(selectedCustomers[i].Name) < strings.ToLower(selectedCustomers[j].Name)
 	})
 
-	preview := domain.TidsregImportPreview{
+	preview := tidsregmodel.ImportPreview{
 		Mode:          req.Mode,
 		Customers:     selectedCustomers,
-		Candidates:    make([]domain.TidsregImportCandidate, 0),
+		Candidates:    make([]tidsregmodel.ImportCandidate, 0),
 		GeneratedAtMS: time.Now().UnixMilli(),
 	}
 
@@ -119,16 +120,16 @@ func (u *TidsregImportUsecase) BuildPreview(ctx context.Context, req contracts.T
 				if err != nil {
 					return contracts.TidsregBuildPreviewResponse{}, err
 				}
-				activities = domain.NormalizeTidsregActivities(activities)
-				candidate := domain.TidsregImportCandidate{
-					Key:          domain.BuildTidsregImportKey(customer.CustomerID, project.ProjectID, phase.PhaseID),
+				activities = tidsregmodel.NormalizeActivities(activities)
+				candidate := tidsregmodel.ImportCandidate{
+					Key:          tidsregmodel.BuildImportKey(customer.CustomerID, project.ProjectID, phase.PhaseID),
 					CustomerID:   customer.CustomerID,
 					CustomerName: customer.Name,
 					ProjectID:    project.ProjectID,
 					ProjectName:  projectName,
 					PhaseID:      phase.PhaseID,
 					PhaseName:    phase.Name,
-					TargetTitle:  domain.BuildProjectTitle(customer.Name, projectName, phase.Name),
+					TargetTitle:  tidsregmodel.BuildProjectTitle(customer.Name, projectName, phase.Name),
 					Activities:   activities,
 				}
 				preview.Candidates = append(preview.Candidates, candidate)
@@ -146,12 +147,12 @@ func (u *TidsregImportUsecase) BuildPreview(ctx context.Context, req contracts.T
 }
 
 func (u *TidsregImportUsecase) Commit(ctx context.Context, req contracts.TidsregCommitRequest) (contracts.TidsregCommitResponse, error) {
-	candidates := domain.FilterImportCandidates(req.Preview, req.SelectedKeys)
+	candidates := tidsregmodel.FilterImportCandidates(req.Preview, req.SelectedKeys)
 	if len(candidates) == 0 {
 		return contracts.TidsregCommitResponse{}, fmt.Errorf("select at least one project phase to import")
 	}
 
-	result := domain.TidsregImportResult{ImportedCandidates: len(candidates)}
+	result := tidsregmodel.ImportResult{ImportedCandidates: len(candidates)}
 	for _, candidate := range candidates {
 		upsert, err := u.repo.UpsertImportedProject(ctx, domain.ImportedProjectUpsert{
 			Source:             tidsregSource,
@@ -159,7 +160,7 @@ func (u *TidsregImportUsecase) Commit(ctx context.Context, req contracts.Tidsreg
 			ExternalProjectID:  candidate.ProjectID,
 			ExternalPhaseID:    candidate.PhaseID,
 			Title:              candidate.TargetTitle,
-			Metadata:           domain.BuildProjectMetadata(candidate.CustomerID, candidate.ProjectID, candidate.PhaseID),
+			Metadata:           tidsregmodel.BuildProjectMetadata(candidate.CustomerID, candidate.ProjectID, candidate.PhaseID),
 		})
 		if err != nil {
 			return contracts.TidsregCommitResponse{}, err

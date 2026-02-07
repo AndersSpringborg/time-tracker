@@ -1,4 +1,4 @@
-package domain
+package tidsreg
 
 import "testing"
 
@@ -9,8 +9,8 @@ func TestBuildProjectTitleNormalizesSegments(t *testing.T) {
 	}
 }
 
-func TestNormalizeTidsregActivitiesRemovesDuplicatesAndInvalid(t *testing.T) {
-	activities := NormalizeTidsregActivities([]TidsregActivity{
+func TestNormalizeActivitiesRemovesDuplicatesAndInvalid(t *testing.T) {
+	activities := NormalizeActivities([]Activity{
 		{ActivityID: 2, Name: "Meeting"},
 		{ActivityID: 1, Name: " Coding "},
 		{ActivityID: 1, Name: "Coding duplicate"},
@@ -25,7 +25,7 @@ func TestNormalizeTidsregActivitiesRemovesDuplicatesAndInvalid(t *testing.T) {
 }
 
 func TestFilterImportCandidates(t *testing.T) {
-	preview := TidsregImportPreview{Candidates: []TidsregImportCandidate{{Key: "a"}, {Key: "b"}}}
+	preview := ImportPreview{Candidates: []ImportCandidate{{Key: "a"}, {Key: "b"}}}
 	filtered := FilterImportCandidates(preview, []string{"b"})
 	if len(filtered) != 1 || filtered[0].Key != "b" {
 		t.Fatalf("unexpected filtered candidates: %+v", filtered)

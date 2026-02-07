@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	tidsregmodel "time-tracker/internal/application/integrations/tidsreg"
 	"time-tracker/internal/application/usecases"
 	"time-tracker/internal/domain"
 )
@@ -104,7 +105,28 @@ func TestRulesPartialRendersDraftActions(t *testing.T) {
 	}
 }
 
-func TestIntegrationsPageRendersTidsregLoginForm(t *testing.T) {
+func TestIntegrationsHubRendersTidsregCard(t *testing.T) {
+	s, err := New(&usecases.App{})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/integrations", nil)
+	rr := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "Tidsreg") {
+		t.Fatalf("expected tidsreg card in body")
+	}
+	if !strings.Contains(body, "href=\"/integrations/tidsreg\"") {
+		t.Fatalf("expected tidsreg card link in body")
+	}
+}
+
+func TestTidsregIntegrationPageRendersLoginForm(t *testing.T) {
 	s, err := New(&usecases.App{})
 	if err != nil {
 		t.Fatalf("new server: %v", err)
@@ -122,5 +144,24 @@ func TestIntegrationsPageRendersTidsregLoginForm(t *testing.T) {
 	}
 	if !strings.Contains(body, "Load Customers") {
 		t.Fatalf("expected tidsreg login form in body")
+	}
+}
+
+func TestTidsregCustomersTemplateDefaultsToUnchecked(t *testing.T) {
+	s, err := New(&usecases.App{})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	rr := httptest.NewRecorder()
+	s.render(rr, "partials/tidsreg_customers", pageData{
+		TidsregCustomers: []tidsregmodel.Customer{{CustomerID: 1, Name: "Trifork"}},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if strings.Contains(body, "name=\"customer_ids\" value=\"1\" checked") {
+		t.Fatalf("expected customer checkbox to start unchecked")
 	}
 }

@@ -1,6 +1,9 @@
 package contracts
 
-import "time-tracker/internal/domain"
+import (
+	tidsregmodel "time-tracker/internal/application/integrations/tidsreg"
+	"time-tracker/internal/domain"
+)
 
 type RulesListRequest struct{}
 type RulesListResponse struct {
@@ -226,27 +229,27 @@ type HelpListSchemasResponse struct {
 type TidsregAuthenticateRequest struct {
 	Username string
 	Password string
-	Mode     domain.TidsregMode
+	Mode     tidsregmodel.Mode
 }
 type TidsregAuthenticateResponse struct {
 	SessionCookie string
-	Customers     []domain.TidsregCustomer
+	Customers     []tidsregmodel.Customer
 }
 
 type TidsregBuildPreviewRequest struct {
 	SessionCookie       string
-	Mode                domain.TidsregMode
-	Customers           []domain.TidsregCustomer
+	Mode                tidsregmodel.Mode
+	Customers           []tidsregmodel.Customer
 	SelectedCustomerIDs []int64
 }
 type TidsregBuildPreviewResponse struct {
-	Preview domain.TidsregImportPreview
+	Preview tidsregmodel.ImportPreview
 }
 
 type TidsregCommitRequest struct {
-	Preview      domain.TidsregImportPreview
+	Preview      tidsregmodel.ImportPreview
 	SelectedKeys []string
 }
 type TidsregCommitResponse struct {
-	Result domain.TidsregImportResult
+	Result tidsregmodel.ImportResult
 }
