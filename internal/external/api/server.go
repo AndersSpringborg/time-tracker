@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"html/template"
 	"io/fs"
+	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"time-tracker/internal/application/contracts"
 	"time-tracker/internal/application/usecases"
@@ -24,6 +27,7 @@ type Server struct {
 	app            *usecases.App
 	templates      *template.Template
 	tidsregSession *tidsregSessionStore
+	logger         *log.Logger
 }
 
 type pageData struct {
@@ -62,7 +66,12 @@ func New(app *usecases.App) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{app: app, templates: tpl, tidsregSession: newTidsregSessionStore()}, nil
+	return &Server{
+		app:            app,
+		templates:      tpl,
+		tidsregSession: newTidsregSessionStore(),
+		logger:         log.New(os.Stderr, "api ", log.LstdFlags),
+	}, nil
 }
 
 func (s *Server) Routes() http.Handler {
@@ -103,7 +112,52 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/collector/start", s.handleCollectorStart)
 	mux.HandleFunc("/collector/stop", s.handleCollectorStop)
 	mux.HandleFunc("/collector/status", s.handleCollectorStatus)
-	return mux
+	return s.requestLoggingMiddleware(s.recoverMiddleware(mux))
+}
+
+type loggingResponseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (w *loggingResponseWriter) WriteHeader(code int) {
+	w.statusCode = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *loggingResponseWriter) status() int {
+	if w.statusCode == 0 {
+		return http.StatusOK
+	}
+	return w.statusCode
+}
+
+func (s *Server) requestLoggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		lrw := &loggingResponseWriter{ResponseWriter: w}
+		next.ServeHTTP(lrw, r)
+		duration := time.Since(start)
+		s.logf("request method=%s path=%s status=%d duration_ms=%d remote=%s", r.Method, r.URL.RequestURI(), lrw.status(), duration.Milliseconds(), r.RemoteAddr)
+	})
+}
+
+func (s *Server) recoverMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				s.logf("panic method=%s path=%s err=%v", r.Method, r.URL.RequestURI(), rec)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) logf(format string, args ...any) {
+	if s.logger != nil {
+		s.logger.Printf(format, args...)
+	}
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {

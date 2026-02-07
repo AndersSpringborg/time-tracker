@@ -1,7 +1,9 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -122,5 +124,70 @@ func TestIntegrationsPageRendersTidsregLoginForm(t *testing.T) {
 	}
 	if !strings.Contains(body, "Load Customers") {
 		t.Fatalf("expected tidsreg login form in body")
+	}
+}
+
+func TestRequestLoggingMiddlewareLogsMethodPathAndStatus(t *testing.T) {
+	s, err := New(&usecases.App{})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	var buf bytes.Buffer
+	s.logger = log.New(&buf, "", 0)
+
+	handler := s.requestLoggingMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte("ok"))
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/rules?draft=true", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", rr.Code)
+	}
+	logLine := buf.String()
+	if !strings.Contains(logLine, "method=POST") {
+		t.Fatalf("expected method in log, got %s", logLine)
+	}
+	if !strings.Contains(logLine, "path=/rules?draft=true") {
+		t.Fatalf("expected path in log, got %s", logLine)
+	}
+	if !strings.Contains(logLine, "status=201") {
+		t.Fatalf("expected status in log, got %s", logLine)
+	}
+	if !strings.Contains(logLine, "duration_ms=") {
+		t.Fatalf("expected duration in log, got %s", logLine)
+	}
+}
+
+func TestRecoverMiddlewareReturns500AndLogsPanic(t *testing.T) {
+	s, err := New(&usecases.App{})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	var buf bytes.Buffer
+	s.logger = log.New(&buf, "", 0)
+
+	handler := s.requestLoggingMiddleware(s.recoverMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	})))
+
+	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", rr.Code)
+	}
+	logLine := buf.String()
+	if !strings.Contains(logLine, "panic method=GET path=/panic err=boom") {
+		t.Fatalf("expected panic log, got %s", logLine)
+	}
+	if !strings.Contains(logLine, "status=500") {
+		t.Fatalf("expected status log, got %s", logLine)
 	}
 }
