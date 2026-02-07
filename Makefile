@@ -25,7 +25,7 @@ build-manager:
 test: test-zig test-go
 
 test-zig:
-	zig build test
+	zig build test --summary all
 
 test-go:
 	GOFLAGS=-mod=mod go test -race -shuffle=on -count=1 ./...
