@@ -3,19 +3,21 @@ UPDATE events SET project_id = NULL, activity_id = NULL, manually_mapped = false
 
 DROP TABLE IF EXISTS project_assignments CASCADE;
 DROP TABLE IF EXISTS mapping_rules CASCADE;
-DROP TABLE IF EXISTS kinds CASCADE;
 DROP TABLE IF EXISTS kinds_new CASCADE;
-DROP TABLE IF EXISTS activities CASCADE;
-DROP TABLE IF EXISTS phases CASCADE;
-DROP TABLE IF EXISTS projects CASCADE;
-DROP TABLE IF EXISTS customers CASCADE;
+DROP TABLE IF EXISTS kinds CASCADE;
 
+-- Transform hierarchy tables in place to avoid brittle DROP behavior on
+-- legacy FK variants (e.g. kinds_new depending on kinds or activities).
 CREATE SEQUENCE IF NOT EXISTS projects_seq;
 CREATE TABLE IF NOT EXISTS projects (
     project_id INTEGER PRIMARY KEY DEFAULT nextval('projects_seq'),
     title VARCHAR NOT NULL,
     metadata VARCHAR NOT NULL DEFAULT ''
 );
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS title VARCHAR;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS metadata VARCHAR;
+UPDATE projects SET title = COALESCE(title, name, '');
+UPDATE projects SET metadata = COALESCE(metadata, '');
 
 CREATE SEQUENCE IF NOT EXISTS activities_seq;
 CREATE TABLE IF NOT EXISTS activities (
@@ -23,6 +25,24 @@ CREATE TABLE IF NOT EXISTS activities (
     project_id INTEGER NOT NULL REFERENCES projects(project_id),
     title VARCHAR NOT NULL
 );
+ALTER TABLE activities ADD COLUMN IF NOT EXISTS project_id INTEGER;
+ALTER TABLE activities ADD COLUMN IF NOT EXISTS title VARCHAR;
+UPDATE activities AS a
+SET project_id = p.project_id
+FROM phases AS p
+WHERE a.project_id IS NULL
+  AND a.phase_id = p.phase_id;
+UPDATE activities SET title = COALESCE(title, name, '');
+
+INSERT INTO customers (customer_id, name)
+SELECT 0, 'Legacy'
+WHERE NOT EXISTS (SELECT 1 FROM customers WHERE customer_id = 0);
+INSERT INTO projects (project_id, customer_id, name, title, metadata)
+SELECT 0, 0, 'Legacy', 'Legacy', ''
+WHERE NOT EXISTS (SELECT 1 FROM projects WHERE project_id = 0);
+INSERT INTO phases (phase_id, project_id, name)
+SELECT 0, 0, 'Legacy'
+WHERE NOT EXISTS (SELECT 1 FROM phases WHERE phase_id = 0);
 
 CREATE SEQUENCE IF NOT EXISTS mapping_rules_seq;
 CREATE TABLE IF NOT EXISTS mapping_rules (

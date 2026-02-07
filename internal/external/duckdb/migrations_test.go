@@ -1,16 +1,15 @@
 package duckdb
 
 import (
+	"context"
 	"database/sql"
+	"path/filepath"
+	"reflect"
 	"testing"
 )
 
-func TestMigrateHandlesLegacyKindsNewDependencyAtVersion9(t *testing.T) {
-	db, err := sql.Open("duckdb", ":memory:")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer db.Close()
+func seedLegacyVersion9Schema(t *testing.T, db *sql.DB, kindsStmt, kindsNewStmt string) {
+	t.Helper()
 
 	setup := []string{
 		`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name VARCHAR NOT NULL, applied_at TIMESTAMP DEFAULT current_timestamp);`,
@@ -20,7 +19,8 @@ func TestMigrateHandlesLegacyKindsNewDependencyAtVersion9(t *testing.T) {
 		`CREATE TABLE projects (project_id INTEGER PRIMARY KEY, customer_id INTEGER, name VARCHAR);`,
 		`CREATE TABLE phases (phase_id INTEGER PRIMARY KEY, project_id INTEGER, name VARCHAR);`,
 		`CREATE TABLE activities (activity_id INTEGER PRIMARY KEY, phase_id INTEGER, name VARCHAR);`,
-		`CREATE TABLE kinds_new (activity_id INTEGER NOT NULL REFERENCES activities(activity_id), kind_id INTEGER NOT NULL, name VARCHAR, billable BOOLEAN, PRIMARY KEY (activity_id, kind_id));`,
+		kindsStmt,
+		kindsNewStmt,
 		`CREATE TABLE mapping_rules (id INTEGER PRIMARY KEY, priority INTEGER, app_pattern VARCHAR, title_pattern VARCHAR, activity_id INTEGER, kind_id INTEGER, follow_previous BOOLEAN);`,
 		`CREATE TABLE project_assignments (id INTEGER PRIMARY KEY, project_id INTEGER, started_at TIMESTAMP, ended_at TIMESTAMP);`,
 	}
@@ -29,17 +29,17 @@ func TestMigrateHandlesLegacyKindsNewDependencyAtVersion9(t *testing.T) {
 			t.Fatalf("setup failed (%s): %v", stmt, err)
 		}
 	}
+}
 
-	if err := migrate(db); err != nil {
-		t.Fatalf("migrate failed: %v", err)
-	}
+func assertSimplifiedProjectSchema(t *testing.T, db *sql.DB) {
+	t.Helper()
 
 	var count int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM projects`).Scan(&count); err != nil {
 		t.Fatalf("query projects failed: %v", err)
 	}
-	if count != 0 {
-		t.Fatalf("expected empty projects after migration, got %d", count)
+	if count < 1 {
+		t.Fatalf("expected at least one project row after migration bootstrap, got %d", count)
 	}
 
 	var titleColumnCount int
@@ -49,6 +49,27 @@ func TestMigrateHandlesLegacyKindsNewDependencyAtVersion9(t *testing.T) {
 	if titleColumnCount != 1 {
 		t.Fatalf("expected projects.title column after migration")
 	}
+}
+
+func TestMigrateHandlesLegacyKindsNewDependencyAtVersion9(t *testing.T) {
+	db, err := sql.Open("duckdb", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	seedLegacyVersion9Schema(
+		t,
+		db,
+		`CREATE TABLE kinds (kind_id INTEGER PRIMARY KEY, activity_id INTEGER, name VARCHAR, billable BOOLEAN);`,
+		`CREATE TABLE kinds_new (activity_id INTEGER NOT NULL REFERENCES activities(activity_id), kind_id INTEGER NOT NULL, name VARCHAR, billable BOOLEAN, PRIMARY KEY (activity_id, kind_id));`,
+	)
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate failed: %v", err)
+	}
+
+	assertSimplifiedProjectSchema(t, db)
 
 	var sourceColumnCount int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name = 'source'`).Scan(&sourceColumnCount); err != nil {
@@ -56,5 +77,84 @@ func TestMigrateHandlesLegacyKindsNewDependencyAtVersion9(t *testing.T) {
 	}
 	if sourceColumnCount != 1 {
 		t.Fatalf("expected projects.source column after migration")
+	}
+}
+
+func TestMigrateHandlesLegacyKindsNewReferencingKinds(t *testing.T) {
+	db, err := sql.Open("duckdb", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	seedLegacyVersion9Schema(
+		t,
+		db,
+		`CREATE TABLE kinds (kind_id INTEGER PRIMARY KEY, activity_id INTEGER, name VARCHAR, billable BOOLEAN);`,
+		`CREATE TABLE kinds_new (kind_id INTEGER NOT NULL REFERENCES kinds(kind_id), activity_id INTEGER NOT NULL, name VARCHAR, billable BOOLEAN, PRIMARY KEY (activity_id, kind_id));`,
+	)
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate failed: %v", err)
+	}
+
+	assertSimplifiedProjectSchema(t, db)
+}
+
+func TestOpenMigratesLegacyVersion9DatabaseFromDisk(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "tracker.db")
+
+	db, err := sql.Open("duckdb", dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	seedLegacyVersion9Schema(
+		t,
+		db,
+		`CREATE TABLE kinds (kind_id INTEGER PRIMARY KEY, activity_id INTEGER, name VARCHAR, billable BOOLEAN);`,
+		`CREATE TABLE kinds_new (kind_id INTEGER NOT NULL REFERENCES kinds(kind_id), activity_id INTEGER NOT NULL, name VARCHAR, billable BOOLEAN, PRIMARY KEY (activity_id, kind_id));`,
+	)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close setup db: %v", err)
+	}
+
+	store, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store failed: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	rules, err := store.ListRules(context.Background())
+	if err != nil {
+		t.Fatalf("list rules failed: %v", err)
+	}
+	if len(rules) != 0 {
+		t.Fatalf("expected no rules in fresh simplified schema, got %d", len(rules))
+	}
+
+	var version int
+	if err := store.db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&version); err != nil {
+		t.Fatalf("query schema_migrations failed: %v", err)
+	}
+	if version != 12 {
+		t.Fatalf("expected schema version 12, got %d", version)
+	}
+}
+
+func TestSplitSQLStatementsSkipsCommentsAndEmpties(t *testing.T) {
+	sqlText := `
+-- comment
+CREATE TABLE a (id INTEGER);
+
+  -- another comment
+INSERT INTO a VALUES (1);
+`
+	got := splitSQLStatements(sqlText)
+	want := []string{
+		"CREATE TABLE a (id INTEGER);",
+		"INSERT INTO a VALUES (1);",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected statements: got=%v want=%v", got, want)
 	}
 }

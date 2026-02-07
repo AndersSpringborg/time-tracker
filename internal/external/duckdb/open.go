@@ -21,6 +21,9 @@ func openDB(path string) (*sql.DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if _, err := db.Exec("CHECKPOINT;"); err != nil {
+		// best effort to avoid replaying large or problematic WAL state
+	}
 
 	return db, nil
 }
