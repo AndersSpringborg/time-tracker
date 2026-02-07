@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -55,6 +56,7 @@ type pageData struct {
 	DraftDate         string
 	DraftMinDuration  int64
 	DraftGroups       []domain.GroupedEvent
+	RuleTargets       []ruleTargetOption
 	RuleSummary       string
 	TidsregCustomers  []tidsregmodel.Customer
 	TidsregProjects   []tidsregmodel.Project
@@ -63,6 +65,11 @@ type pageData struct {
 	TidsregSummary    string
 	TidsregError      string
 	TidsregMode       string
+}
+
+type ruleTargetOption struct {
+	Value string
+	Label string
 }
 
 func New(app *usecases.App) (*Server, error) {
@@ -277,12 +284,16 @@ func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid form", 400)
 			return
 		}
-		in, err := parseRuleInput(r)
+		in, targetProjectName, targetActivityName, err := parseRuleDraftInput(r)
 		if err != nil {
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		if _, err := s.app.Rules.AddRuleToDraft(r.Context(), contracts.RulesDraftAddRequest{Rule: in}); err != nil {
+		if _, err := s.app.Rules.AddRuleToDraftFromForm(r.Context(), contracts.RulesDraftAddFromFormRequest{
+			Rule:              in,
+			TargetProjectName: targetProjectName,
+			TargetActivity:    targetActivityName,
+		}); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
@@ -306,6 +317,11 @@ func (s *Server) renderRulesEditor(w http.ResponseWriter, r *http.Request, summa
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	targetRes, err := s.app.Rules.ListAssignmentTargets(r.Context(), contracts.RulesAssignmentTargetsRequest{})
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
 	date, minDuration := rulesDraftFiltersFromRequest(r)
 	if date == "" {
 		datesRes, err := s.app.Rules.ListUnmappedDates(r.Context(), contracts.RulesUnmappedDatesRequest{MinDurationMS: minDuration})
@@ -325,11 +341,21 @@ func (s *Server) renderRulesEditor(w http.ResponseWriter, r *http.Request, summa
 		}
 		groups = groupsRes.Groups
 	}
+
+	targets := make([]ruleTargetOption, 0, len(targetRes.Targets))
+	for _, target := range targetRes.Targets {
+		targets = append(targets, ruleTargetOption{
+			Value: encodeRuleTargetPath(target.ProjectTitle, target.ActivityTitle),
+			Label: target.DisplayPath(),
+		})
+	}
+
 	s.render(w, "partials/rules_editor", pageData{
 		DraftPreview:     draftRes.Preview,
 		DraftDate:        date,
 		DraftMinDuration: minDuration,
 		DraftGroups:      groups,
+		RuleTargets:      targets,
 		RuleSummary:      summary,
 	})
 }
@@ -343,12 +369,16 @@ func (s *Server) handleRulesDraftAdd(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid form", 400)
 		return
 	}
-	in, err := parseRuleInput(r)
+	in, targetProjectName, targetActivityName, err := parseRuleDraftInput(r)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	if _, err := s.app.Rules.AddRuleToDraft(r.Context(), contracts.RulesDraftAddRequest{Rule: in}); err != nil {
+	if _, err := s.app.Rules.AddRuleToDraftFromForm(r.Context(), contracts.RulesDraftAddFromFormRequest{
+		Rule:              in,
+		TargetProjectName: targetProjectName,
+		TargetActivity:    targetActivityName,
+	}); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
@@ -442,7 +472,7 @@ func (s *Server) handleRulesDraftAddFromSelection(w http.ResponseWriter, r *http
 		http.Error(w, "invalid form", 400)
 		return
 	}
-	in, err := parseRuleInput(r)
+	in, targetProjectName, targetActivityName, err := parseRuleDraftInput(r)
 	if err != nil {
 		s.logf("rules_add_from_selection invalid_rule_input err=%v", err)
 		http.Error(w, err.Error(), 400)
@@ -450,21 +480,23 @@ func (s *Server) handleRulesDraftAddFromSelection(w http.ResponseWriter, r *http
 	}
 	groups := parseSelectedGroups(r)
 	s.logf(
-		"rules_add_from_selection parsed selected_idx=%d groups=%d action_type=%s project_id=%q activity_id=%q sample=%q",
+		"rules_add_from_selection parsed selected_idx=%d groups=%d action_type=%s target_project=%q target_activity=%q sample=%q",
 		len(r.Form["selected_idx"]),
 		len(groups),
 		string(in.ActionType),
-		strings.TrimSpace(r.Form.Get("project_id")),
-		strings.TrimSpace(r.Form.Get("activity_id")),
+		targetProjectName,
+		targetActivityName,
 		summarizeGroups(groups, 3),
 	)
 	if len(groups) == 0 {
 		http.Error(w, "select at least one event group", 400)
 		return
 	}
-	if _, err := s.app.Rules.AddRegexRuleFromGroupsToDraft(r.Context(), contracts.RulesDraftAddFromGroupsRequest{
-		Groups: groups,
-		Rule:   in,
+	if _, err := s.app.Rules.AddRegexRuleFromGroupsToDraftFromForm(r.Context(), contracts.RulesDraftAddFromGroupsFormRequest{
+		Groups:             groups,
+		Rule:               in,
+		TargetProjectName:  targetProjectName,
+		TargetActivityName: targetActivityName,
 	}); err != nil {
 		s.internalError(w, r, fmt.Errorf("add regex rule from selection failed: %w", err))
 		return
@@ -766,6 +798,47 @@ func parseRuleInput(r *http.Request) (domain.RuleInput, error) {
 		ActionActivityName: strings.TrimSpace(r.Form.Get("action_activity_name")),
 	}
 	return dto.ToDomain(), nil
+}
+
+func parseRuleDraftInput(r *http.Request) (domain.RuleInput, string, string, error) {
+	in, err := parseRuleInput(r)
+	if err != nil {
+		return domain.RuleInput{}, "", "", err
+	}
+	projectTitle, activityTitle, err := decodeRuleTargetPath(r.Form.Get("target_path"))
+	if err != nil {
+		return domain.RuleInput{}, "", "", fmt.Errorf("invalid target_path")
+	}
+	return in, projectTitle, activityTitle, nil
+}
+
+func encodeRuleTargetPath(projectTitle, activityTitle string) string {
+	projectTitle = strings.TrimSpace(projectTitle)
+	activityTitle = strings.TrimSpace(activityTitle)
+	if projectTitle == "" && activityTitle == "" {
+		return ""
+	}
+	return url.QueryEscape(projectTitle) + "|" + url.QueryEscape(activityTitle)
+}
+
+func decodeRuleTargetPath(raw string) (string, string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", "", nil
+	}
+	parts := strings.SplitN(raw, "|", 2)
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("invalid target format")
+	}
+	projectTitle, err := url.QueryUnescape(parts[0])
+	if err != nil {
+		return "", "", err
+	}
+	activityTitle, err := url.QueryUnescape(parts[1])
+	if err != nil {
+		return "", "", err
+	}
+	return strings.TrimSpace(projectTitle), strings.TrimSpace(activityTitle), nil
 }
 
 func rulesDraftFiltersFromRequest(r *http.Request) (string, int64) {

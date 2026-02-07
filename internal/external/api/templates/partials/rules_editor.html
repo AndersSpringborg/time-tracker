@@ -45,8 +45,14 @@
         <option value="assign_project_activity_by_title">Set project+activity by title</option>
       </select>
     </label>
-    <label>Project ID <input type="number" name="project_id" placeholder="10"></label>
-    <label>Activity ID <input type="number" name="activity_id" placeholder="100"></label>
+    <label>Project + Activity
+      <select name="target_path">
+        <option value="">Select target</option>
+        {{range .RuleTargets}}
+          <option value="{{.Value}}">{{.Label}}</option>
+        {{end}}
+      </select>
+    </label>
     <label>Action Project Title <input type="text" name="action_project_title" placeholder="project a"></label>
     <label>Action Activity Name <input type="text" name="action_activity_name" placeholder="development"></label>
     <button type="submit">Stage Rule</button>
@@ -66,8 +72,14 @@
     <input type="hidden" name="action_type" value="assign_explicit">
     <div class="inline-form">
       <label>Priority <input type="number" name="priority" value="180"></label>
-      <label>Project ID <input type="number" name="project_id" placeholder="10"></label>
-      <label>Activity ID <input type="number" name="activity_id" placeholder="100"></label>
+      <label>Project + Activity
+        <select name="target_path">
+          <option value="">Select target</option>
+          {{range .RuleTargets}}
+            <option value="{{.Value}}">{{.Label}}</option>
+          {{end}}
+        </select>
+      </label>
       <button type="submit">Add Rule (Regex)</button>
     </div>
     <table>

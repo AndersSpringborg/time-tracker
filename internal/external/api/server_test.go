@@ -61,6 +61,17 @@ func (f *fakeRulesRepo) FindProjectIDByTitle(context.Context, string) (*int64, e
 func (f *fakeRulesRepo) FindActivityIDByTitle(context.Context, int64, string) (*int64, error) {
 	return nil, nil
 }
+func (f *fakeRulesRepo) ListAllProjects(context.Context) ([]domain.Project, error) {
+	return []domain.Project{
+		{ProjectID: 10, Title: "project a"},
+	}, nil
+}
+func (f *fakeRulesRepo) ListActivitiesByProject(context.Context, int64) ([]domain.Activity, error) {
+	return []domain.Activity{
+		{ActivityID: 100, ProjectID: 10, Title: "development"},
+		{ActivityID: 101, ProjectID: 10, Title: "meeting"},
+	}, nil
+}
 
 type fakeReportsRepoForAPI struct{}
 
@@ -143,6 +154,12 @@ func TestRulesPartialRendersDraftActions(t *testing.T) {
 	}
 	if !strings.Contains(body, "Draft Preview") {
 		t.Fatalf("expected draft preview heading")
+	}
+	if !strings.Contains(body, "Project + Activity") {
+		t.Fatalf("expected project + activity selector")
+	}
+	if strings.Contains(body, "Project ID") {
+		t.Fatalf("expected rules editor not to render project id field")
 	}
 }
 
@@ -456,6 +473,7 @@ func TestRulesDraftAddFromSelectionLogsFailureDetails(t *testing.T) {
 	form.Set("group_title_0", "Daily standup")
 	form.Set("action_type", "assign_explicit")
 	form.Set("priority", "100")
+	form.Set("target_path", encodeRuleTargetPath("project a", "meeting"))
 
 	req := httptest.NewRequest(http.MethodPost, "/rules/draft/add-from-selection", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -469,7 +487,21 @@ func TestRulesDraftAddFromSelectionLogsFailureDetails(t *testing.T) {
 	if !strings.Contains(logLine, "rules_add_from_selection parsed") {
 		t.Fatalf("expected parsed log, got %s", logLine)
 	}
+	if !strings.Contains(logLine, "target_project=\"project a\"") {
+		t.Fatalf("expected target project in log, got %s", logLine)
+	}
 	if !strings.Contains(logLine, "handler_error method=POST path=/rules/draft/add-from-selection") {
 		t.Fatalf("expected handler error log, got %s", logLine)
+	}
+}
+
+func TestRuleTargetPathEncodingRoundTrip(t *testing.T) {
+	encoded := encodeRuleTargetPath("project a", "development")
+	project, activity, err := decodeRuleTargetPath(encoded)
+	if err != nil {
+		t.Fatalf("decode rule target failed: %v", err)
+	}
+	if project != "project a" || activity != "development" {
+		t.Fatalf("unexpected decoded values project=%q activity=%q", project, activity)
 	}
 }
