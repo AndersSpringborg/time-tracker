@@ -122,7 +122,7 @@ func (s *Service) bootstrap(plistPath string) error {
 }
 
 func (s *Service) bootout() error {
-	cmd := exec.Command("launchctl", "bootout", "gui/"+uid(), label)
+	cmd := exec.Command("launchctl", "bootout", "gui/"+uid()+"/"+label)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		msg := strings.TrimSpace(string(out))
 		if strings.Contains(msg, "No such process") || strings.Contains(msg, "service not found") {
