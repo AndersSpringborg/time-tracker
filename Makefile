@@ -2,7 +2,7 @@ APP_NAME=tracker
 WORKER_SRC=zig-out/bin/tt
 WORKER_EMBED=internal/worker/assets/tt-worker
 
-.PHONY: build build-worker sync-worker build-manager test clean
+.PHONY: build build-worker sync-worker build-manager test test-go test-zig test-fast clean
 
 build: build-worker sync-worker build-manager
 
@@ -22,7 +22,16 @@ sync-worker:
 build-manager:
 	go build -mod=mod -o $(APP_NAME) ./cmd/tt
 
-test:
+test: test-zig test-go
+
+test-zig:
+	zig build test
+
+test-go:
+	GOFLAGS=-mod=mod go test -race -shuffle=on -count=1 ./...
+
+test-fast:
+	zig build test
 	go test -mod=mod ./...
 
 clean:

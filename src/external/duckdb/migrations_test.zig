@@ -117,9 +117,12 @@ test "Migrator.run creates simplified project tables" {
 
     try std.testing.expect(tableExists(conn, "projects"));
     try std.testing.expect(tableExists(conn, "activities"));
-    try std.testing.expect(!tableExists(conn, "customers"));
-    try std.testing.expect(!tableExists(conn, "phases"));
+    try std.testing.expect(tableExists(conn, "customers"));
+    try std.testing.expect(tableExists(conn, "phases"));
+    try std.testing.expect(!tableExists(conn, "kinds_new"));
     try std.testing.expect(!tableExists(conn, "kinds"));
+    try std.testing.expect(columnExists(conn, "projects", "title"));
+    try std.testing.expect(columnExists(conn, "activities", "title"));
 }
 
 // Test 8: mapping_rules table is created
