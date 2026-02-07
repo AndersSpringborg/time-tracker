@@ -11,8 +11,10 @@ import (
 	"strconv"
 	"strings"
 
+	"time-tracker/internal/application/contracts"
 	"time-tracker/internal/application/usecases"
 	"time-tracker/internal/domain"
+	apidto "time-tracker/internal/external/api/dto"
 )
 
 //go:embed templates/*.html templates/partials/*.html static/*
@@ -105,21 +107,21 @@ func (s *Server) Routes() http.Handler {
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	d, err := s.app.Reports.Dashboard(r.Context())
+	res, err := s.app.Reports.Dashboard(r.Context(), contracts.ReportsDashboardRequest{})
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	s.render(w, "layout", pageData{Title: "Dashboard", Page: "dashboard", Body: "dashboard", Flash: r.URL.Query().Get("flash"), Dashboard: d})
+	s.render(w, "layout", pageData{Title: "Dashboard", Page: "dashboard", Body: "dashboard", Flash: r.URL.Query().Get("flash"), Dashboard: res.Dashboard})
 }
 
 func (s *Server) handleDashboardPartial(w http.ResponseWriter, r *http.Request) {
-	d, err := s.app.Reports.Dashboard(r.Context())
+	res, err := s.app.Reports.Dashboard(r.Context(), contracts.ReportsDashboardRequest{})
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	s.render(w, "partials/dashboard_panel", pageData{Dashboard: d})
+	s.render(w, "partials/dashboard_panel", pageData{Dashboard: res.Dashboard})
 }
 
 func (s *Server) handleReports(w http.ResponseWriter, r *http.Request) {
@@ -129,12 +131,12 @@ func (s *Server) handleReports(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleReportsPartial(w http.ResponseWriter, r *http.Request) {
 	rangeKey := usecases.NormalizeRange(r.URL.Query().Get("range"))
-	rep, err := s.app.Reports.Report(r.Context(), rangeKey)
+	res, err := s.app.Reports.Report(r.Context(), contracts.ReportsBuildRequest{RangeKey: rangeKey})
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	s.render(w, "partials/report_table", pageData{Report: rep})
+	s.render(w, "partials/report_table", pageData{Report: res.Report})
 }
 
 func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
@@ -148,7 +150,7 @@ func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		if err := s.app.Rules.AddRuleToDraft(r.Context(), in); err != nil {
+		if _, err := s.app.Rules.AddRuleToDraft(r.Context(), contracts.RulesDraftAddRequest{Rule: in}); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
@@ -167,28 +169,32 @@ func (s *Server) handleRulesPartial(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) renderRulesEditor(w http.ResponseWriter, r *http.Request, summary string) {
-	draft, err := s.app.Rules.DraftPreview(r.Context())
+	draftRes, err := s.app.Rules.DraftPreview(r.Context(), contracts.RulesDraftPreviewRequest{})
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
 	date, minDuration := rulesDraftFiltersFromRequest(r)
 	if date == "" {
-		dates, err := s.app.Rules.ListUnmappedDates(r.Context(), minDuration)
-		if err == nil && len(dates) > 0 {
-			date = dates[0]
+		datesRes, err := s.app.Rules.ListUnmappedDates(r.Context(), contracts.RulesUnmappedDatesRequest{MinDurationMS: minDuration})
+		if err == nil && len(datesRes.Dates) > 0 {
+			date = datesRes.Dates[0]
 		}
 	}
 	groups := make([]domain.GroupedEvent, 0)
 	if date != "" {
-		groups, err = s.app.Rules.ListGroupedUnmappedEvents(r.Context(), date, minDuration)
+		groupsRes, err := s.app.Rules.ListGroupedUnmappedEvents(r.Context(), contracts.RulesUnmappedGroupsRequest{
+			Date:          date,
+			MinDurationMS: minDuration,
+		})
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
+		groups = groupsRes.Groups
 	}
 	s.render(w, "partials/rules_editor", pageData{
-		DraftPreview:     draft,
+		DraftPreview:     draftRes.Preview,
 		DraftDate:        date,
 		DraftMinDuration: minDuration,
 		DraftGroups:      groups,
@@ -210,7 +216,7 @@ func (s *Server) handleRulesDraftAdd(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	if err := s.app.Rules.AddRuleToDraft(r.Context(), in); err != nil {
+	if _, err := s.app.Rules.AddRuleToDraft(r.Context(), contracts.RulesDraftAddRequest{Rule: in}); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
@@ -231,7 +237,7 @@ func (s *Server) handleRulesDraftDelete(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid rule id", 400)
 		return
 	}
-	if err := s.app.Rules.DeleteRuleFromDraft(r.Context(), id); err != nil {
+	if _, err := s.app.Rules.DeleteRuleFromDraft(r.Context(), contracts.RulesDraftDeleteRequest{RuleID: id}); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
@@ -247,11 +253,12 @@ func (s *Server) handleRulesDraftReAddDefaults(w http.ResponseWriter, r *http.Re
 		http.Error(w, "invalid form", 400)
 		return
 	}
-	warnings, err := s.app.Rules.ReAddDefaultRulesToDraft(r.Context())
+	readdRes, err := s.app.Rules.ReAddDefaultRulesToDraft(r.Context(), contracts.RulesDraftReAddDefaultsRequest{})
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	warnings := readdRes.Warnings
 	summary := "Default rules staged"
 	if len(warnings) > 0 {
 		summary = fmt.Sprintf("Default rules staged with %d warning(s)", len(warnings))
@@ -268,11 +275,12 @@ func (s *Server) handleRulesDraftSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid form", 400)
 		return
 	}
-	result, err := s.app.Rules.SaveDraft(r.Context())
+	saveRes, err := s.app.Rules.SaveDraft(r.Context(), contracts.RulesDraftSaveRequest{})
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	result := saveRes.Result
 	summary := fmt.Sprintf("Saved changes: +%d updated %d deleted %d", result.Added, result.Updated, result.Deleted)
 	s.renderRulesEditor(w, r, summary)
 }
@@ -286,7 +294,10 @@ func (s *Server) handleRulesDraftDiscard(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "invalid form", 400)
 		return
 	}
-	s.app.Rules.DiscardDraft()
+	if _, err := s.app.Rules.DiscardDraft(r.Context(), contracts.RulesDraftDiscardRequest{}); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
 	s.renderRulesEditor(w, r, "Draft discarded")
 }
 
@@ -309,7 +320,10 @@ func (s *Server) handleRulesDraftAddFromSelection(w http.ResponseWriter, r *http
 		http.Error(w, "select at least one event group", 400)
 		return
 	}
-	if err := s.app.Rules.AddRegexRuleFromGroupsToDraft(r.Context(), groups, in); err != nil {
+	if _, err := s.app.Rules.AddRegexRuleFromGroupsToDraft(r.Context(), contracts.RulesDraftAddFromGroupsRequest{
+		Groups: groups,
+		Rule:   in,
+	}); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
@@ -327,7 +341,7 @@ func (s *Server) handleRuleDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid rule id", 400)
 		return
 	}
-	if err := s.app.Rules.DeleteRule(r.Context(), id); err != nil {
+	if _, err := s.app.Rules.DeleteRule(r.Context(), contracts.RulesDeleteRequest{RuleID: id}); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
@@ -340,12 +354,12 @@ func (s *Server) handleSuggestionsPage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSuggestionsPartial(w http.ResponseWriter, r *http.Request) {
 	q := suggestionQueryFromRequest(r)
-	items, err := s.app.Rules.AnalyzeSuggestions(r.Context(), q)
+	res, err := s.app.Rules.AnalyzeSuggestions(r.Context(), contracts.RulesAnalyzeSuggestionsRequest{Query: q})
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	s.render(w, "partials/suggestions_table", pageData{Suggestions: items})
+	s.render(w, "partials/suggestions_table", pageData{Suggestions: res.Suggestions})
 }
 
 func (s *Server) handleSuggestionAccept(w http.ResponseWriter, r *http.Request) {
@@ -362,16 +376,18 @@ func (s *Server) handleSuggestionAccept(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	_, err = s.app.Rules.AcceptSuggestion(r.Context(), domain.ApplySuggestionInput{
+	_, err = s.app.Rules.AcceptSuggestion(r.Context(), contracts.RulesAcceptSuggestionRequest{Input: domain.ApplySuggestionInput{
 		Suggestion: sug,
 		ApplyNow:   r.Form.Get("apply_now") != "",
-	})
+	}})
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	items, _ := s.app.Rules.AnalyzeSuggestions(r.Context(), domain.SuggestionQuery{MinDurationMS: 2000, Limit: 50})
-	s.render(w, "partials/suggestions_table", pageData{Suggestions: items, AutoApplySummary: "Suggestion accepted"})
+	suggestionsRes, _ := s.app.Rules.AnalyzeSuggestions(r.Context(), contracts.RulesAnalyzeSuggestionsRequest{
+		Query: domain.SuggestionQuery{MinDurationMS: 2000, Limit: 50},
+	})
+	s.render(w, "partials/suggestions_table", pageData{Suggestions: suggestionsRes.Suggestions, AutoApplySummary: "Suggestion accepted"})
 }
 
 func (s *Server) handleSuggestionAutoApply(w http.ResponseWriter, r *http.Request) {
@@ -384,14 +400,21 @@ func (s *Server) handleSuggestionAutoApply(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	minConf := int(parseIntDefault(r.Form.Get("min_confidence"), 85))
-	res, err := s.app.Rules.AutoApplySuggestions(r.Context(), domain.AutoApplySuggestionsInput{MinConfidence: minConf, ApplyNow: r.Form.Get("apply_now") != "", MinDurationMS: 2000, Limit: 100})
+	res, err := s.app.Rules.AutoApplySuggestions(r.Context(), contracts.RulesAutoApplySuggestionsRequest{Input: domain.AutoApplySuggestionsInput{
+		MinConfidence: minConf,
+		ApplyNow:      r.Form.Get("apply_now") != "",
+		MinDurationMS: 2000,
+		Limit:         100,
+	}})
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	items, _ := s.app.Rules.AnalyzeSuggestions(r.Context(), domain.SuggestionQuery{MinDurationMS: 2000, Limit: 50})
-	summary := fmt.Sprintf("Analyzed %d suggestions, accepted %d, mapped %d events", res.Analyzed, res.Accepted, res.MappedEvents)
-	s.render(w, "partials/suggestions_table", pageData{Suggestions: items, AutoApplySummary: summary})
+	suggestionsRes, _ := s.app.Rules.AnalyzeSuggestions(r.Context(), contracts.RulesAnalyzeSuggestionsRequest{
+		Query: domain.SuggestionQuery{MinDurationMS: 2000, Limit: 50},
+	})
+	summary := fmt.Sprintf("Analyzed %d suggestions, accepted %d, mapped %d events", res.Result.Analyzed, res.Result.Accepted, res.Result.MappedEvents)
+	s.render(w, "partials/suggestions_table", pageData{Suggestions: suggestionsRes.Suggestions, AutoApplySummary: summary})
 }
 
 func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
@@ -399,17 +422,17 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleProjectsPartial(w http.ResponseWriter, r *http.Request) {
-	active, err := s.app.Projects.ListActive(r.Context())
+	activeRes, err := s.app.Projects.ListActive(r.Context(), contracts.ProjectsListActiveRequest{})
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	all, err := s.app.Projects.ListAll(r.Context())
+	allRes, err := s.app.Projects.ListAll(r.Context(), contracts.ProjectsListAllRequest{})
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	s.render(w, "partials/projects_panel", pageData{ActiveProjects: active, AllProjects: all})
+	s.render(w, "partials/projects_panel", pageData{ActiveProjects: activeRes.Projects, AllProjects: allRes.Projects})
 }
 
 func (s *Server) handleProjectActivate(w http.ResponseWriter, r *http.Request) {
@@ -423,7 +446,7 @@ func (s *Server) handleProjectActivate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid project id", 400)
 		return
 	}
-	if err := s.app.Projects.Activate(r.Context(), id); err != nil {
+	if _, err := s.app.Projects.Activate(r.Context(), contracts.ProjectsActivateRequest{ProjectID: id}); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
@@ -435,7 +458,7 @@ func (s *Server) handleProjectClear(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if err := s.app.Projects.EndAll(r.Context()); err != nil {
+	if _, err := s.app.Projects.EndAll(r.Context(), contracts.ProjectsEndAllRequest{}); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
@@ -453,7 +476,7 @@ func (s *Server) handleProjectEnd(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid project id", 400)
 		return
 	}
-	if err := s.app.Projects.End(r.Context(), id); err != nil {
+	if _, err := s.app.Projects.End(r.Context(), contracts.ProjectsEndRequest{ProjectID: id}); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
@@ -466,11 +489,12 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid form", 400)
 			return
 		}
-		cfg, _, err := s.app.Settings.Load(r.Context())
+		loadRes, err := s.app.Settings.Load(r.Context(), contracts.SettingsLoadRequest{})
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
+		cfg := loadRes.Settings
 		cfg.Enabled = r.Form.Get("enabled") != ""
 		cfg.WeightedBucketMinutes = parseIntDefault(r.Form.Get("weighted_bucket_minutes"), cfg.WeightedBucketMinutes)
 		cfg.WeightedSwitchMinutes = parseIntDefault(r.Form.Get("weighted_switch_minutes"), cfg.WeightedSwitchMinutes)
@@ -478,18 +502,19 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		cfg.NoiseSwitchMinutes = parseIntDefault(r.Form.Get("noise_switch_minutes"), cfg.NoiseSwitchMinutes)
 		cfg.NoiseAppPatterns = parseLines(r.Form.Get("noise_app_patterns"))
 		cfg.WorkWifis = parseLines(r.Form.Get("work_wifis"))
-		if _, err := s.app.Settings.Save(r.Context(), cfg); err != nil {
+		if _, err := s.app.Settings.Save(r.Context(), contracts.SettingsSaveRequest{Settings: cfg}); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
 		http.Redirect(w, r, "/settings?flash=Settings+saved", http.StatusSeeOther)
 		return
 	}
-	cfg, _, err := s.app.Settings.Load(r.Context())
+	loadRes, err := s.app.Settings.Load(r.Context(), contracts.SettingsLoadRequest{})
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	cfg := loadRes.Settings
 	pd := pageData{Title: "Settings", Page: "settings", Body: "settings", Flash: r.URL.Query().Get("flash"), Config: cfg, NoisePatternsText: strings.Join(cfg.NoiseAppPatterns, "\n"), WorkWifisText: strings.Join(cfg.WorkWifis, "\n")}
 	s.render(w, "layout", pd)
 }
@@ -499,7 +524,7 @@ func (s *Server) handleCollectorStart(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if err := s.app.Lifecycle.Start(r.Context()); err != nil {
+	if _, err := s.app.Lifecycle.Start(r.Context(), contracts.LifecycleStartRequest{}); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
@@ -511,7 +536,7 @@ func (s *Server) handleCollectorStop(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if err := s.app.Lifecycle.Stop(r.Context()); err != nil {
+	if _, err := s.app.Lifecycle.Stop(r.Context(), contracts.LifecycleStopRequest{}); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
@@ -519,7 +544,12 @@ func (s *Server) handleCollectorStop(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCollectorStatus(w http.ResponseWriter, r *http.Request) {
-	st := s.app.Lifecycle.Status(r.Context())
+	statusRes, err := s.app.Lifecycle.Status(r.Context(), contracts.LifecycleStatusRequest{})
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	st := statusRes.Status
 	stateClass := "loaded"
 	if st.State == "running" {
 		stateClass = "running"
@@ -578,19 +608,20 @@ func parseRuleInput(r *http.Request) (domain.RuleInput, error) {
 	if actionType == "" && r.Form.Get("follow_previous") != "" {
 		actionType = domain.RuleActionFollowCurrentContext
 	}
-	return domain.RuleInput{
+	dto := apidto.RuleInput{
 		RuleKey:            strings.TrimSpace(r.Form.Get("rule_key")),
-		Source:             domain.RuleSource(strings.TrimSpace(r.Form.Get("source"))),
+		Source:             strings.TrimSpace(r.Form.Get("source")),
 		Priority:           priority,
 		AppPattern:         r.Form.Get("app_pattern"),
 		TitlePattern:       r.Form.Get("title_pattern"),
 		ProjectID:          projectID,
 		ActivityID:         activityID,
 		FollowPrevious:     r.Form.Get("follow_previous") != "",
-		ActionType:         actionType,
+		ActionType:         string(actionType),
 		ActionProjectTitle: strings.TrimSpace(r.Form.Get("action_project_title")),
 		ActionActivityName: strings.TrimSpace(r.Form.Get("action_activity_name")),
-	}, nil
+	}
+	return dto.ToDomain(), nil
 }
 
 func rulesDraftFiltersFromRequest(r *http.Request) (string, int64) {
@@ -648,13 +679,13 @@ func parseSuggestionFromForm(r *http.Request) (domain.RuleSuggestion, error) {
 	impactCount := int(parseIntDefault(r.Form.Get("impact_count"), 0))
 	impactDur := parseIntDefault(r.Form.Get("impact_duration_ms"), 0)
 	evidence := int(parseIntDefault(r.Form.Get("evidence_count"), 0))
-	st := domain.SuggestionType(r.Form.Get("suggestion_type"))
+	st := r.Form.Get("suggestion_type")
 	title := strings.TrimSpace(r.Form.Get("title_pattern"))
 	var titlePtr *string
 	if title != "" {
 		titlePtr = &title
 	}
-	return domain.RuleSuggestion{
+	dto := apidto.SuggestionInput{
 		SuggestionType:   st,
 		AppPattern:       r.Form.Get("app_pattern"),
 		TitlePattern:     titlePtr,
@@ -665,7 +696,8 @@ func parseSuggestionFromForm(r *http.Request) (domain.RuleSuggestion, error) {
 		ImpactCount:      impactCount,
 		ImpactDurationMS: impactDur,
 		EvidenceCount:    evidence,
-	}, nil
+	}
+	return dto.ToDomain(), nil
 }
 
 func parseLines(v string) []string {

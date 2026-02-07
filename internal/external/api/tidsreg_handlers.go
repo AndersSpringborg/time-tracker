@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"time-tracker/internal/application/contracts"
 	"time-tracker/internal/domain"
 )
 
@@ -120,11 +121,17 @@ func (s *Server) handleTidsregSession(w http.ResponseWriter, r *http.Request) {
 	username := strings.TrimSpace(r.Form.Get("username"))
 	password := r.Form.Get("password")
 
-	cookie, customers, err := s.app.Tidsreg.AuthenticateAndListCustomers(r.Context(), username, password, mode)
+	authRes, err := s.app.Tidsreg.AuthenticateAndListCustomers(r.Context(), contracts.TidsregAuthenticateRequest{
+		Username: username,
+		Password: password,
+		Mode:     mode,
+	})
 	if err != nil {
 		s.render(w, "partials/tidsreg_login", pageData{TidsregError: err.Error(), TidsregMode: strconv.Itoa(int(mode))})
 		return
 	}
+	cookie := authRes.SessionCookie
+	customers := authRes.Customers
 
 	sessionID := s.tidsregSession.create(tidsregSessionData{
 		Cookie:    cookie,
@@ -179,11 +186,17 @@ func (s *Server) handleTidsregPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	preview, err := s.app.Tidsreg.BuildPreview(r.Context(), session.Cookie, session.Mode, session.Customers, selectedCustomers)
+	previewRes, err := s.app.Tidsreg.BuildPreview(r.Context(), contracts.TidsregBuildPreviewRequest{
+		SessionCookie:       session.Cookie,
+		Mode:                session.Mode,
+		Customers:           session.Customers,
+		SelectedCustomerIDs: selectedCustomers,
+	})
 	if err != nil {
 		s.render(w, "partials/tidsreg_customers", pageData{TidsregCustomers: session.Customers, TidsregError: err.Error(), TidsregMode: strconv.Itoa(int(session.Mode))})
 		return
 	}
+	preview := previewRes.Preview
 	session.Preview = &preview
 	s.tidsregSession.update(sessionID, session)
 	s.render(w, "partials/tidsreg_preview", pageData{TidsregPreview: preview, TidsregMode: strconv.Itoa(int(session.Mode))})
@@ -208,11 +221,15 @@ func (s *Server) handleTidsregImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := s.app.Tidsreg.Commit(r.Context(), *session.Preview, r.Form["candidate_keys"])
+	commitRes, err := s.app.Tidsreg.Commit(r.Context(), contracts.TidsregCommitRequest{
+		Preview:      *session.Preview,
+		SelectedKeys: r.Form["candidate_keys"],
+	})
 	if err != nil {
 		s.render(w, "partials/tidsreg_preview", pageData{TidsregPreview: *session.Preview, TidsregError: err.Error(), TidsregMode: strconv.Itoa(int(session.Mode))})
 		return
 	}
+	result := commitRes.Result
 
 	s.tidsregSession.delete(sessionID)
 	http.SetCookie(w, &http.Cookie{Name: tidsregSessionCookieName, Value: "", Path: "/", Expires: time.Unix(0, 0), MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})

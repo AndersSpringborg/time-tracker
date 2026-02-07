@@ -15,8 +15,10 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"time-tracker/internal/application/contracts"
 	"time-tracker/internal/application/usecases"
 	"time-tracker/internal/domain"
+	clidto "time-tracker/internal/external/cli/dto"
 )
 
 type Runner struct {
@@ -40,7 +42,7 @@ func (r *Runner) Run(ctx context.Context, args []string, stdout, stderr io.Write
 	case "schema":
 		return r.runSchema(args[1:], stdout, stderr)
 	case "install":
-		if err := r.App.Lifecycle.Install(ctx); err != nil {
+		if _, err := r.App.Lifecycle.Install(ctx, contracts.LifecycleInstallRequest{}); err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
@@ -48,28 +50,33 @@ func (r *Runner) Run(ctx context.Context, args []string, stdout, stderr io.Write
 		r.printAccessibilityHint(stdout)
 		return 0
 	case "uninstall":
-		if err := r.App.Lifecycle.Uninstall(ctx); err != nil {
+		if _, err := r.App.Lifecycle.Uninstall(ctx, contracts.LifecycleUninstallRequest{}); err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
 		fmt.Fprintln(stdout, "uninstalled worker and launch agent")
 		return 0
 	case "start":
-		if err := r.App.Lifecycle.Start(ctx); err != nil {
+		if _, err := r.App.Lifecycle.Start(ctx, contracts.LifecycleStartRequest{}); err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
 		fmt.Fprintln(stdout, "collector started")
 		return 0
 	case "stop":
-		if err := r.App.Lifecycle.Stop(ctx); err != nil {
+		if _, err := r.App.Lifecycle.Stop(ctx, contracts.LifecycleStopRequest{}); err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
 		fmt.Fprintln(stdout, "collector stopped")
 		return 0
 	case "status":
-		st := r.App.Lifecycle.Status(ctx)
+		statusRes, err := r.App.Lifecycle.Status(ctx, contracts.LifecycleStatusRequest{})
+		if err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return 1
+		}
+		st := statusRes.Status
 		fmt.Fprintf(stdout, "loaded=%v state=%s pid=%s\n", st.Loaded, st.State, st.PID)
 		if st.Loaded && st.PID == "" {
 			r.printAccessibilityHint(stdout)
@@ -87,7 +94,12 @@ func (r *Runner) Run(ctx context.Context, args []string, stdout, stderr io.Write
 		fmt.Fprintf(stdout, "config: %s\n", r.ConfigPath)
 		fmt.Fprintf(stdout, "worker: %s\n", r.WorkerPath)
 		fmt.Fprintf(stdout, "launch-agent: %s\n", r.LaunchAgentPath)
-		st := r.App.Lifecycle.Status(ctx)
+		statusRes, err := r.App.Lifecycle.Status(ctx, contracts.LifecycleStatusRequest{})
+		if err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return 1
+		}
+		st := statusRes.Status
 		fmt.Fprintf(stdout, "collector: loaded=%v state=%s pid=%s\n", st.Loaded, st.State, st.PID)
 		r.printAccessibilityHint(stdout)
 		if workerLogHasAccessibilityError() {
@@ -142,14 +154,19 @@ func (r *Runner) runHelp(args []string, stdout, stderr io.Writer) int {
 			r.printHelp(stdout)
 			return 0
 		}
-		schemas := r.App.Help.ListSchemas()
-		return emit(stdout, *format, map[string]any{"commands": schemas}, stderr)
+		listRes, err := r.App.Help.ListSchemas(context.Background(), contracts.HelpListSchemasRequest{})
+		if err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return 2
+		}
+		return emit(stdout, *format, map[string]any{"commands": clidto.SchemasFromContracts(listRes.Schemas)}, stderr)
 	}
-	s, err := r.App.Help.Schema(remaining[0])
+	schemaRes, err := r.App.Help.GetSchema(context.Background(), contracts.HelpGetSchemaRequest{Command: remaining[0]})
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 2
 	}
+	s := schemaRes.Schema
 	if *format == "text" {
 		fmt.Fprintf(stdout, "Command: %s\nDescription: %s\nUsage: %s\n", s.Command, s.Description, s.Usage)
 		fmt.Fprintf(stdout, "Flags: %s\n", strings.Join(s.Flags, ", "))
@@ -160,7 +177,7 @@ func (r *Runner) runHelp(args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
-	return emit(stdout, *format, s, stderr)
+	return emit(stdout, *format, clidto.SchemaFromContract(s), stderr)
 }
 
 func (r *Runner) runSchema(args []string, stdout, stderr io.Writer) int {
@@ -168,10 +185,15 @@ func (r *Runner) runSchema(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "usage: tt schema <command>")
 		return 2
 	}
-	b, err := r.App.Help.SchemaJSON(args[0])
+	schemaRes, err := r.App.Help.GetSchema(context.Background(), contracts.HelpGetSchemaRequest{Command: args[0]})
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 2
+	}
+	b, err := json.MarshalIndent(clidto.SchemaFromContract(schemaRes.Schema), "", "  ")
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return 1
 	}
 	_, _ = stdout.Write(b)
 	_, _ = stdout.Write([]byte("\n"))
@@ -187,11 +209,12 @@ func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.
 	switch sub {
 	case "list":
 		format, rest := extractFormat(args[1:])
-		rules, err := r.App.Rules.ListRules(ctx)
+		rulesRes, err := r.App.Rules.ListRules(ctx, contracts.RulesListRequest{})
 		if err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
+		rules := rulesRes.Rules
 		if format == "text" {
 			if len(rules) == 0 {
 				fmt.Fprintln(stdout, "No mapping rules defined.")
@@ -203,7 +226,7 @@ func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.
 			_ = rest
 			return 0
 		}
-		return emit(stdout, format, map[string]any{"rules": rules}, stderr)
+		return emit(stdout, format, map[string]any{"rules": clidto.RulesFromDomain(rules)}, stderr)
 	case "add":
 		fs := flag.NewFlagSet("rules add", flag.ContinueOnError)
 		fs.SetOutput(stderr)
@@ -227,19 +250,19 @@ func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.
 			fmt.Fprintln(stderr, "project-id and activity-id are required unless --follow-previous is set")
 			return 2
 		}
-		id, err := r.App.Rules.AddRule(ctx, domain.RuleInput{
+		addRes, err := r.App.Rules.AddRule(ctx, contracts.RulesAddRequest{Rule: domain.RuleInput{
 			Priority:       *priority,
 			AppPattern:     *appPattern,
 			TitlePattern:   *titlePattern,
 			ProjectID:      pid,
 			ActivityID:     aid,
 			FollowPrevious: *followPrevious,
-		})
+		}})
 		if err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
-		fmt.Fprintf(stdout, "rule added: %d\n", id)
+		fmt.Fprintf(stdout, "rule added: %d\n", addRes.RuleID)
 		return 0
 	case "delete":
 		if len(args) < 2 {
@@ -251,7 +274,7 @@ func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.
 			fmt.Fprintln(stderr, "invalid id")
 			return 2
 		}
-		if err := r.App.Rules.DeleteRule(ctx, id); err != nil {
+		if _, err := r.App.Rules.DeleteRule(ctx, contracts.RulesDeleteRequest{RuleID: id}); err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
@@ -271,11 +294,14 @@ func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.
 		if strings.TrimSpace(*date) != "" {
 			datePtr = date
 		}
-		items, err := r.App.Rules.AnalyzeSuggestions(ctx, domain.SuggestionQuery{Date: datePtr, MinDurationMS: *minDur, Limit: *limit})
+		suggestionsRes, err := r.App.Rules.AnalyzeSuggestions(ctx, contracts.RulesAnalyzeSuggestionsRequest{
+			Query: domain.SuggestionQuery{Date: datePtr, MinDurationMS: *minDur, Limit: *limit},
+		})
 		if err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
+		items := suggestionsRes.Suggestions
 		if *format == "text" {
 			for _, s := range items {
 				title := "*"
@@ -289,7 +315,7 @@ func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.
 			}
 			return 0
 		}
-		return emit(stdout, *format, map[string]any{"suggestions": items}, stderr)
+		return emit(stdout, *format, map[string]any{"suggestions": clidto.SuggestionsFromDomain(items)}, stderr)
 	case "accept":
 		fs := flag.NewFlagSet("rules accept", flag.ContinueOnError)
 		fs.SetOutput(stderr)
@@ -309,7 +335,7 @@ func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.
 		if strings.TrimSpace(*titlePattern) != "" {
 			tp = titlePattern
 		}
-		res, err := r.App.Rules.AcceptSuggestion(ctx, domain.ApplySuggestionInput{
+		res, err := r.App.Rules.AcceptSuggestion(ctx, contracts.RulesAcceptSuggestionRequest{Input: domain.ApplySuggestionInput{
 			Suggestion: domain.RuleSuggestion{
 				SuggestionType: domain.SuggestionTypeAppOnly,
 				AppPattern:     *appPattern,
@@ -318,12 +344,12 @@ func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.
 				ActivityID:     *activityID,
 			},
 			ApplyNow: *applyNow,
-		})
+		}})
 		if err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
-		fmt.Fprintf(stdout, "accepted: rule_created=%v mapped_events=%d\n", res.RuleCreated, res.MappedEvents)
+		fmt.Fprintf(stdout, "accepted: rule_created=%v mapped_events=%d\n", res.Result.RuleCreated, res.Result.MappedEvents)
 		return 0
 	case "auto-apply":
 		fs := flag.NewFlagSet("rules auto-apply", flag.ContinueOnError)
@@ -336,16 +362,18 @@ func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.
 		if err := fs.Parse(args[1:]); err != nil {
 			return 2
 		}
-		res, err := r.App.Rules.AutoApplySuggestions(ctx, domain.AutoApplySuggestionsInput{MinConfidence: *minConf, ApplyNow: *applyNow, MinDurationMS: *minDur, Limit: *limit})
+		res, err := r.App.Rules.AutoApplySuggestions(ctx, contracts.RulesAutoApplySuggestionsRequest{
+			Input: domain.AutoApplySuggestionsInput{MinConfidence: *minConf, ApplyNow: *applyNow, MinDurationMS: *minDur, Limit: *limit},
+		})
 		if err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
 		if *format == "text" {
-			fmt.Fprintf(stdout, "analyzed=%d accepted=%d mapped=%d\n", res.Analyzed, res.Accepted, res.MappedEvents)
+			fmt.Fprintf(stdout, "analyzed=%d accepted=%d mapped=%d\n", res.Result.Analyzed, res.Result.Accepted, res.Result.MappedEvents)
 			return 0
 		}
-		return emit(stdout, *format, res, stderr)
+		return emit(stdout, *format, clidto.AutoApplyResultFromDomain(res.Result), stderr)
 	case "apply-rules":
 		fs := flag.NewFlagSet("rules apply-rules", flag.ContinueOnError)
 		fs.SetOutput(stderr)
@@ -359,16 +387,18 @@ func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.
 		if strings.TrimSpace(*date) != "" {
 			datePtr = date
 		}
-		res, err := r.App.Rules.ApplyRules(ctx, domain.ApplyRulesInput{Date: datePtr, DryRun: *dryRun})
+		res, err := r.App.Rules.ApplyRules(ctx, contracts.RulesApplyRequest{
+			Input: domain.ApplyRulesInput{Date: datePtr, DryRun: *dryRun},
+		})
 		if err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
 		if *format == "text" {
-			fmt.Fprintf(stdout, "unmapped=%d matched=%d dry_run=%v\n", res.UnmappedEvents, res.MatchedEvents, *dryRun)
+			fmt.Fprintf(stdout, "unmapped=%d matched=%d dry_run=%v\n", res.Result.UnmappedEvents, res.Result.MatchedEvents, *dryRun)
 			return 0
 		}
-		return emit(stdout, *format, res, stderr)
+		return emit(stdout, *format, clidto.ApplyRulesResultFromDomain(res.Result), stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown rules subcommand: %s\n", sub)
 		return 2
@@ -384,11 +414,12 @@ func (r *Runner) runProjects(ctx context.Context, args []string, stdout, stderr 
 	format, _ := extractFormat(args[1:])
 	switch sub {
 	case "list":
-		items, err := r.App.Projects.ListActive(ctx)
+		listRes, err := r.App.Projects.ListActive(ctx, contracts.ProjectsListActiveRequest{})
 		if err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
+		items := listRes.Projects
 		if format == "text" {
 			if len(items) == 0 {
 				fmt.Fprintln(stdout, "No active projects")
@@ -399,7 +430,7 @@ func (r *Runner) runProjects(ctx context.Context, args []string, stdout, stderr 
 			}
 			return 0
 		}
-		return emit(stdout, format, map[string]any{"projects": items}, stderr)
+		return emit(stdout, format, map[string]any{"projects": clidto.ProjectsFromDomain(items)}, stderr)
 	case "add":
 		if len(args) < 2 {
 			fmt.Fprintln(stderr, "usage: tt projects add <project_id>")
@@ -410,7 +441,7 @@ func (r *Runner) runProjects(ctx context.Context, args []string, stdout, stderr 
 			fmt.Fprintln(stderr, "invalid project id")
 			return 2
 		}
-		if err := r.App.Projects.Activate(ctx, id); err != nil {
+		if _, err := r.App.Projects.Activate(ctx, contracts.ProjectsActivateRequest{ProjectID: id}); err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
@@ -426,25 +457,27 @@ func (r *Runner) runProjects(ctx context.Context, args []string, stdout, stderr 
 			fmt.Fprintln(stderr, "invalid project id")
 			return 2
 		}
-		if err := r.App.Projects.End(ctx, id); err != nil {
+		if _, err := r.App.Projects.End(ctx, contracts.ProjectsEndRequest{ProjectID: id}); err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
 		fmt.Fprintf(stdout, "project ended: %d\n", id)
 		return 0
 	case "clear":
-		if err := r.App.Projects.EndAll(ctx); err != nil {
+		if _, err := r.App.Projects.EndAll(ctx, contracts.ProjectsEndAllRequest{}); err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
 		fmt.Fprintln(stdout, "all projects ended")
 		return 0
 	case "current":
-		name, id, err := r.App.Projects.Current(ctx)
+		currentRes, err := r.App.Projects.Current(ctx, contracts.ProjectsCurrentRequest{})
 		if err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
+		name := currentRes.Name
+		id := currentRes.ProjectID
 		if format == "text" {
 			if id == nil {
 				fmt.Fprintln(stdout, "No current project")
@@ -468,11 +501,12 @@ func (r *Runner) runReports(ctx context.Context, args []string, stdout, stderr i
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
-	rep, err := r.App.Reports.Report(ctx, usecases.NormalizeRange(*rangeKey))
+	repRes, err := r.App.Reports.Report(ctx, contracts.ReportsBuildRequest{RangeKey: usecases.NormalizeRange(*rangeKey)})
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 1
 	}
+	rep := repRes.Report
 	if *format == "text" {
 		fmt.Fprintf(stdout, "range=%s total=%s excluded=%d\n", rep.Range, domain.FormatDuration(rep.TotalMS), rep.ExcludedEvents)
 		fmt.Fprintln(stdout, "By project:")
@@ -485,7 +519,7 @@ func (r *Runner) runReports(ctx context.Context, args []string, stdout, stderr i
 		}
 		return 0
 	}
-	return emit(stdout, *format, rep, stderr)
+	return emit(stdout, *format, clidto.ReportFromDomain(rep), stderr)
 }
 
 func (r *Runner) runSettings(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -494,14 +528,15 @@ func (r *Runner) runSettings(ctx context.Context, args []string, stdout, stderr 
 		return 2
 	}
 	sub := args[0]
-	cfg, _, err := r.App.Settings.Load(ctx)
+	loadRes, err := r.App.Settings.Load(ctx, contracts.SettingsLoadRequest{})
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 1
 	}
+	cfg := loadRes.Settings
 	switch sub {
 	case "list":
-		b, _ := json.MarshalIndent(cfg, "", "  ")
+		b, _ := json.MarshalIndent(clidto.SettingsFromDomain(cfg), "", "  ")
 		fmt.Fprintln(stdout, string(b))
 		return 0
 	case "get":
@@ -520,7 +555,7 @@ func (r *Runner) runSettings(ctx context.Context, args []string, stdout, stderr 
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 2
 		}
-		if _, err := r.App.Settings.Save(ctx, cfg); err != nil {
+		if _, err := r.App.Settings.Save(ctx, contracts.SettingsSaveRequest{Settings: cfg}); err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
@@ -531,12 +566,13 @@ func (r *Runner) runSettings(ctx context.Context, args []string, stdout, stderr 
 			fmt.Fprintln(stderr, "usage: tt settings unset <key>")
 			return 2
 		}
-		defaults, _, _ := r.App.Settings.Load(context.Background())
+		defaultsRes, _ := r.App.Settings.Load(context.Background(), contracts.SettingsLoadRequest{})
+		defaults := defaultsRes.Settings
 		if err := unsetSetting(&cfg, defaults, args[1]); err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 2
 		}
-		if _, err := r.App.Settings.Save(ctx, cfg); err != nil {
+		if _, err := r.App.Settings.Save(ctx, contracts.SettingsSaveRequest{Settings: cfg}); err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
@@ -658,11 +694,12 @@ func (r *Runner) runReview(ctx context.Context, args []string, stdout, stderr io
 				minDur = v
 			}
 		}
-		dates, err := r.App.Review.Dates(ctx, minDur)
+		datesRes, err := r.App.Review.Dates(ctx, contracts.ReviewDatesRequest{MinDurationMS: minDur})
 		if err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
+		dates := datesRes.Dates
 		for _, d := range dates {
 			fmt.Fprintln(stdout, d)
 		}
@@ -680,18 +717,19 @@ func (r *Runner) runReview(ctx context.Context, args []string, stdout, stderr io
 			fmt.Fprintln(stderr, "--date is required")
 			return 2
 		}
-		groups, err := r.App.Review.Groups(ctx, *date, *minDur)
+		groupsRes, err := r.App.Review.Groups(ctx, contracts.ReviewGroupsRequest{Date: *date, MinDurationMS: *minDur})
 		if err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
+		groups := groupsRes.Groups
 		if *format == "text" {
 			for _, g := range groups {
 				fmt.Fprintf(stdout, "%s | %s | %d events | %s\n", g.AppName, g.WindowTitle, g.EventCount, domain.FormatDuration(g.TotalDurationMS))
 			}
 			return 0
 		}
-		return emit(stdout, *format, map[string]any{"groups": groups}, stderr)
+		return emit(stdout, *format, map[string]any{"groups": clidto.GroupedEventsFromDomain(groups)}, stderr)
 	case "map-group":
 		fs := flag.NewFlagSet("review map-group", flag.ContinueOnError)
 		fs.SetOutput(stderr)
@@ -707,12 +745,18 @@ func (r *Runner) runReview(ctx context.Context, args []string, stdout, stderr io
 			fmt.Fprintln(stderr, "--date --app --title --project-id --activity-id are required")
 			return 2
 		}
-		n, err := r.App.Review.MapGroup(ctx, *date, *app, *title, *project, *activity)
+		mapRes, err := r.App.Review.MapGroup(ctx, contracts.ReviewMapGroupRequest{
+			Date:        *date,
+			AppName:     *app,
+			WindowTitle: *title,
+			ProjectID:   *project,
+			ActivityID:  *activity,
+		})
 		if err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
-		fmt.Fprintf(stdout, "mapped events: %d\n", n)
+		fmt.Fprintf(stdout, "mapped events: %d\n", mapRes.Mapped)
 		return 0
 	case "discard-group":
 		fs := flag.NewFlagSet("review discard-group", flag.ContinueOnError)
@@ -727,12 +771,16 @@ func (r *Runner) runReview(ctx context.Context, args []string, stdout, stderr io
 			fmt.Fprintln(stderr, "--date --app --title are required")
 			return 2
 		}
-		n, err := r.App.Review.DiscardGroup(ctx, *date, *app, *title)
+		discardRes, err := r.App.Review.DiscardGroup(ctx, contracts.ReviewDiscardGroupRequest{
+			Date:        *date,
+			AppName:     *app,
+			WindowTitle: *title,
+		})
 		if err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
-		fmt.Fprintf(stdout, "discarded events: %d\n", n)
+		fmt.Fprintf(stdout, "discarded events: %d\n", discardRes.Discarded)
 		return 0
 	default:
 		fmt.Fprintf(stderr, "unknown review subcommand: %s\n", sub)
