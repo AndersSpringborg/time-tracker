@@ -1,18 +1,7 @@
 {{define "rules"}}
 <section class="card">
-  <h2>Add Rule</h2>
-  <form class="grid-form" hx-post="/rules" hx-target="#rules-table" hx-swap="innerHTML">
-    <label>Priority <input type="number" name="priority" value="100"></label>
-    <label>App Pattern <input type="text" name="app_pattern" placeholder="*Code*"></label>
-    <label>Title Pattern <input type="text" name="title_pattern" placeholder="*github*"></label>
-    <label>Project ID <input type="number" name="project_id" placeholder="required unless follow previous"></label>
-    <label>Activity ID <input type="number" name="activity_id" placeholder="required unless follow previous"></label>
-    <label>Follow Current Project <input type="checkbox" name="follow_previous" value="1"></label>
-    <button type="submit">Add Rule</button>
-  </form>
-</section>
-<section class="card">
-  <h2>Rules</h2>
-  <div id="rules-table" hx-get="/partials/rules" hx-trigger="load" hx-swap="innerHTML">Loading...</div>
+  <h2>Rules Draft</h2>
+  <p class="muted">Stage changes, review the diff, then save in one transaction.</p>
+  <div id="rules-editor" hx-get="/partials/rules" hx-trigger="load" hx-swap="innerHTML">Loading rules editor...</div>
 </section>
 {{end}}

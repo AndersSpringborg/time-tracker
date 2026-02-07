@@ -2,7 +2,6 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -41,6 +40,11 @@ type pageData struct {
 	AllProjects       []domain.Project
 	Suggestions       []domain.RuleSuggestion
 	AutoApplySummary  string
+	DraftPreview      domain.RuleDraftPreview
+	DraftDate         string
+	DraftMinDuration  int64
+	DraftGroups       []domain.GroupedEvent
+	RuleSummary       string
 }
 
 func New(app *usecases.App) (*Server, error) {
@@ -64,6 +68,12 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/partials/reports", s.handleReportsPartial)
 	mux.HandleFunc("/rules", s.handleRules)
 	mux.HandleFunc("/partials/rules", s.handleRulesPartial)
+	mux.HandleFunc("/rules/draft/add", s.handleRulesDraftAdd)
+	mux.HandleFunc("/rules/draft/delete", s.handleRulesDraftDelete)
+	mux.HandleFunc("/rules/draft/readd-defaults", s.handleRulesDraftReAddDefaults)
+	mux.HandleFunc("/rules/draft/save", s.handleRulesDraftSave)
+	mux.HandleFunc("/rules/draft/discard", s.handleRulesDraftDiscard)
+	mux.HandleFunc("/rules/draft/add-from-selection", s.handleRulesDraftAddFromSelection)
 	mux.HandleFunc("/rules/", s.handleRuleDelete)
 	mux.HandleFunc("/suggestions", s.handleSuggestionsPage)
 	mux.HandleFunc("/partials/suggestions", s.handleSuggestionsPartial)
@@ -125,31 +135,172 @@ func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		if _, err := s.app.Rules.AddRule(r.Context(), in); err != nil {
+		if err := s.app.Rules.AddRuleToDraft(r.Context(), in); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
 		if isHTMX(r) {
-			s.renderRulesTable(w, r.Context())
+			s.renderRulesEditor(w, r, "")
 			return
 		}
-		http.Redirect(w, r, "/rules?flash=Rule+added", http.StatusSeeOther)
+		http.Redirect(w, r, "/rules?flash=Rule+staged", http.StatusSeeOther)
 		return
 	}
 	s.render(w, "layout", pageData{Title: "Rules", Page: "rules", Body: "rules", Flash: r.URL.Query().Get("flash")})
 }
 
 func (s *Server) handleRulesPartial(w http.ResponseWriter, r *http.Request) {
-	s.renderRulesTable(w, r.Context())
+	s.renderRulesEditor(w, r, "")
 }
 
-func (s *Server) renderRulesTable(w http.ResponseWriter, ctx context.Context) {
-	rules, err := s.app.Rules.ListRules(ctx)
+func (s *Server) renderRulesEditor(w http.ResponseWriter, r *http.Request, summary string) {
+	draft, err := s.app.Rules.DraftPreview(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	s.render(w, "partials/rules_table", pageData{Rules: rules})
+	date, minDuration := rulesDraftFiltersFromRequest(r)
+	if date == "" {
+		dates, err := s.app.Rules.ListUnmappedDates(r.Context(), minDuration)
+		if err == nil && len(dates) > 0 {
+			date = dates[0]
+		}
+	}
+	groups := make([]domain.GroupedEvent, 0)
+	if date != "" {
+		groups, err = s.app.Rules.ListGroupedUnmappedEvents(r.Context(), date, minDuration)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+	}
+	s.render(w, "partials/rules_editor", pageData{
+		DraftPreview:     draft,
+		DraftDate:        date,
+		DraftMinDuration: minDuration,
+		DraftGroups:      groups,
+		RuleSummary:      summary,
+	})
+}
+
+func (s *Server) handleRulesDraftAdd(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.NotFound(w, r)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", 400)
+		return
+	}
+	in, err := parseRuleInput(r)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if err := s.app.Rules.AddRuleToDraft(r.Context(), in); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	s.renderRulesEditor(w, r, "Rule staged")
+}
+
+func (s *Server) handleRulesDraftDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.NotFound(w, r)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", 400)
+		return
+	}
+	id, err := strconv.ParseInt(strings.TrimSpace(r.Form.Get("rule_id")), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid rule id", 400)
+		return
+	}
+	if err := s.app.Rules.DeleteRuleFromDraft(r.Context(), id); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	s.renderRulesEditor(w, r, "Rule removed from draft")
+}
+
+func (s *Server) handleRulesDraftReAddDefaults(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.NotFound(w, r)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", 400)
+		return
+	}
+	warnings, err := s.app.Rules.ReAddDefaultRulesToDraft(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	summary := "Default rules staged"
+	if len(warnings) > 0 {
+		summary = fmt.Sprintf("Default rules staged with %d warning(s)", len(warnings))
+	}
+	s.renderRulesEditor(w, r, summary)
+}
+
+func (s *Server) handleRulesDraftSave(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.NotFound(w, r)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", 400)
+		return
+	}
+	result, err := s.app.Rules.SaveDraft(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	summary := fmt.Sprintf("Saved changes: +%d updated %d deleted %d", result.Added, result.Updated, result.Deleted)
+	s.renderRulesEditor(w, r, summary)
+}
+
+func (s *Server) handleRulesDraftDiscard(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.NotFound(w, r)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", 400)
+		return
+	}
+	s.app.Rules.DiscardDraft()
+	s.renderRulesEditor(w, r, "Draft discarded")
+}
+
+func (s *Server) handleRulesDraftAddFromSelection(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.NotFound(w, r)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", 400)
+		return
+	}
+	in, err := parseRuleInput(r)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	groups := parseSelectedGroups(r)
+	if len(groups) == 0 {
+		http.Error(w, "select at least one event group", 400)
+		return
+	}
+	if err := s.app.Rules.AddRegexRuleFromGroupsToDraft(r.Context(), groups, in); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	s.renderRulesEditor(w, r, "Regex rule staged from selected events")
 }
 
 func (s *Server) handleRuleDelete(w http.ResponseWriter, r *http.Request) {
@@ -167,7 +318,7 @@ func (s *Server) handleRuleDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	s.renderRulesTable(w, r.Context())
+	s.renderRulesEditor(w, r, "Rule deleted")
 }
 
 func (s *Server) handleSuggestionsPage(w http.ResponseWriter, r *http.Request) {
@@ -410,14 +561,56 @@ func parseRuleInput(r *http.Request) (domain.RuleInput, error) {
 	if err != nil {
 		return domain.RuleInput{}, fmt.Errorf("invalid activity_id")
 	}
+	actionType := domain.RuleAction(strings.TrimSpace(r.Form.Get("action_type")))
+	if actionType == "" && r.Form.Get("follow_previous") != "" {
+		actionType = domain.RuleActionFollowCurrentContext
+	}
 	return domain.RuleInput{
-		Priority:       priority,
-		AppPattern:     r.Form.Get("app_pattern"),
-		TitlePattern:   r.Form.Get("title_pattern"),
-		ProjectID:      projectID,
-		ActivityID:     activityID,
-		FollowPrevious: r.Form.Get("follow_previous") != "",
+		RuleKey:            strings.TrimSpace(r.Form.Get("rule_key")),
+		Source:             domain.RuleSource(strings.TrimSpace(r.Form.Get("source"))),
+		Priority:           priority,
+		AppPattern:         r.Form.Get("app_pattern"),
+		TitlePattern:       r.Form.Get("title_pattern"),
+		ProjectID:          projectID,
+		ActivityID:         activityID,
+		FollowPrevious:     r.Form.Get("follow_previous") != "",
+		ActionType:         actionType,
+		ActionProjectTitle: strings.TrimSpace(r.Form.Get("action_project_title")),
+		ActionActivityName: strings.TrimSpace(r.Form.Get("action_activity_name")),
 	}, nil
+}
+
+func rulesDraftFiltersFromRequest(r *http.Request) (string, int64) {
+	date := strings.TrimSpace(r.FormValue("date"))
+	if date == "" {
+		date = strings.TrimSpace(r.URL.Query().Get("date"))
+	}
+	minDuration := parseIntDefault(r.FormValue("min_duration_ms"), 2000)
+	if raw := strings.TrimSpace(r.URL.Query().Get("min_duration_ms")); raw != "" {
+		minDuration = parseIntDefault(raw, minDuration)
+	}
+	return date, minDuration
+}
+
+func parseSelectedGroups(r *http.Request) []domain.GroupedEvent {
+	indexes := r.Form["selected_idx"]
+	out := make([]domain.GroupedEvent, 0, len(indexes))
+	for _, idx := range indexes {
+		idx = strings.TrimSpace(idx)
+		if idx == "" {
+			continue
+		}
+		app := r.Form.Get("group_app_" + idx)
+		title := r.Form.Get("group_title_" + idx)
+		if strings.TrimSpace(app) == "" {
+			continue
+		}
+		out = append(out, domain.GroupedEvent{
+			AppName:     app,
+			WindowTitle: title,
+		})
+	}
+	return out
 }
 
 func suggestionQueryFromRequest(r *http.Request) domain.SuggestionQuery {

@@ -1,0 +1,144 @@
+{{define "partials/rules_editor"}}
+{{if .RuleSummary}}<p class="flash">{{.RuleSummary}}</p>{{end}}
+{{if .DraftPreview.Warnings}}
+<section class="flash warning">
+  <strong>Warnings</strong>
+  {{range .DraftPreview.Warnings}}
+    <p>{{.}}</p>
+  {{end}}
+</section>
+{{end}}
+
+<section class="card">
+  <div class="actions">
+    <form hx-post="/rules/draft/readd-defaults" hx-target="#rules-editor" hx-swap="innerHTML">
+      <input type="hidden" name="date" value="{{.DraftDate}}">
+      <input type="hidden" name="min_duration_ms" value="{{.DraftMinDuration}}">
+      <button type="submit">Re add default rules</button>
+    </form>
+    <form hx-post="/rules/draft/discard" hx-target="#rules-editor" hx-swap="innerHTML">
+      <input type="hidden" name="date" value="{{.DraftDate}}">
+      <input type="hidden" name="min_duration_ms" value="{{.DraftMinDuration}}">
+      <button type="submit">Discard draft</button>
+    </form>
+    <form hx-post="/rules/draft/save" hx-target="#rules-editor" hx-swap="innerHTML">
+      <input type="hidden" name="date" value="{{.DraftDate}}">
+      <input type="hidden" name="min_duration_ms" value="{{.DraftMinDuration}}">
+      <button type="submit" {{if not .DraftPreview.HasChanges}}disabled{{end}}>Save draft</button>
+    </form>
+  </div>
+</section>
+
+<section class="card">
+  <h3>Add Rule To Draft</h3>
+  <form class="grid-form" hx-post="/rules/draft/add" hx-target="#rules-editor" hx-swap="innerHTML">
+    <input type="hidden" name="date" value="{{.DraftDate}}">
+    <input type="hidden" name="min_duration_ms" value="{{.DraftMinDuration}}">
+    <label>Priority <input type="number" name="priority" value="100"></label>
+    <label>App Pattern (regex) <input type="text" name="app_pattern" placeholder="(?i)^(Firefox|Arc)$"></label>
+    <label>Title Pattern (regex) <input type="text" name="title_pattern" placeholder="(?i)^.*teams.*$"></label>
+    <label>Action
+      <select name="action_type">
+        <option value="assign_explicit">Assign explicit project/activity</option>
+        <option value="follow_current_context">Follow current project/activity</option>
+        <option value="assign_activity_in_current_project">Set activity in current project</option>
+        <option value="assign_project_activity_by_title">Set project+activity by title</option>
+      </select>
+    </label>
+    <label>Project ID <input type="number" name="project_id" placeholder="10"></label>
+    <label>Activity ID <input type="number" name="activity_id" placeholder="100"></label>
+    <label>Action Project Title <input type="text" name="action_project_title" placeholder="project a"></label>
+    <label>Action Activity Name <input type="text" name="action_activity_name" placeholder="development"></label>
+    <button type="submit">Stage Rule</button>
+  </form>
+</section>
+
+<section class="card">
+  <h3>Create Regex Rule From Event Selection</h3>
+  <form class="inline-form" hx-get="/partials/rules" hx-target="#rules-editor" hx-swap="innerHTML">
+    <label>Date <input type="text" name="date" value="{{.DraftDate}}" placeholder="YYYY-MM-DD"></label>
+    <label>Min Duration ms <input type="number" name="min_duration_ms" value="{{.DraftMinDuration}}"></label>
+    <button type="submit">Refresh groups</button>
+  </form>
+  <form hx-post="/rules/draft/add-from-selection" hx-target="#rules-editor" hx-swap="innerHTML">
+    <input type="hidden" name="date" value="{{.DraftDate}}">
+    <input type="hidden" name="min_duration_ms" value="{{.DraftMinDuration}}">
+    <input type="hidden" name="action_type" value="assign_explicit">
+    <div class="inline-form">
+      <label>Priority <input type="number" name="priority" value="180"></label>
+      <label>Project ID <input type="number" name="project_id" placeholder="10"></label>
+      <label>Activity ID <input type="number" name="activity_id" placeholder="100"></label>
+      <button type="submit">Add Rule (Regex)</button>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th></th>
+          <th>App</th>
+          <th>Window Title</th>
+          <th>Events</th>
+          <th>Duration</th>
+        </tr>
+      </thead>
+      <tbody>
+      {{range $i, $g := .DraftGroups}}
+        <tr>
+          <td>
+            <input type="checkbox" name="selected_idx" value="{{$i}}">
+            <input type="hidden" name="group_app_{{$i}}" value="{{$g.AppName}}">
+            <input type="hidden" name="group_title_{{$i}}" value="{{$g.WindowTitle}}">
+          </td>
+          <td>{{$g.AppName}}</td>
+          <td>{{$g.WindowTitle}}</td>
+          <td>{{$g.EventCount}}</td>
+          <td>{{formatDuration $g.TotalDurationMS}}</td>
+        </tr>
+      {{else}}
+        <tr><td colspan="5" class="muted">No unmapped groups for this date.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+  </form>
+</section>
+
+<section class="card">
+  <h3>Draft Preview</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Change</th>
+        <th>ID</th>
+        <th>Priority</th>
+        <th>App Pattern</th>
+        <th>Title Pattern</th>
+        <th>Target</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {{range .DraftPreview.Rows}}
+      <tr class="rule-change-{{.Change}}">
+        <td><span class="badge badge-{{.Change}}">{{.Change}}</span></td>
+        <td>{{.Rule.ID}}</td>
+        <td>{{.Rule.Priority}}</td>
+        <td><code>{{.Rule.AppPattern}}</code></td>
+        <td><code>{{.Rule.TitlePattern}}</code></td>
+        <td>{{.Rule.DisplayTarget}}</td>
+        <td>
+          {{if ne .Change "deleted"}}
+          <form hx-post="/rules/draft/delete" hx-target="#rules-editor" hx-swap="innerHTML">
+            <input type="hidden" name="rule_id" value="{{.Rule.ID}}">
+            <input type="hidden" name="date" value="{{$.DraftDate}}">
+            <input type="hidden" name="min_duration_ms" value="{{$.DraftMinDuration}}">
+            <button type="submit">Delete</button>
+          </form>
+          {{end}}
+        </td>
+      </tr>
+    {{else}}
+      <tr><td colspan="7" class="muted">No rules in draft.</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+</section>
+{{end}}

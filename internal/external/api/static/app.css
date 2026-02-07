@@ -109,12 +109,31 @@ th, td {
   padding: .7rem .9rem;
   margin-bottom: 1rem;
 }
+.flash.warning {
+  border-left-color: #b8860b;
+  background: #fff8df;
+}
 
 .muted { color: var(--muted); }
 .stack p { margin: .35rem 0; }
 .status.running { border-left: 4px solid #2a8740; padding-left: .75rem; }
 .status.loaded, .status.not_loaded { border-left: 4px solid #b8701c; padding-left: .75rem; }
 .actions { display: flex; gap: .5rem; margin-top: .4rem; }
+
+.badge {
+  display: inline-block;
+  padding: .2rem .45rem;
+  border-radius: 999px;
+  font-size: .75rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  font-weight: 600;
+}
+.badge-added { background: #e6f7eb; color: #226b36; }
+.badge-updated { background: #e8f0ff; color: #244c9a; }
+.badge-deleted { background: #ffe9e9; color: #8c2a2a; }
+.badge-unchanged { background: #f0f0f0; color: #5a5a5a; }
+.rule-change-deleted td { opacity: 0.7; }
 
 @media (max-width: 700px) {
   nav { display: grid; grid-template-columns: repeat(3, 1fr); gap: .35rem; }

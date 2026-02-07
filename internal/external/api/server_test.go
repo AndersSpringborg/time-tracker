@@ -80,3 +80,26 @@ func TestSuggestionsPartialRendersRows(t *testing.T) {
 		t.Fatalf("expected Accept button in body")
 	}
 }
+
+func TestRulesPartialRendersDraftActions(t *testing.T) {
+	app := &usecases.App{
+		Rules: usecases.NewRulesUsecase(&fakeRulesRepo{}),
+	}
+	s, err := New(app)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/partials/rules", nil)
+	rr := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "Re add default rules") {
+		t.Fatalf("expected re-add defaults button")
+	}
+	if !strings.Contains(body, "Draft Preview") {
+		t.Fatalf("expected draft preview heading")
+	}
+}
