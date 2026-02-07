@@ -5,6 +5,7 @@
 //! The daemon command integrates with Swift for macOS event tracking.
 
 const std = @import("std");
+const glob = @import("glob");
 const AppContext = @import("app_context").AppContext;
 const query_repo = @import("query_repository");
 const hierarchy_repo = @import("hierarchy_repository");
@@ -12,6 +13,7 @@ const domain_rule = @import("domain_rule");
 const Rule = domain_rule.Rule;
 const config = @import("config");
 const project_weighted_report_usecase = @import("project_weighted_report_usecase");
+const time_weighted_project = @import("time_weighted_project");
 
 // Legacy modules (still needed for complex workflows)
 const review = @import("review");
@@ -200,6 +202,327 @@ fn readLine(buf: []u8) ![]u8 {
     return buf[0..bytes_read];
 }
 
+const ReportEvent = struct {
+    timestamp_ms: i64,
+    duration_ms: i64,
+    app_name: []u8,
+    window_title: []u8,
+    project_id: ?i64,
+};
+
+const AppSummaryRow = struct {
+    app_name: []u8,
+    total_ms: i64,
+};
+
+const TitleSummaryRow = struct {
+    window_title: []u8,
+    total_ms: i64,
+};
+
+fn fetchReportEvents(
+    conn: c.duckdb_connection,
+    allocator: std.mem.Allocator,
+    range: query_repo.TimeRange,
+) ![]ReportEvent {
+    const where_clause = switch (range) {
+        .today => "WHERE e.timestamp_ms >= (extract(epoch from current_date) * 1000)",
+        .week => "WHERE e.timestamp_ms >= (extract(epoch from current_date - interval '7 days') * 1000)",
+        .all => "",
+    };
+
+    var query_buf: [1024]u8 = undefined;
+    const query = std.fmt.bufPrintZ(&query_buf,
+        \\SELECT e.timestamp_ms, e.duration_ms, e.app_name, e.window_title, ph.project_id
+        \\FROM events e
+        \\LEFT JOIN activities a ON e.activity_id = a.activity_id
+        \\LEFT JOIN phases ph ON a.phase_id = ph.phase_id
+        \\{s}
+        \\ORDER BY e.timestamp_ms ASC
+    , .{where_clause}) catch return error.QueryFailed;
+
+    var result: c.duckdb_result = undefined;
+    if (c.duckdb_query(conn, query.ptr, &result) == c.DuckDBError) {
+        return error.QueryFailed;
+    }
+    defer c.duckdb_destroy_result(&result);
+
+    const row_count = c.duckdb_row_count(&result);
+    var events = allocator.alloc(ReportEvent, row_count) catch return error.OutOfMemory;
+    errdefer allocator.free(events);
+
+    for (0..row_count) |i| {
+        const row: c.idx_t = @intCast(i);
+
+        const app_ptr = c.duckdb_value_varchar(&result, 2, row);
+        defer if (app_ptr != null) c.duckdb_free(app_ptr);
+        const app_len = if (app_ptr != null) std.mem.len(app_ptr) else 0;
+        const app_name = allocator.alloc(u8, app_len) catch {
+            for (events[0..i]) |event| {
+                allocator.free(event.app_name);
+                allocator.free(event.window_title);
+            }
+            allocator.free(events);
+            return error.OutOfMemory;
+        };
+        if (app_ptr != null and app_len > 0) {
+            @memcpy(app_name, app_ptr[0..app_len]);
+        }
+
+        const title_ptr = c.duckdb_value_varchar(&result, 3, row);
+        defer if (title_ptr != null) c.duckdb_free(title_ptr);
+        const title_len = if (title_ptr != null) std.mem.len(title_ptr) else 0;
+        const window_title = allocator.alloc(u8, title_len) catch {
+            allocator.free(app_name);
+            for (events[0..i]) |event| {
+                allocator.free(event.app_name);
+                allocator.free(event.window_title);
+            }
+            allocator.free(events);
+            return error.OutOfMemory;
+        };
+        if (title_ptr != null and title_len > 0) {
+            @memcpy(window_title, title_ptr[0..title_len]);
+        }
+
+        events[i] = .{
+            .timestamp_ms = c.duckdb_value_int64(&result, 0, row),
+            .duration_ms = c.duckdb_value_int64(&result, 1, row),
+            .app_name = app_name,
+            .window_title = window_title,
+            .project_id = if (c.duckdb_value_is_null(&result, 4, row)) null else c.duckdb_value_int64(&result, 4, row),
+        };
+    }
+
+    return events;
+}
+
+fn freeReportEvents(allocator: std.mem.Allocator, events: []ReportEvent) void {
+    for (events) |event| {
+        allocator.free(event.app_name);
+        allocator.free(event.window_title);
+    }
+    allocator.free(events);
+}
+
+fn isNoiseApp(cfg: config.Config, app_name: []const u8) bool {
+    for (cfg.noise_app_patterns) |pattern| {
+        if (glob.match(pattern, app_name)) return true;
+    }
+    return false;
+}
+
+fn applySimpleNoiseMask(cfg: config.Config, events: []const ReportEvent, excluded: []bool) void {
+    for (events, 0..) |event, i| {
+        excluded[i] = isNoiseApp(cfg, event.app_name);
+    }
+}
+
+fn isNoiseMidpoint(midpoint_ms: i64, intervals: []const time_weighted_project.ProjectInterval) bool {
+    for (intervals) |interval| {
+        if (interval.project_id != 1) continue;
+        if (midpoint_ms >= interval.start_ms and midpoint_ms < interval.end_ms) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn buildNoiseMask(
+    allocator: std.mem.Allocator,
+    events: []const ReportEvent,
+    cfg: config.Config,
+) ![]bool {
+    const excluded = allocator.alloc(bool, events.len) catch return error.OutOfMemory;
+    @memset(excluded, false);
+
+    if (events.len == 0 or cfg.noise_app_patterns.len == 0) {
+        return excluded;
+    }
+
+    var slices: std.ArrayListUnmanaged(time_weighted_project.ProjectSlice) = .{};
+    defer slices.deinit(allocator);
+
+    for (events) |event| {
+        if (event.duration_ms <= 0) continue;
+
+        slices.append(allocator, .{
+            .project_id = if (isNoiseApp(cfg, event.app_name)) 1 else 2,
+            .start_ms = event.timestamp_ms,
+            .end_ms = event.timestamp_ms + event.duration_ms,
+        }) catch {
+            applySimpleNoiseMask(cfg, events, excluded);
+            return excluded;
+        };
+    }
+
+    if (slices.items.len == 0) {
+        applySimpleNoiseMask(cfg, events, excluded);
+        return excluded;
+    }
+
+    const minute_ms: i64 = 60 * 1000;
+    const weighted_cfg = time_weighted_project.TimeWeightedConfig{
+        .bucket_size_ms = cfg.noise_bucket_minutes * minute_ms,
+        .switch_threshold_ms = cfg.noise_switch_minutes * minute_ms,
+    };
+
+    const buckets = time_weighted_project.TimeWeightedProjector.computeBuckets(allocator, slices.items, weighted_cfg) catch {
+        applySimpleNoiseMask(cfg, events, excluded);
+        return excluded;
+    };
+    defer allocator.free(buckets);
+
+    const smoothed = time_weighted_project.TimeWeightedProjector.smoothBuckets(allocator, buckets, weighted_cfg) catch {
+        applySimpleNoiseMask(cfg, events, excluded);
+        return excluded;
+    };
+    defer allocator.free(smoothed);
+
+    const intervals = time_weighted_project.TimeWeightedProjector.mergeBucketsToIntervals(allocator, smoothed) catch {
+        applySimpleNoiseMask(cfg, events, excluded);
+        return excluded;
+    };
+    defer allocator.free(intervals);
+
+    for (events, 0..) |event, i| {
+        if (event.duration_ms <= 0) {
+            excluded[i] = isNoiseApp(cfg, event.app_name);
+            continue;
+        }
+
+        const midpoint_ms = event.timestamp_ms + @divFloor(event.duration_ms, 2);
+        excluded[i] = isNoiseMidpoint(midpoint_ms, intervals);
+    }
+
+    return excluded;
+}
+
+fn totalTrackedMs(events: []const ReportEvent, excluded: []const bool) i64 {
+    var total: i64 = 0;
+    for (events, 0..) |event, i| {
+        if (excluded[i]) continue;
+        if (event.duration_ms > 0) total += event.duration_ms;
+    }
+    return total;
+}
+
+fn countExcludedEvents(excluded: []const bool) usize {
+    var count: usize = 0;
+    for (excluded) |is_excluded| {
+        if (is_excluded) count += 1;
+    }
+    return count;
+}
+
+fn summarizeByApp(
+    allocator: std.mem.Allocator,
+    events: []const ReportEvent,
+    excluded: []const bool,
+) ![]AppSummaryRow {
+    var items: std.ArrayListUnmanaged(AppSummaryRow) = .{};
+    errdefer {
+        for (items.items) |item| allocator.free(item.app_name);
+        items.deinit(allocator);
+    }
+
+    for (events, 0..) |event, i| {
+        if (excluded[i] or event.duration_ms <= 0) continue;
+
+        var found = false;
+        for (items.items) |*item| {
+            if (std.mem.eql(u8, item.app_name, event.app_name)) {
+                item.total_ms += event.duration_ms;
+                found = true;
+                break;
+            }
+        }
+
+        if (!found) {
+            const app_copy = allocator.dupe(u8, event.app_name) catch return error.OutOfMemory;
+            items.append(allocator, .{
+                .app_name = app_copy,
+                .total_ms = event.duration_ms,
+            }) catch return error.OutOfMemory;
+        }
+    }
+
+    std.mem.sort(AppSummaryRow, items.items, {}, struct {
+        fn lessThan(_: void, lhs: AppSummaryRow, rhs: AppSummaryRow) bool {
+            if (lhs.total_ms == rhs.total_ms) {
+                return std.mem.lessThan(u8, lhs.app_name, rhs.app_name);
+            }
+            return lhs.total_ms > rhs.total_ms;
+        }
+    }.lessThan);
+
+    return items.toOwnedSlice(allocator) catch return error.OutOfMemory;
+}
+
+fn freeAppSummaries(allocator: std.mem.Allocator, summaries: []AppSummaryRow) void {
+    for (summaries) |summary| allocator.free(summary.app_name);
+    allocator.free(summaries);
+}
+
+fn summarizeTitlesForApp(
+    allocator: std.mem.Allocator,
+    events: []const ReportEvent,
+    excluded: []const bool,
+    app_name: []const u8,
+) ![]TitleSummaryRow {
+    var items: std.ArrayListUnmanaged(TitleSummaryRow) = .{};
+    errdefer {
+        for (items.items) |item| allocator.free(item.window_title);
+        items.deinit(allocator);
+    }
+
+    for (events, 0..) |event, i| {
+        if (excluded[i] or event.duration_ms <= 0) continue;
+        if (!std.mem.eql(u8, event.app_name, app_name)) continue;
+
+        var found = false;
+        for (items.items) |*item| {
+            if (std.mem.eql(u8, item.window_title, event.window_title)) {
+                item.total_ms += event.duration_ms;
+                found = true;
+                break;
+            }
+        }
+
+        if (!found) {
+            const title_copy = allocator.dupe(u8, event.window_title) catch return error.OutOfMemory;
+            items.append(allocator, .{
+                .window_title = title_copy,
+                .total_ms = event.duration_ms,
+            }) catch return error.OutOfMemory;
+        }
+    }
+
+    std.mem.sort(TitleSummaryRow, items.items, {}, struct {
+        fn lessThan(_: void, lhs: TitleSummaryRow, rhs: TitleSummaryRow) bool {
+            if (lhs.total_ms == rhs.total_ms) {
+                return std.mem.lessThan(u8, lhs.window_title, rhs.window_title);
+            }
+            return lhs.total_ms > rhs.total_ms;
+        }
+    }.lessThan);
+
+    if (items.items.len > 10) {
+        for (items.items[10..]) |item| allocator.free(item.window_title);
+        const trimmed = allocator.alloc(TitleSummaryRow, 10) catch return error.OutOfMemory;
+        @memcpy(trimmed, items.items[0..10]);
+        items.deinit(allocator);
+        return trimmed;
+    }
+
+    return items.toOwnedSlice(allocator) catch return error.OutOfMemory;
+}
+
+fn freeTitleSummaries(allocator: std.mem.Allocator, titles: []TitleSummaryRow) void {
+    for (titles) |title| allocator.free(title.window_title);
+    allocator.free(titles);
+}
+
 // =============================================================================
 // SUMMARY COMMAND
 // =============================================================================
@@ -226,17 +549,30 @@ fn runSummary(allocator: std.mem.Allocator, args: []const [:0]const u8) void {
         .all => query_repo.TimeRange.all,
     };
 
-    // Get total time
-    const total_ms = ctx.queryRepo.getTotalTrackedTime(query_range) catch 0;
-    var total_buf: [32]u8 = undefined;
-    std.debug.print("Total tracked: {s}\n\n", .{formatDuration(total_ms, &total_buf)});
+    var cfg = config.load(allocator) catch config.Config{};
+    defer cfg.deinit(allocator);
 
-    // Get per-app summary
-    const summaries = ctx.queryRepo.getAppSummary(query_range) catch |err| {
-        std.debug.print("Failed to query: {}\n", .{err});
+    const events = fetchReportEvents(ctx.getConnection(), allocator, query_range) catch |err| {
+        std.debug.print("Failed to query events: {}\n", .{err});
         return;
     };
-    defer ctx.queryRepo.freeAppSummaries(summaries);
+    defer freeReportEvents(allocator, events);
+
+    const excluded = buildNoiseMask(allocator, events, cfg) catch |err| {
+        std.debug.print("Failed to filter noise: {}\n", .{err});
+        return;
+    };
+    defer allocator.free(excluded);
+
+    const summaries = summarizeByApp(allocator, events, excluded) catch |err| {
+        std.debug.print("Failed to build summary: {}\n", .{err});
+        return;
+    };
+    defer freeAppSummaries(allocator, summaries);
+
+    const total_ms = totalTrackedMs(events, excluded);
+    var total_buf: [32]u8 = undefined;
+    std.debug.print("Total tracked: {s}\n\n", .{formatDuration(total_ms, &total_buf)});
 
     if (summaries.len == 0) {
         std.debug.print("No data recorded yet.\n", .{});
@@ -287,17 +623,30 @@ fn runReport(allocator: std.mem.Allocator, args: []const [:0]const u8) void {
         return;
     }
 
-    // Get total time
-    const total_ms = ctx.queryRepo.getTotalTrackedTime(query_range) catch 0;
-    var total_buf: [32]u8 = undefined;
-    std.debug.print("Total tracked: {s}\n", .{formatDuration(total_ms, &total_buf)});
+    var cfg = config.load(allocator) catch config.Config{};
+    defer cfg.deinit(allocator);
 
-    // Get per-app summary
-    const summaries = ctx.queryRepo.getAppSummary(query_range) catch |err| {
-        std.debug.print("Failed to query: {}\n", .{err});
+    const events = fetchReportEvents(ctx.getConnection(), allocator, query_range) catch |err| {
+        std.debug.print("Failed to query events: {}\n", .{err});
         return;
     };
-    defer ctx.queryRepo.freeAppSummaries(summaries);
+    defer freeReportEvents(allocator, events);
+
+    const excluded = buildNoiseMask(allocator, events, cfg) catch |err| {
+        std.debug.print("Failed to filter noise: {}\n", .{err});
+        return;
+    };
+    defer allocator.free(excluded);
+
+    const summaries = summarizeByApp(allocator, events, excluded) catch |err| {
+        std.debug.print("Failed to build summary: {}\n", .{err});
+        return;
+    };
+    defer freeAppSummaries(allocator, summaries);
+
+    const total_ms = totalTrackedMs(events, excluded);
+    var total_buf: [32]u8 = undefined;
+    std.debug.print("Total tracked: {s}\n", .{formatDuration(total_ms, &total_buf)});
 
     if (summaries.len == 0) {
         std.debug.print("No data recorded yet.\n", .{});
@@ -310,9 +659,8 @@ fn runReport(allocator: std.mem.Allocator, args: []const [:0]const u8) void {
         std.debug.print("\n{s} ({s})\n", .{ summary.app_name, duration });
         std.debug.print("{s:-<50}\n", .{""});
 
-        // Get title details for this app
-        const details = ctx.queryRepo.getTitleDetails(summary.app_name, query_range) catch continue;
-        defer ctx.queryRepo.freeTitleDetails(details);
+        const details = summarizeTitlesForApp(allocator, events, excluded, summary.app_name) catch continue;
+        defer freeTitleSummaries(allocator, details);
 
         for (details) |detail| {
             var detail_buf: [32]u8 = undefined;
@@ -342,9 +690,104 @@ fn runWeightedProjectReport(
     var cfg = config.load(allocator) catch config.Config{};
     defer cfg.deinit(allocator);
 
+    const events = fetchReportEvents(ctx.getConnection(), allocator, query_range) catch |err| {
+        std.debug.print("Failed to query events: {}\n", .{err});
+        return;
+    };
+    defer freeReportEvents(allocator, events);
+
+    const excluded = buildNoiseMask(allocator, events, cfg) catch |err| {
+        std.debug.print("Failed to filter noise: {}\n", .{err});
+        return;
+    };
+    defer allocator.free(excluded);
+
+    var candidate_list: std.ArrayListUnmanaged(query_repo.ProjectEventCandidate) = .{};
+    defer candidate_list.deinit(allocator);
+
+    for (events, 0..) |event, i| {
+        if (excluded[i]) continue;
+        candidate_list.append(allocator, .{
+            .timestamp_ms = event.timestamp_ms,
+            .duration_ms = event.duration_ms,
+            .project_id = event.project_id,
+        }) catch |err| {
+            std.debug.print("Failed to prepare weighted report candidates: {}\n", .{err});
+            return;
+        };
+    }
+
+    const filtered_candidates = candidate_list.items;
+
+    const FilteredQueryRepository = struct {
+        allocator: std.mem.Allocator,
+        candidates: []const query_repo.ProjectEventCandidate,
+
+        pub fn init(allocator_: std.mem.Allocator, candidates_: []const query_repo.ProjectEventCandidate) @This() {
+            return .{
+                .allocator = allocator_,
+                .candidates = candidates_,
+            };
+        }
+
+        pub fn getAppSummary(self: *@This(), _: query_repo.TimeRange) query_repo.QueryRepositoryError![]query_repo.AppSummary {
+            return self.allocator.alloc(query_repo.AppSummary, 0) catch return error.OutOfMemory;
+        }
+
+        pub fn getTitleDetails(self: *@This(), _: []const u8, _: query_repo.TimeRange) query_repo.QueryRepositoryError![]query_repo.TitleDetail {
+            return self.allocator.alloc(query_repo.TitleDetail, 0) catch return error.OutOfMemory;
+        }
+
+        pub fn getTotalTrackedTime(self: *@This(), _: query_repo.TimeRange) query_repo.QueryRepositoryError!i64 {
+            var total: i64 = 0;
+            for (self.candidates) |candidate| {
+                if (candidate.duration_ms > 0) total += candidate.duration_ms;
+            }
+            return total;
+        }
+
+        pub fn getProjectName(_: *@This(), _: i64) query_repo.QueryRepositoryError!?[]const u8 {
+            return null;
+        }
+
+        pub fn getProjectEventCandidates(self: *@This(), _: query_repo.TimeRange) query_repo.QueryRepositoryError![]query_repo.ProjectEventCandidate {
+            const copy = self.allocator.alloc(query_repo.ProjectEventCandidate, self.candidates.len) catch return error.OutOfMemory;
+            @memcpy(copy, self.candidates);
+            return copy;
+        }
+
+        pub fn freeAppSummaries(self: *@This(), summaries: []query_repo.AppSummary) void {
+            for (summaries) |summary| {
+                if (summary.app_name.len > 0) self.allocator.free(@constCast(summary.app_name));
+            }
+            self.allocator.free(summaries);
+        }
+
+        pub fn freeTitleDetails(self: *@This(), details: []query_repo.TitleDetail) void {
+            for (details) |detail| {
+                if (detail.window_title.len > 0) self.allocator.free(@constCast(detail.window_title));
+            }
+            self.allocator.free(details);
+        }
+
+        pub fn freeProjectEventCandidates(self: *@This(), candidates: []query_repo.ProjectEventCandidate) void {
+            self.allocator.free(candidates);
+        }
+
+        pub fn freeName(self: *@This(), name: []const u8) void {
+            self.allocator.free(@constCast(name));
+        }
+
+        pub fn repository(self: *@This()) query_repo.QueryRepository {
+            return query_repo.QueryRepository.init(self);
+        }
+    };
+
+    var filtered_repo = FilteredQueryRepository.init(allocator, filtered_candidates);
+
     const minute_ms: i64 = 60 * 1000;
     var usecase = project_weighted_report_usecase.ProjectWeightedReportUseCase.init(
-        ctx.queryRepo.repository(),
+        filtered_repo.repository(),
         .{
             .bucket_size_ms = cfg.weighted_bucket_minutes * minute_ms,
             .switch_threshold_ms = cfg.weighted_switch_minutes * minute_ms,
@@ -363,8 +806,8 @@ fn runWeightedProjectReport(
         .{ cfg.weighted_bucket_minutes, cfg.weighted_switch_minutes },
     );
     std.debug.print(
-        "Source events: {d}  Mapped events: {d}  Excluded unmapped: {d}\n\n",
-        .{ report.source_event_count, report.mapped_event_count, report.excluded_unmapped_count },
+        "Source events: {d}  Noise excluded: {d}  Mapped events: {d}  Excluded unmapped: {d}\n\n",
+        .{ events.len, countExcludedEvents(excluded), report.mapped_event_count, report.excluded_unmapped_count },
     );
 
     if (report.totals.len == 0) {
@@ -522,7 +965,9 @@ fn runRulesList(ctx: *AppContext) void {
         var maps_to: []const u8 = undefined;
         var needs_free = false;
 
-        if (rule.is_global) {
+        if (rule.follow_previous) {
+            maps_to = "(follow previous)";
+        } else if (rule.is_global) {
             if (rule.kind_name) |kind_name| {
                 const formatted = std.fmt.allocPrint(ctx.allocator, "(global) {s}", .{kind_name}) catch "(global) ???";
                 maps_to = formatted;
@@ -586,9 +1031,14 @@ fn runApplyRules(allocator: std.mem.Allocator) void {
 
     const conn = ctx.getConnection();
 
-    // Get unmapped events
+    // Process all events in chronological order so follow_previous can reuse
+    // the latest mapped activity/kind from earlier events.
     var result: c.duckdb_result = undefined;
-    const query_sql = "SELECT id, app_name, window_title FROM events WHERE activity_id IS NULL AND manually_mapped = false";
+    const query_sql =
+        \\SELECT id, app_name, window_title, activity_id, kind_id, manually_mapped
+        \\FROM events
+        \\ORDER BY timestamp_ms ASC, id ASC
+    ;
 
     if (c.duckdb_query(conn, query_sql, &result) == c.DuckDBError) {
         std.debug.print("Failed to query events\n", .{});
@@ -597,43 +1047,64 @@ fn runApplyRules(allocator: std.mem.Allocator) void {
     defer c.duckdb_destroy_result(&result);
 
     const row_count = c.duckdb_row_count(&result);
+    const current_project_id = getCurrentProjectId(conn);
     var matched: u64 = 0;
+    var unmapped: u64 = 0;
+    var previous_mapping: ?ActivityKind = null;
 
     for (0..row_count) |i| {
         const row: c.idx_t = @intCast(i);
         const event_id = c.duckdb_value_int64(&result, 0, row);
+
+        const has_mapping = !c.duckdb_value_is_null(&result, 3, row) and !c.duckdb_value_is_null(&result, 4, row);
+        if (has_mapping) {
+            previous_mapping = .{
+                .activity_id = c.duckdb_value_int64(&result, 3, row),
+                .kind_id = c.duckdb_value_int64(&result, 4, row),
+            };
+            continue;
+        }
+
+        const is_manually_mapped = c.duckdb_value_boolean(&result, 5, row);
+        if (is_manually_mapped) continue;
+
+        unmapped += 1;
+
         const app_name_ptr = c.duckdb_value_varchar(&result, 1, row);
         const title_ptr = c.duckdb_value_varchar(&result, 2, row);
+        defer {
+            if (app_name_ptr != null) c.duckdb_free(app_name_ptr);
+            if (title_ptr != null) c.duckdb_free(title_ptr);
+        }
 
         if (app_name_ptr == null or title_ptr == null) continue;
 
-        const app_name = std.mem.sliceTo(app_name_ptr, 0);
-        const title = std.mem.sliceTo(title_ptr, 0);
+        const app_name = std.mem.span(app_name_ptr);
+        const title = std.mem.span(title_ptr);
 
-        const match = ctx.ruleRepo.findMatch(app_name, title) catch continue;
+        const match = ctx.ruleRepo.findMatchWithContext(app_name, title, current_project_id) catch continue;
         if (match) |m| {
-            var update_stmt: c.duckdb_prepared_statement = undefined;
-            const update_sql = "UPDATE events SET activity_id = ?, kind_id = ? WHERE id = ?";
+            const resolved_mapping: ?ActivityKind = switch (m.action) {
+                .map_kind => if (m.activity_id != null and m.kind_id != null)
+                    .{
+                        .activity_id = m.activity_id.?,
+                        .kind_id = m.kind_id.?,
+                    }
+                else
+                    null,
+                .follow_previous => previous_mapping,
+            };
 
-            if (c.duckdb_prepare(conn, update_sql, &update_stmt) == c.DuckDBError) continue;
-            defer c.duckdb_destroy_prepare(&update_stmt);
-
-            _ = c.duckdb_bind_int64(update_stmt, 1, m.activity_id);
-            _ = c.duckdb_bind_int64(update_stmt, 2, m.kind_id);
-            _ = c.duckdb_bind_int64(update_stmt, 3, event_id);
-
-            var update_result: c.duckdb_result = undefined;
-            if (c.duckdb_execute_prepared(update_stmt, &update_result) == c.DuckDBError) {
-                c.duckdb_destroy_result(&update_result);
-                continue;
+            if (resolved_mapping) |mapping| {
+                if (updateEventMapping(conn, event_id, mapping)) {
+                    previous_mapping = mapping;
+                    matched += 1;
+                }
             }
-            c.duckdb_destroy_result(&update_result);
-
-            matched += 1;
         }
     }
 
-    std.debug.print("Applied rules to {d} events (out of {d} unmapped).\n", .{ matched, row_count });
+    std.debug.print("Applied rules to {d} events (out of {d} unmapped).\n", .{ matched, unmapped });
 }
 
 // =============================================================================
@@ -897,21 +1368,21 @@ fn runConfig(allocator: std.mem.Allocator, args: []const [:0]const u8) void {
     } else if (std.mem.eql(u8, subcommand, "get")) {
         if (args.len < 2) {
             std.debug.print("Usage: tt config get <key>\n", .{});
-            std.debug.print("Available keys: work-wifis, enabled, weighted-bucket-minutes, weighted-switch-minutes\n", .{});
+            std.debug.print("Available keys: work-wifis, enabled, weighted-bucket-minutes, weighted-switch-minutes, noise-apps, noise-bucket-minutes, noise-switch-minutes\n", .{});
             return;
         }
         runConfigGet(allocator, args[1]);
     } else if (std.mem.eql(u8, subcommand, "set")) {
         if (args.len < 3) {
             std.debug.print("Usage: tt config set <key> <value>\n", .{});
-            std.debug.print("Available keys: work-wifis, enabled, weighted-bucket-minutes, weighted-switch-minutes\n", .{});
+            std.debug.print("Available keys: work-wifis, enabled, weighted-bucket-minutes, weighted-switch-minutes, noise-apps, noise-bucket-minutes, noise-switch-minutes\n", .{});
             return;
         }
         runConfigSet(allocator, args[1], args[2]);
     } else if (std.mem.eql(u8, subcommand, "unset")) {
         if (args.len < 2) {
             std.debug.print("Usage: tt config unset <key>\n", .{});
-            std.debug.print("Available keys: work-wifis, enabled, weighted-bucket-minutes, weighted-switch-minutes\n", .{});
+            std.debug.print("Available keys: work-wifis, enabled, weighted-bucket-minutes, weighted-switch-minutes, noise-apps, noise-bucket-minutes, noise-switch-minutes\n", .{});
             return;
         }
         runConfigUnset(allocator, args[1]);
@@ -1086,6 +1557,75 @@ fn getTimestampMs() i64 {
     return sec_ms + nsec_ms;
 }
 
+const ActivityKind = struct {
+    activity_id: i64,
+    kind_id: i64,
+};
+
+fn getCurrentProjectId(conn: c.duckdb_connection) ?i64 {
+    var result: c.duckdb_result = undefined;
+    const sql =
+        \\SELECT project_id
+        \\FROM project_assignments
+        \\WHERE ended_at IS NULL
+        \\ORDER BY started_at DESC
+        \\LIMIT 1
+    ;
+
+    if (c.duckdb_query(conn, sql, &result) == c.DuckDBError) {
+        c.duckdb_destroy_result(&result);
+        return null;
+    }
+    defer c.duckdb_destroy_result(&result);
+
+    if (c.duckdb_row_count(&result) == 0) return null;
+    return c.duckdb_value_int64(&result, 0, 0);
+}
+
+fn getLastMappedActivityKind(conn: c.duckdb_connection) ?ActivityKind {
+    var result: c.duckdb_result = undefined;
+    const sql =
+        \\SELECT activity_id, kind_id
+        \\FROM events
+        \\WHERE activity_id IS NOT NULL AND kind_id IS NOT NULL
+        \\ORDER BY timestamp_ms DESC, id DESC
+        \\LIMIT 1
+    ;
+
+    if (c.duckdb_query(conn, sql, &result) == c.DuckDBError) {
+        c.duckdb_destroy_result(&result);
+        return null;
+    }
+    defer c.duckdb_destroy_result(&result);
+
+    if (c.duckdb_row_count(&result) == 0) return null;
+
+    return .{
+        .activity_id = c.duckdb_value_int64(&result, 0, 0),
+        .kind_id = c.duckdb_value_int64(&result, 1, 0),
+    };
+}
+
+fn updateEventMapping(conn: c.duckdb_connection, event_id: i64, mapping: ActivityKind) bool {
+    var update_stmt: c.duckdb_prepared_statement = undefined;
+    const update_sql = "UPDATE events SET activity_id = ?, kind_id = ? WHERE id = ?";
+
+    if (c.duckdb_prepare(conn, update_sql, &update_stmt) == c.DuckDBError) return false;
+    defer c.duckdb_destroy_prepare(&update_stmt);
+
+    _ = c.duckdb_bind_int64(update_stmt, 1, mapping.activity_id);
+    _ = c.duckdb_bind_int64(update_stmt, 2, mapping.kind_id);
+    _ = c.duckdb_bind_int64(update_stmt, 3, event_id);
+
+    var update_result: c.duckdb_result = undefined;
+    if (c.duckdb_execute_prepared(update_stmt, &update_result) == c.DuckDBError) {
+        c.duckdb_destroy_result(&update_result);
+        return false;
+    }
+    c.duckdb_destroy_result(&update_result);
+    return true;
+}
+
 // Callback that Swift calls on each event
 fn onEvent(
     c_app: [*c]const u8,
@@ -1142,17 +1682,33 @@ fn matchAndUpdateMenubar(app: []const u8, title: []const u8) void {
     }
     defer c.duckdb_disconnect(&conn);
 
+    const current_project_id = getCurrentProjectId(conn);
+
     // Create rule repository and look for a match
     var rule_repo = DuckDbRuleRepository.init(conn, allocator);
-    const match_result = rule_repo.findMatch(app, title) catch {
+    const match_result = rule_repo.findMatchWithContext(app, title, current_project_id) catch {
         clear_matched_info();
         return;
     };
 
     if (match_result) |match| {
+        const resolved_kind_id = switch (match.action) {
+            .map_kind => match.kind_id orelse {
+                clear_matched_info();
+                return;
+            },
+            .follow_previous => blk: {
+                const previous = getLastMappedActivityKind(conn) orelse {
+                    clear_matched_info();
+                    return;
+                };
+                break :blk previous.kind_id;
+            },
+        };
+
         // Get project and activity names
         var hierarchy_repo_impl = DuckDbHierarchyRepository.init(conn, allocator);
-        const names = hierarchy_repo_impl.getProjectAndActivityForKind(match.kind_id) catch {
+        const names = hierarchy_repo_impl.getProjectAndActivityForKind(resolved_kind_id) catch {
             clear_matched_info();
             return;
         };
@@ -1189,7 +1745,9 @@ fn updateUnmatchedCount(conn: c.duckdb_connection, allocator: std.mem.Allocator)
     update_unmatched_count(count);
 }
 
-fn getDaemonDbPath(allocator: std.mem.Allocator) ![:0]const u8 {
+var global_daemon_db_path_buf: [640]u8 = undefined;
+
+fn getDaemonDbPath() ![:0]const u8 {
     const home = std.posix.getenv("HOME") orelse "/tmp";
     const xdg_data = std.posix.getenv("XDG_DATA_HOME");
 
@@ -1210,9 +1768,9 @@ fn getDaemonDbPath(allocator: std.mem.Allocator) ![:0]const u8 {
         }
     };
 
-    // Append database filename
-    const full_path = std.fmt.allocPrint(allocator, "{s}/tracker.db\x00", .{dir_path}) catch return error.OutOfMemory;
-    return full_path[0 .. full_path.len - 1 :0];
+    const full_path = std.fmt.bufPrint(&global_daemon_db_path_buf, "{s}/tracker.db", .{dir_path}) catch return error.PathTooLong;
+    global_daemon_db_path_buf[full_path.len] = 0;
+    return global_daemon_db_path_buf[0..full_path.len :0];
 }
 
 fn runDaemon(allocator: std.mem.Allocator) void {
@@ -1257,13 +1815,16 @@ fn runDaemonWithDefaults(allocator: std.mem.Allocator) void {
 }
 
 fn runDaemonCore(allocator: std.mem.Allocator) void {
-    const db_path = getDaemonDbPath(allocator) catch |err| {
+    const db_path = getDaemonDbPath() catch |err| {
         std.debug.print("Failed to determine database path: {}\n", .{err});
         return;
     };
-    // Don't defer free - we need this for the lifetime of the daemon
     global_db_path = db_path;
     global_allocator = allocator;
+    defer {
+        global_db_path = null;
+        global_allocator = null;
+    }
 
     std.debug.print("Database: {s}\n", .{db_path});
 
@@ -1283,6 +1844,7 @@ fn runDaemonCore(allocator: std.mem.Allocator) void {
     // Initialize tracker with repository
     var tracker = Tracker.init(&repo);
     global_tracker = &tracker;
+    defer global_tracker = null;
 
     // Check accessibility
     if (!check_accessibility()) {
