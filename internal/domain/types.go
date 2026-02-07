@@ -1,43 +1,43 @@
 package domain
 
 type Event struct {
-	ID           int64  `json:"id"`
-	TimestampMS  int64  `json:"timestamp_ms"`
-	DurationMS   int64  `json:"duration_ms"`
-	AppName      string `json:"app_name"`
-	WindowTitle  string `json:"window_title"`
-	ProjectID    *int64 `json:"project_id,omitempty"`
-	ActivityID   *int64 `json:"activity_id,omitempty"`
-	ProjectTitle string `json:"project_title,omitempty"`
+	ID           int64
+	TimestampMS  int64
+	DurationMS   int64
+	AppName      string
+	WindowTitle  string
+	ProjectID    *int64
+	ActivityID   *int64
+	ProjectTitle string
 }
 
 type GroupedEvent struct {
-	AppName         string `json:"app_name"`
-	WindowTitle     string `json:"window_title"`
-	TotalDurationMS int64  `json:"total_duration_ms"`
-	EventCount      int64  `json:"event_count"`
+	AppName         string
+	WindowTitle     string
+	TotalDurationMS int64
+	EventCount      int64
 }
 
 type Activity struct {
-	ActivityID int64  `json:"activity_id"`
-	ProjectID  int64  `json:"project_id"`
-	Title      string `json:"title"`
+	ActivityID int64
+	ProjectID  int64
+	Title      string
 }
 
 type Rule struct {
-	ID                 int64      `json:"id"`
-	RuleKey            string     `json:"rule_key,omitempty"`
-	Source             RuleSource `json:"source,omitempty"`
-	Priority           int        `json:"priority"`
-	AppPattern         string     `json:"app_pattern,omitempty"`
-	TitlePattern       string     `json:"title_pattern,omitempty"`
-	ProjectID          *int64     `json:"project_id,omitempty"`
-	ActivityID         *int64     `json:"activity_id,omitempty"`
-	FollowPrevious     bool       `json:"follow_previous"`
-	ActionType         RuleAction `json:"action_type,omitempty"`
-	ActionProjectTitle string     `json:"action_project_title,omitempty"`
-	ActionActivityName string     `json:"action_activity_name,omitempty"`
-	DisplayTarget      string     `json:"display_target,omitempty"`
+	ID                 int64
+	RuleKey            string
+	Source             RuleSource
+	Priority           int
+	AppPattern         string
+	TitlePattern       string
+	ProjectID          *int64
+	ActivityID         *int64
+	FollowPrevious     bool
+	ActionType         RuleAction
+	ActionProjectTitle string
+	ActionActivityName string
+	DisplayTarget      string
 }
 
 type RuleInput struct {
@@ -131,16 +131,16 @@ const (
 )
 
 type RuleSuggestion struct {
-	SuggestionType   SuggestionType `json:"suggestion_type"`
-	AppPattern       string         `json:"app_pattern"`
-	TitlePattern     *string        `json:"title_pattern,omitempty"`
-	ProjectID        int64          `json:"project_id"`
-	ActivityID       int64          `json:"activity_id"`
-	DisplayPath      string         `json:"display_path"`
-	Confidence       int            `json:"confidence"`
-	ImpactCount      int            `json:"impact_count"`
-	ImpactDurationMS int64          `json:"impact_duration_ms"`
-	EvidenceCount    int            `json:"evidence_count"`
+	SuggestionType   SuggestionType
+	AppPattern       string
+	TitlePattern     *string
+	ProjectID        int64
+	ActivityID       int64
+	DisplayPath      string
+	Confidence       int
+	ImpactCount      int
+	ImpactDurationMS int64
+	EvidenceCount    int
 }
 
 type SuggestionQuery struct {
@@ -156,8 +156,8 @@ type ApplySuggestionInput struct {
 }
 
 type ApplySuggestionResult struct {
-	RuleCreated  bool  `json:"rule_created"`
-	MappedEvents int64 `json:"mapped_events"`
+	RuleCreated  bool
+	MappedEvents int64
 }
 
 type AutoApplySuggestionsInput struct {
@@ -169,9 +169,9 @@ type AutoApplySuggestionsInput struct {
 }
 
 type AutoApplySuggestionsResult struct {
-	Analyzed     int   `json:"analyzed"`
-	Accepted     int   `json:"accepted"`
-	MappedEvents int64 `json:"mapped_events"`
+	Analyzed     int
+	Accepted     int
+	MappedEvents int64
 }
 
 type ApplyRulesInput struct {
@@ -180,8 +180,8 @@ type ApplyRulesInput struct {
 }
 
 type ApplyRulesResult struct {
-	UnmappedEvents int64 `json:"unmapped_events"`
-	MatchedEvents  int64 `json:"matched_events"`
+	UnmappedEvents int64
+	MatchedEvents  int64
 }
 
 type EventMappingUpdate struct {
@@ -191,46 +191,46 @@ type EventMappingUpdate struct {
 }
 
 type Settings struct {
-	WorkWifis             []string `json:"work_wifis"`
-	Enabled               bool     `json:"enabled"`
-	WeightedBucketMinutes int64    `json:"weighted_bucket_minutes"`
-	WeightedSwitchMinutes int64    `json:"weighted_switch_minutes"`
-	NoiseAppPatterns      []string `json:"noise_app_patterns"`
-	NoiseBucketMinutes    int64    `json:"noise_bucket_minutes"`
-	NoiseSwitchMinutes    int64    `json:"noise_switch_minutes"`
+	WorkWifis             []string
+	Enabled               bool
+	WeightedBucketMinutes int64
+	WeightedSwitchMinutes int64
+	NoiseAppPatterns      []string
+	NoiseBucketMinutes    int64
+	NoiseSwitchMinutes    int64
 }
 
 type Project struct {
-	ProjectID int64  `json:"project_id"`
-	Title     string `json:"title"`
-	Metadata  string `json:"metadata,omitempty"`
+	ProjectID int64
+	Title     string
+	Metadata  string
 }
 
 type SummaryRow struct {
-	Name    string `json:"name"`
-	TotalMS int64  `json:"total_ms"`
+	Name    string
+	TotalMS int64
 }
 
 type Report struct {
-	Range          string       `json:"range"`
-	TotalMS        int64        `json:"total_ms"`
-	ExcludedEvents int          `json:"excluded_events"`
-	ByProject      []SummaryRow `json:"by_project"`
-	ByApp          []SummaryRow `json:"by_app"`
+	Range          string
+	TotalMS        int64
+	ExcludedEvents int
+	ByProject      []SummaryRow
+	ByApp          []SummaryRow
 }
 
 type Dashboard struct {
-	TodayTotalMS     int64        `json:"today_total_ms"`
-	TrackedEvents    int64        `json:"tracked_events"`
-	ExcludedEvents   int64        `json:"excluded_events"`
-	TopApps          []SummaryRow `json:"top_apps"`
-	CurrentProject   string       `json:"current_project"`
-	CurrentProjectID *int64       `json:"current_project_id,omitempty"`
+	TodayTotalMS     int64
+	TrackedEvents    int64
+	ExcludedEvents   int64
+	TopApps          []SummaryRow
+	CurrentProject   string
+	CurrentProjectID *int64
 }
 
 type LifecycleStatus struct {
-	Loaded bool   `json:"loaded"`
-	PID    string `json:"pid,omitempty"`
-	State  string `json:"state"`
-	Raw    string `json:"raw,omitempty"`
+	Loaded bool
+	PID    string
+	State  string
+	Raw    string
 }

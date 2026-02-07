@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"time-tracker/internal/application/contracts"
 	"time-tracker/internal/application/ports"
 	"time-tracker/internal/domain"
 )
@@ -28,72 +29,85 @@ func NewRulesUsecase(repo ports.RulesRepository) *RulesUsecase {
 	return &RulesUsecase{repo: repo}
 }
 
-func (u *RulesUsecase) ListRules(ctx context.Context) ([]domain.Rule, error) {
-	return u.repo.ListRules(ctx)
-}
-
-func (u *RulesUsecase) AddRule(ctx context.Context, in domain.RuleInput) (int64, error) {
-	in = domain.NormalizeRuleInput(in)
-	if err := validateRuleInput(in); err != nil {
-		return 0, err
+func (u *RulesUsecase) ListRules(ctx context.Context, _ contracts.RulesListRequest) (contracts.RulesListResponse, error) {
+	rules, err := u.repo.ListRules(ctx)
+	if err != nil {
+		return contracts.RulesListResponse{}, err
 	}
-	return u.repo.AddRule(ctx, in)
+	return contracts.RulesListResponse{Rules: rules}, nil
 }
 
-func (u *RulesUsecase) DeleteRule(ctx context.Context, id int64) error {
-	return u.repo.DeleteRule(ctx, id)
-}
-
-func (u *RulesUsecase) AddRuleToDraft(ctx context.Context, in domain.RuleInput) error {
-	in = domain.NormalizeRuleInput(in)
+func (u *RulesUsecase) AddRule(ctx context.Context, req contracts.RulesAddRequest) (contracts.RulesAddResponse, error) {
+	in := domain.NormalizeRuleInput(req.Rule)
 	if err := validateRuleInput(in); err != nil {
-		return err
+		return contracts.RulesAddResponse{}, err
+	}
+	id, err := u.repo.AddRule(ctx, in)
+	if err != nil {
+		return contracts.RulesAddResponse{}, err
+	}
+	return contracts.RulesAddResponse{RuleID: id}, nil
+}
+
+func (u *RulesUsecase) DeleteRule(ctx context.Context, req contracts.RulesDeleteRequest) (contracts.RulesDeleteResponse, error) {
+	if err := u.repo.DeleteRule(ctx, req.RuleID); err != nil {
+		return contracts.RulesDeleteResponse{}, err
+	}
+	return contracts.RulesDeleteResponse{}, nil
+}
+
+func (u *RulesUsecase) AddRuleToDraft(ctx context.Context, req contracts.RulesDraftAddRequest) (contracts.RulesDraftAddResponse, error) {
+	in := domain.NormalizeRuleInput(req.Rule)
+	if err := validateRuleInput(in); err != nil {
+		return contracts.RulesDraftAddResponse{}, err
 	}
 	u.draftMu.Lock()
 	defer u.draftMu.Unlock()
 	if err := u.ensureDraftLocked(ctx); err != nil {
-		return err
+		return contracts.RulesDraftAddResponse{}, err
 	}
 
 	rule := ruleFromInput(u.draft.nextID, in)
 	u.draft.nextID--
 	u.draft.working = append(u.draft.working, rule)
-	return nil
+	return contracts.RulesDraftAddResponse{}, nil
 }
 
-func (u *RulesUsecase) AddRegexRuleFromGroupsToDraft(ctx context.Context, groups []domain.GroupedEvent, in domain.RuleInput) error {
-	appPattern, titlePattern, err := domain.BuildRegexRuleFromGroups(groups)
+func (u *RulesUsecase) AddRegexRuleFromGroupsToDraft(ctx context.Context, req contracts.RulesDraftAddFromGroupsRequest) (contracts.RulesDraftAddFromGroupsResponse, error) {
+	appPattern, titlePattern, err := domain.BuildRegexRuleFromGroups(req.Groups)
 	if err != nil {
-		return err
+		return contracts.RulesDraftAddFromGroupsResponse{}, err
 	}
+	in := req.Rule
 	in.AppPattern = appPattern
 	in.TitlePattern = titlePattern
-	return u.AddRuleToDraft(ctx, in)
+	_, err = u.AddRuleToDraft(ctx, contracts.RulesDraftAddRequest{Rule: in})
+	return contracts.RulesDraftAddFromGroupsResponse{}, err
 }
 
-func (u *RulesUsecase) DeleteRuleFromDraft(ctx context.Context, id int64) error {
+func (u *RulesUsecase) DeleteRuleFromDraft(ctx context.Context, req contracts.RulesDraftDeleteRequest) (contracts.RulesDraftDeleteResponse, error) {
 	u.draftMu.Lock()
 	defer u.draftMu.Unlock()
 	if err := u.ensureDraftLocked(ctx); err != nil {
-		return err
+		return contracts.RulesDraftDeleteResponse{}, err
 	}
 
 	next := make([]domain.Rule, 0, len(u.draft.working))
 	for _, rule := range u.draft.working {
-		if rule.ID == id {
+		if rule.ID == req.RuleID {
 			continue
 		}
 		next = append(next, rule)
 	}
 	u.draft.working = next
-	return nil
+	return contracts.RulesDraftDeleteResponse{}, nil
 }
 
-func (u *RulesUsecase) ReAddDefaultRulesToDraft(ctx context.Context) ([]string, error) {
+func (u *RulesUsecase) ReAddDefaultRulesToDraft(ctx context.Context, _ contracts.RulesDraftReAddDefaultsRequest) (contracts.RulesDraftReAddDefaultsResponse, error) {
 	u.draftMu.Lock()
 	defer u.draftMu.Unlock()
 	if err := u.ensureDraftLocked(ctx); err != nil {
-		return nil, err
+		return contracts.RulesDraftReAddDefaultsResponse{}, err
 	}
 
 	defaults := domain.DefaultBrowserRules()
@@ -103,7 +117,7 @@ func (u *RulesUsecase) ReAddDefaultRulesToDraft(ctx context.Context) ([]string, 
 		if def.ActionType == domain.RuleActionAssignProjectAndActivityByT {
 			projectID, err := u.repo.FindProjectIDByTitle(ctx, def.ActionProjectTitle)
 			if err != nil {
-				return nil, err
+				return contracts.RulesDraftReAddDefaultsResponse{}, err
 			}
 			if projectID == nil {
 				warnings = append(warnings, fmt.Sprintf("Skipped %q: project %q not found", def.RuleKey, def.ActionProjectTitle))
@@ -111,7 +125,7 @@ func (u *RulesUsecase) ReAddDefaultRulesToDraft(ctx context.Context) ([]string, 
 			}
 			activityID, err := u.repo.FindActivityIDByTitle(ctx, *projectID, def.ActionActivityName)
 			if err != nil {
-				return nil, err
+				return contracts.RulesDraftReAddDefaultsResponse{}, err
 			}
 			if activityID == nil {
 				warnings = append(warnings, fmt.Sprintf("Skipped %q: activity %q not found in project %q", def.RuleKey, def.ActionActivityName, def.ActionProjectTitle))
@@ -146,49 +160,61 @@ func (u *RulesUsecase) ReAddDefaultRulesToDraft(ctx context.Context) ([]string, 
 	}
 
 	u.draft.warn = append(u.draft.warn[:0], warnings...)
-	return cloneStrings(warnings), nil
+	return contracts.RulesDraftReAddDefaultsResponse{Warnings: cloneStrings(warnings)}, nil
 }
 
-func (u *RulesUsecase) DraftPreview(ctx context.Context) (domain.RuleDraftPreview, error) {
+func (u *RulesUsecase) DraftPreview(ctx context.Context, _ contracts.RulesDraftPreviewRequest) (contracts.RulesDraftPreviewResponse, error) {
 	u.draftMu.Lock()
 	defer u.draftMu.Unlock()
 	if err := u.ensureDraftLocked(ctx); err != nil {
-		return domain.RuleDraftPreview{}, err
+		return contracts.RulesDraftPreviewResponse{}, err
 	}
-	return domain.BuildDraftPreview(u.draft.base, u.draft.working, cloneStrings(u.draft.warn)), nil
+	return contracts.RulesDraftPreviewResponse{
+		Preview: domain.BuildDraftPreview(u.draft.base, u.draft.working, cloneStrings(u.draft.warn)),
+	}, nil
 }
 
-func (u *RulesUsecase) SaveDraft(ctx context.Context) (domain.RulesetApplyResult, error) {
+func (u *RulesUsecase) SaveDraft(ctx context.Context, _ contracts.RulesDraftSaveRequest) (contracts.RulesDraftSaveResponse, error) {
 	u.draftMu.Lock()
 	defer u.draftMu.Unlock()
 	if err := u.ensureDraftLocked(ctx); err != nil {
-		return domain.RulesetApplyResult{}, err
+		return contracts.RulesDraftSaveResponse{}, err
 	}
 
 	changes := buildRulesetChanges(u.draft.base, u.draft.working)
 	result, err := u.repo.ApplyRulesetChanges(ctx, changes)
 	if err != nil {
-		return result, err
+		return contracts.RulesDraftSaveResponse{}, err
 	}
 	u.draft = nil
-	return result, nil
+	return contracts.RulesDraftSaveResponse{Result: result}, nil
 }
 
-func (u *RulesUsecase) DiscardDraft() {
+func (u *RulesUsecase) DiscardDraft(_ context.Context, _ contracts.RulesDraftDiscardRequest) (contracts.RulesDraftDiscardResponse, error) {
 	u.draftMu.Lock()
 	defer u.draftMu.Unlock()
 	u.draft = nil
+	return contracts.RulesDraftDiscardResponse{}, nil
 }
 
-func (u *RulesUsecase) ListUnmappedDates(ctx context.Context, minDurationMS int64) ([]string, error) {
-	return u.repo.ListUnmappedDates(ctx, minDurationMS)
+func (u *RulesUsecase) ListUnmappedDates(ctx context.Context, req contracts.RulesUnmappedDatesRequest) (contracts.RulesUnmappedDatesResponse, error) {
+	dates, err := u.repo.ListUnmappedDates(ctx, req.MinDurationMS)
+	if err != nil {
+		return contracts.RulesUnmappedDatesResponse{}, err
+	}
+	return contracts.RulesUnmappedDatesResponse{Dates: dates}, nil
 }
 
-func (u *RulesUsecase) ListGroupedUnmappedEvents(ctx context.Context, date string, minDurationMS int64) ([]domain.GroupedEvent, error) {
-	return u.repo.ListGroupedUnmappedEvents(ctx, date, minDurationMS)
+func (u *RulesUsecase) ListGroupedUnmappedEvents(ctx context.Context, req contracts.RulesUnmappedGroupsRequest) (contracts.RulesUnmappedGroupsResponse, error) {
+	groups, err := u.repo.ListGroupedUnmappedEvents(ctx, req.Date, req.MinDurationMS)
+	if err != nil {
+		return contracts.RulesUnmappedGroupsResponse{}, err
+	}
+	return contracts.RulesUnmappedGroupsResponse{Groups: groups}, nil
 }
 
-func (u *RulesUsecase) AnalyzeSuggestions(ctx context.Context, q domain.SuggestionQuery) ([]domain.RuleSuggestion, error) {
+func (u *RulesUsecase) AnalyzeSuggestions(ctx context.Context, req contracts.RulesAnalyzeSuggestionsRequest) (contracts.RulesAnalyzeSuggestionsResponse, error) {
+	q := req.Query
 	if q.Limit <= 0 {
 		q.Limit = 50
 	}
@@ -198,19 +224,20 @@ func (u *RulesUsecase) AnalyzeSuggestions(ctx context.Context, q domain.Suggesti
 
 	app, err := u.repo.ListAppSuggestions(ctx, q)
 	if err != nil {
-		return nil, err
+		return contracts.RulesAnalyzeSuggestionsResponse{}, err
 	}
 	title, err := u.repo.ListTitleSuggestions(ctx, q)
 	if err != nil {
-		return nil, err
+		return contracts.RulesAnalyzeSuggestionsResponse{}, err
 	}
 	all := append(app, title...)
-	return domain.RankSuggestions(all, q.Limit), nil
+	return contracts.RulesAnalyzeSuggestionsResponse{Suggestions: domain.RankSuggestions(all, q.Limit)}, nil
 }
 
-func (u *RulesUsecase) AcceptSuggestion(ctx context.Context, in domain.ApplySuggestionInput) (domain.ApplySuggestionResult, error) {
+func (u *RulesUsecase) AcceptSuggestion(ctx context.Context, req contracts.RulesAcceptSuggestionRequest) (contracts.RulesAcceptSuggestionResponse, error) {
+	in := req.Input
 	if in.Suggestion.ProjectID <= 0 || in.Suggestion.ActivityID <= 0 {
-		return domain.ApplySuggestionResult{}, fmt.Errorf("project_id and activity_id are required")
+		return contracts.RulesAcceptSuggestionResponse{}, fmt.Errorf("project_id and activity_id are required")
 	}
 	titlePattern := domain.BuildTitlePattern("")
 	if in.Suggestion.TitlePattern != nil && strings.TrimSpace(*in.Suggestion.TitlePattern) != "" {
@@ -227,27 +254,28 @@ func (u *RulesUsecase) AcceptSuggestion(ctx context.Context, in domain.ApplySugg
 		ActionType:   domain.RuleActionAssignExplicit,
 	}))
 	if err != nil {
-		return domain.ApplySuggestionResult{}, err
+		return contracts.RulesAcceptSuggestionResponse{}, err
 	}
 
 	result := domain.ApplySuggestionResult{RuleCreated: true}
 	if !in.ApplyNow {
-		return result, nil
+		return contracts.RulesAcceptSuggestionResponse{Result: result}, nil
 	}
 	events, err := u.repo.ListUnmappedEvents(ctx, in.Date, 0)
 	if err != nil {
-		return result, err
+		return contracts.RulesAcceptSuggestionResponse{}, err
 	}
 	updates := domain.MatchSuggestionToEvents(events, in.Suggestion)
 	count, err := u.repo.ApplyEventMappings(ctx, updates, true)
 	if err != nil {
-		return result, err
+		return contracts.RulesAcceptSuggestionResponse{}, err
 	}
 	result.MappedEvents = count
-	return result, nil
+	return contracts.RulesAcceptSuggestionResponse{Result: result}, nil
 }
 
-func (u *RulesUsecase) AutoApplySuggestions(ctx context.Context, in domain.AutoApplySuggestionsInput) (domain.AutoApplySuggestionsResult, error) {
+func (u *RulesUsecase) AutoApplySuggestions(ctx context.Context, req contracts.RulesAutoApplySuggestionsRequest) (contracts.RulesAutoApplySuggestionsResponse, error) {
+	in := req.Input
 	if in.Limit <= 0 {
 		in.Limit = 100
 	}
@@ -255,57 +283,59 @@ func (u *RulesUsecase) AutoApplySuggestions(ctx context.Context, in domain.AutoA
 		in.MinConfidence = 85
 	}
 	q := domain.SuggestionQuery{Date: in.Date, MinDurationMS: in.MinDurationMS, Limit: in.Limit}
-	suggestions, err := u.AnalyzeSuggestions(ctx, q)
+	suggestionsRes, err := u.AnalyzeSuggestions(ctx, contracts.RulesAnalyzeSuggestionsRequest{Query: q})
 	if err != nil {
-		return domain.AutoApplySuggestionsResult{}, err
+		return contracts.RulesAutoApplySuggestionsResponse{}, err
 	}
+	suggestions := suggestionsRes.Suggestions
 	suggestions = domain.FilterSuggestionsMinConfidence(suggestions, in.MinConfidence)
 
 	out := domain.AutoApplySuggestionsResult{Analyzed: len(suggestions)}
 	for _, suggestion := range suggestions {
-		res, err := u.AcceptSuggestion(ctx, domain.ApplySuggestionInput{
+		res, err := u.AcceptSuggestion(ctx, contracts.RulesAcceptSuggestionRequest{Input: domain.ApplySuggestionInput{
 			Suggestion: suggestion,
 			ApplyNow:   in.ApplyNow,
 			Date:       in.Date,
-		})
+		}})
 		if err != nil {
-			return out, err
+			return contracts.RulesAutoApplySuggestionsResponse{}, err
 		}
-		if res.RuleCreated {
+		if res.Result.RuleCreated {
 			out.Accepted++
 		}
-		out.MappedEvents += res.MappedEvents
+		out.MappedEvents += res.Result.MappedEvents
 	}
-	return out, nil
+	return contracts.RulesAutoApplySuggestionsResponse{Result: out}, nil
 }
 
-func (u *RulesUsecase) ApplyRules(ctx context.Context, in domain.ApplyRulesInput) (domain.ApplyRulesResult, error) {
+func (u *RulesUsecase) ApplyRules(ctx context.Context, req contracts.RulesApplyRequest) (contracts.RulesApplyResponse, error) {
+	in := req.Input
 	rules, err := u.repo.ListRules(ctx)
 	if err != nil {
-		return domain.ApplyRulesResult{}, err
+		return contracts.RulesApplyResponse{}, err
 	}
 	events, err := u.repo.ListUnmappedEvents(ctx, in.Date, 0)
 	if err != nil {
-		return domain.ApplyRulesResult{}, err
+		return contracts.RulesApplyResponse{}, err
 	}
 	currentProjectID, err := u.repo.CurrentProjectID(ctx)
 	if err != nil {
-		return domain.ApplyRulesResult{}, err
+		return contracts.RulesApplyResponse{}, err
 	}
 
 	resolver := newRuleResolver(ctx, u.repo)
 	updates, _, err := domain.MatchEventToRulesWithResolver(events, rules, currentProjectID, resolver)
 	if err != nil {
-		return domain.ApplyRulesResult{}, err
+		return contracts.RulesApplyResponse{}, err
 	}
 	res := domain.ApplyRulesResult{UnmappedEvents: int64(len(events)), MatchedEvents: int64(len(updates))}
 	if in.DryRun || len(updates) == 0 {
-		return res, nil
+		return contracts.RulesApplyResponse{Result: res}, nil
 	}
 	if _, err := u.repo.ApplyEventMappings(ctx, updates, false); err != nil {
-		return res, err
+		return contracts.RulesApplyResponse{}, err
 	}
-	return res, nil
+	return contracts.RulesApplyResponse{Result: res}, nil
 }
 
 type ruleResolver struct {

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"time-tracker/internal/application/contracts"
 	"time-tracker/internal/application/ports"
 	"time-tracker/internal/domain"
 )
@@ -20,18 +21,18 @@ func NewReportsUsecase(reportsRepo ports.ReportsRepository, projectsRepo ports.P
 	return &ReportsUsecase{reportsRepo: reportsRepo, projectsRepo: projectsRepo, settingsRepo: settingsRepo}
 }
 
-func (u *ReportsUsecase) Dashboard(ctx context.Context) (domain.Dashboard, error) {
+func (u *ReportsUsecase) Dashboard(ctx context.Context, _ contracts.ReportsDashboardRequest) (contracts.ReportsDashboardResponse, error) {
 	cfg, _, err := u.settingsRepo.Load(ctx)
 	if err != nil {
-		return domain.Dashboard{}, err
+		return contracts.ReportsDashboardResponse{}, err
 	}
 	curName, curID, err := u.projectsRepo.CurrentProject(ctx)
 	if err != nil {
-		return domain.Dashboard{}, err
+		return contracts.ReportsDashboardResponse{}, err
 	}
 	items, err := u.reportsRepo.ListReportEvents(ctx, "today")
 	if err != nil {
-		return domain.Dashboard{}, err
+		return contracts.ReportsDashboardResponse{}, err
 	}
 	mask := domain.BuildNoiseMask(items, cfg.NoiseAppPatterns, cfg.NoiseBucketMinutes, cfg.NoiseSwitchMinutes)
 
@@ -51,21 +52,21 @@ func (u *ReportsUsecase) Dashboard(ctx context.Context) (domain.Dashboard, error
 	if len(out.TopApps) > 8 {
 		out.TopApps = out.TopApps[:8]
 	}
-	return out, nil
+	return contracts.ReportsDashboardResponse{Dashboard: out}, nil
 }
 
-func (u *ReportsUsecase) Report(ctx context.Context, rangeKey string) (domain.Report, error) {
+func (u *ReportsUsecase) Report(ctx context.Context, req contracts.ReportsBuildRequest) (contracts.ReportsBuildResponse, error) {
 	cfg, _, err := u.settingsRepo.Load(ctx)
 	if err != nil {
-		return domain.Report{}, err
+		return contracts.ReportsBuildResponse{}, err
 	}
-	items, err := u.reportsRepo.ListReportEvents(ctx, rangeKey)
+	items, err := u.reportsRepo.ListReportEvents(ctx, req.RangeKey)
 	if err != nil {
-		return domain.Report{}, err
+		return contracts.ReportsBuildResponse{}, err
 	}
 	mask := domain.BuildNoiseMask(items, cfg.NoiseAppPatterns, cfg.NoiseBucketMinutes, cfg.NoiseSwitchMinutes)
 
-	out := domain.Report{Range: rangeKey}
+	out := domain.Report{Range: req.RangeKey}
 	for i, e := range items {
 		if e.DurationMS <= 0 {
 			continue
@@ -83,7 +84,7 @@ func (u *ReportsUsecase) Report(ctx context.Context, rangeKey string) (domain.Re
 		return e.ProjectTitle
 	})
 	out.ByApp = summarize(items, mask, func(e domain.Event) string { return e.AppName })
-	return out, nil
+	return contracts.ReportsBuildResponse{Report: out}, nil
 }
 
 func summarize(events []domain.Event, excluded []bool, groupBy func(domain.Event) string) []domain.SummaryRow {

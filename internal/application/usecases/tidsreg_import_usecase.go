@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"time-tracker/internal/application/contracts"
 	"time-tracker/internal/application/ports"
 	"time-tracker/internal/domain"
 )
@@ -22,17 +23,17 @@ func NewTidsregImportUsecase(gateway ports.TidsregGateway, repo ports.TidsregImp
 	return &TidsregImportUsecase{gateway: gateway, repo: repo}
 }
 
-func (u *TidsregImportUsecase) AuthenticateAndListCustomers(ctx context.Context, username, password string, mode domain.TidsregMode) (string, []domain.TidsregCustomer, error) {
-	if strings.TrimSpace(username) == "" || strings.TrimSpace(password) == "" {
-		return "", nil, fmt.Errorf("username and password are required")
+func (u *TidsregImportUsecase) AuthenticateAndListCustomers(ctx context.Context, req contracts.TidsregAuthenticateRequest) (contracts.TidsregAuthenticateResponse, error) {
+	if strings.TrimSpace(req.Username) == "" || strings.TrimSpace(req.Password) == "" {
+		return contracts.TidsregAuthenticateResponse{}, fmt.Errorf("username and password are required")
 	}
-	cookie, err := u.gateway.Authenticate(ctx, username, password)
+	cookie, err := u.gateway.Authenticate(ctx, req.Username, req.Password)
 	if err != nil {
-		return "", nil, err
+		return contracts.TidsregAuthenticateResponse{}, err
 	}
-	customers, err := u.gateway.ListCustomers(ctx, cookie, mode)
+	customers, err := u.gateway.ListCustomers(ctx, cookie, req.Mode)
 	if err != nil {
-		return "", nil, err
+		return contracts.TidsregAuthenticateResponse{}, err
 	}
 	sort.Slice(customers, func(i, j int) bool {
 		if strings.EqualFold(customers[i].Name, customers[j].Name) {
@@ -40,35 +41,38 @@ func (u *TidsregImportUsecase) AuthenticateAndListCustomers(ctx context.Context,
 		}
 		return strings.ToLower(customers[i].Name) < strings.ToLower(customers[j].Name)
 	})
-	return cookie, customers, nil
+	return contracts.TidsregAuthenticateResponse{
+		SessionCookie: cookie,
+		Customers:     customers,
+	}, nil
 }
 
-func (u *TidsregImportUsecase) BuildPreview(ctx context.Context, cookie string, mode domain.TidsregMode, customers []domain.TidsregCustomer, selectedCustomerIDs []int64) (domain.TidsregImportPreview, error) {
-	if strings.TrimSpace(cookie) == "" {
-		return domain.TidsregImportPreview{}, fmt.Errorf("missing tidsreg session")
+func (u *TidsregImportUsecase) BuildPreview(ctx context.Context, req contracts.TidsregBuildPreviewRequest) (contracts.TidsregBuildPreviewResponse, error) {
+	if strings.TrimSpace(req.SessionCookie) == "" {
+		return contracts.TidsregBuildPreviewResponse{}, fmt.Errorf("missing tidsreg session")
 	}
-	if len(selectedCustomerIDs) == 0 {
-		return domain.TidsregImportPreview{}, fmt.Errorf("select at least one customer")
+	if len(req.SelectedCustomerIDs) == 0 {
+		return contracts.TidsregBuildPreviewResponse{}, fmt.Errorf("select at least one customer")
 	}
 
-	selectedSet := make(map[int64]struct{}, len(selectedCustomerIDs))
-	for _, id := range selectedCustomerIDs {
+	selectedSet := make(map[int64]struct{}, len(req.SelectedCustomerIDs))
+	for _, id := range req.SelectedCustomerIDs {
 		if id > 0 {
 			selectedSet[id] = struct{}{}
 		}
 	}
 	if len(selectedSet) == 0 {
-		return domain.TidsregImportPreview{}, fmt.Errorf("select at least one valid customer")
+		return contracts.TidsregBuildPreviewResponse{}, fmt.Errorf("select at least one valid customer")
 	}
 
 	selectedCustomers := make([]domain.TidsregCustomer, 0, len(selectedSet))
-	for _, customer := range customers {
+	for _, customer := range req.Customers {
 		if _, ok := selectedSet[customer.CustomerID]; ok {
 			selectedCustomers = append(selectedCustomers, customer)
 		}
 	}
 	if len(selectedCustomers) == 0 {
-		return domain.TidsregImportPreview{}, fmt.Errorf("selected customers were not found in session")
+		return contracts.TidsregBuildPreviewResponse{}, fmt.Errorf("selected customers were not found in session")
 	}
 
 	sort.Slice(selectedCustomers, func(i, j int) bool {
@@ -79,16 +83,16 @@ func (u *TidsregImportUsecase) BuildPreview(ctx context.Context, cookie string, 
 	})
 
 	preview := domain.TidsregImportPreview{
-		Mode:          mode,
+		Mode:          req.Mode,
 		Customers:     selectedCustomers,
 		Candidates:    make([]domain.TidsregImportCandidate, 0),
 		GeneratedAtMS: time.Now().UnixMilli(),
 	}
 
 	for _, customer := range selectedCustomers {
-		projects, err := u.gateway.ListProjects(ctx, cookie, customer.CustomerID, mode)
+		projects, err := u.gateway.ListProjects(ctx, req.SessionCookie, customer.CustomerID, req.Mode)
 		if err != nil {
-			return domain.TidsregImportPreview{}, err
+			return contracts.TidsregBuildPreviewResponse{}, err
 		}
 		sort.Slice(projects, func(i, j int) bool {
 			if strings.EqualFold(projects[i].Name, projects[j].Name) {
@@ -99,9 +103,9 @@ func (u *TidsregImportUsecase) BuildPreview(ctx context.Context, cookie string, 
 
 		for _, project := range projects {
 			projectName := project.Name
-			phases, err := u.gateway.ListPhases(ctx, cookie, project.ProjectID, mode)
+			phases, err := u.gateway.ListPhases(ctx, req.SessionCookie, project.ProjectID, req.Mode)
 			if err != nil {
-				return domain.TidsregImportPreview{}, err
+				return contracts.TidsregBuildPreviewResponse{}, err
 			}
 			sort.Slice(phases, func(i, j int) bool {
 				if strings.EqualFold(phases[i].Name, phases[j].Name) {
@@ -111,9 +115,9 @@ func (u *TidsregImportUsecase) BuildPreview(ctx context.Context, cookie string, 
 			})
 
 			for _, phase := range phases {
-				activities, err := u.gateway.ListActivities(ctx, cookie, phase.PhaseID, mode)
+				activities, err := u.gateway.ListActivities(ctx, req.SessionCookie, phase.PhaseID, req.Mode)
 				if err != nil {
-					return domain.TidsregImportPreview{}, err
+					return contracts.TidsregBuildPreviewResponse{}, err
 				}
 				activities = domain.NormalizeTidsregActivities(activities)
 				candidate := domain.TidsregImportCandidate{
@@ -138,13 +142,13 @@ func (u *TidsregImportUsecase) BuildPreview(ctx context.Context, cookie string, 
 		}
 		return strings.ToLower(preview.Candidates[i].TargetTitle) < strings.ToLower(preview.Candidates[j].TargetTitle)
 	})
-	return preview, nil
+	return contracts.TidsregBuildPreviewResponse{Preview: preview}, nil
 }
 
-func (u *TidsregImportUsecase) Commit(ctx context.Context, preview domain.TidsregImportPreview, selectedKeys []string) (domain.TidsregImportResult, error) {
-	candidates := domain.FilterImportCandidates(preview, selectedKeys)
+func (u *TidsregImportUsecase) Commit(ctx context.Context, req contracts.TidsregCommitRequest) (contracts.TidsregCommitResponse, error) {
+	candidates := domain.FilterImportCandidates(req.Preview, req.SelectedKeys)
 	if len(candidates) == 0 {
-		return domain.TidsregImportResult{}, fmt.Errorf("select at least one project phase to import")
+		return contracts.TidsregCommitResponse{}, fmt.Errorf("select at least one project phase to import")
 	}
 
 	result := domain.TidsregImportResult{ImportedCandidates: len(candidates)}
@@ -158,7 +162,7 @@ func (u *TidsregImportUsecase) Commit(ctx context.Context, preview domain.Tidsre
 			Metadata:           domain.BuildProjectMetadata(candidate.CustomerID, candidate.ProjectID, candidate.PhaseID),
 		})
 		if err != nil {
-			return result, err
+			return contracts.TidsregCommitResponse{}, err
 		}
 		if upsert.Created {
 			result.ProjectsCreated++
@@ -177,11 +181,11 @@ func (u *TidsregImportUsecase) Commit(ctx context.Context, preview domain.Tidsre
 		}
 		syncResult, err := u.repo.SyncImportedActivities(ctx, upsert.ProjectID, activities)
 		if err != nil {
-			return result, err
+			return contracts.TidsregCommitResponse{}, err
 		}
 		result.ActivitiesCreated += syncResult.Created
 		result.ActivitiesUpdated += syncResult.Updated
 		result.ActivitiesDeleted += syncResult.Deleted
 	}
-	return result, nil
+	return contracts.TidsregCommitResponse{Result: result}, nil
 }

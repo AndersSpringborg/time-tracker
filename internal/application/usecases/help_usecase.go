@@ -1,26 +1,19 @@
 package usecases
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"sort"
+
+	"time-tracker/internal/application/contracts"
 )
 
-type CommandSchema struct {
-	Command     string   `json:"command"`
-	Description string   `json:"description"`
-	Usage       string   `json:"usage"`
-	Flags       []string `json:"flags"`
-	Examples    []string `json:"examples"`
-	SideEffects []string `json:"side_effects"`
-}
-
 type HelpUsecase struct {
-	schemas map[string]CommandSchema
+	schemas map[string]contracts.HelpCommandSchema
 }
 
 func NewHelpUsecase() *HelpUsecase {
-	s := map[string]CommandSchema{
+	s := map[string]contracts.HelpCommandSchema{
 		"install": {
 			Command:     "install",
 			Description: "Install embedded worker and launchd agent",
@@ -60,30 +53,22 @@ func NewHelpUsecase() *HelpUsecase {
 	return &HelpUsecase{schemas: s}
 }
 
-func (u *HelpUsecase) Schema(command string) (CommandSchema, error) {
-	if command == "" {
-		return CommandSchema{}, fmt.Errorf("command is required")
+func (u *HelpUsecase) GetSchema(_ context.Context, req contracts.HelpGetSchemaRequest) (contracts.HelpGetSchemaResponse, error) {
+	if req.Command == "" {
+		return contracts.HelpGetSchemaResponse{}, fmt.Errorf("command is required")
 	}
-	s, ok := u.schemas[command]
+	s, ok := u.schemas[req.Command]
 	if !ok {
-		return CommandSchema{}, fmt.Errorf("unknown command: %s", command)
+		return contracts.HelpGetSchemaResponse{}, fmt.Errorf("unknown command: %s", req.Command)
 	}
-	return s, nil
+	return contracts.HelpGetSchemaResponse{Schema: s}, nil
 }
 
-func (u *HelpUsecase) SchemaJSON(command string) ([]byte, error) {
-	s, err := u.Schema(command)
-	if err != nil {
-		return nil, err
-	}
-	return json.MarshalIndent(s, "", "  ")
-}
-
-func (u *HelpUsecase) ListSchemas() []CommandSchema {
-	out := make([]CommandSchema, 0, len(u.schemas))
+func (u *HelpUsecase) ListSchemas(_ context.Context, _ contracts.HelpListSchemasRequest) (contracts.HelpListSchemasResponse, error) {
+	out := make([]contracts.HelpCommandSchema, 0, len(u.schemas))
 	for _, s := range u.schemas {
 		out = append(out, s)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Command < out[j].Command })
-	return out
+	return contracts.HelpListSchemasResponse{Schemas: out}, nil
 }

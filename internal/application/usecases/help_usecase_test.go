@@ -1,25 +1,33 @@
 package usecases
 
 import (
-	"encoding/json"
+	"context"
 	"testing"
+
+	"time-tracker/internal/application/contracts"
 )
 
-func TestHelpUsecaseSchemaJSON(t *testing.T) {
+func TestHelpUsecaseGetSchema(t *testing.T) {
 	uc := NewHelpUsecase()
-	b, err := uc.SchemaJSON("rules")
+	res, err := uc.GetSchema(context.Background(), contracts.HelpGetSchemaRequest{Command: "rules"})
 	if err != nil {
-		t.Fatalf("schema json failed: %v", err)
+		t.Fatalf("get schema failed: %v", err)
 	}
+	if res.Schema.Command != "rules" {
+		t.Fatalf("expected command rules, got %s", res.Schema.Command)
+	}
+	if len(res.Schema.SideEffects) == 0 {
+		t.Fatalf("expected side effects")
+	}
+}
 
-	var payload map[string]any
-	if err := json.Unmarshal(b, &payload); err != nil {
-		t.Fatalf("invalid json: %v", err)
+func TestHelpUsecaseListSchemas(t *testing.T) {
+	uc := NewHelpUsecase()
+	res, err := uc.ListSchemas(context.Background(), contracts.HelpListSchemasRequest{})
+	if err != nil {
+		t.Fatalf("list schemas failed: %v", err)
 	}
-	if payload["command"] != "rules" {
-		t.Fatalf("expected command rules, got %v", payload["command"])
-	}
-	if _, ok := payload["side_effects"]; !ok {
-		t.Fatalf("expected side_effects in schema")
+	if len(res.Schemas) == 0 {
+		t.Fatalf("expected schemas")
 	}
 }

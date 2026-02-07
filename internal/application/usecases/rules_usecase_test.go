@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"time-tracker/internal/application/contracts"
 	"time-tracker/internal/domain"
 )
 
@@ -81,7 +82,7 @@ func (f *fakeRulesRepo) FindActivityIDByTitle(_ context.Context, projectID int64
 func TestRulesUsecaseAddRuleNormalizesDefaults(t *testing.T) {
 	repo := &fakeRulesRepo{}
 	uc := NewRulesUsecase(repo)
-	_, err := uc.AddRule(context.Background(), domain.RuleInput{FollowPrevious: true})
+	_, err := uc.AddRule(context.Background(), contracts.RulesAddRequest{Rule: domain.RuleInput{FollowPrevious: true}})
 	if err != nil {
 		t.Fatalf("add rule failed: %v", err)
 	}
@@ -114,23 +115,24 @@ func TestRulesUsecaseDraftPreviewSaveAndDiscard(t *testing.T) {
 	}
 	uc := NewRulesUsecase(repo)
 
-	if err := uc.AddRuleToDraft(context.Background(), domain.RuleInput{
+	if _, err := uc.AddRuleToDraft(context.Background(), contracts.RulesDraftAddRequest{Rule: domain.RuleInput{
 		Priority:     200,
 		AppPattern:   "(?i)^Arc$",
 		TitlePattern: "(?i)^.*zoom.*$",
 		ProjectID:    &projectID,
 		ActivityID:   &activityID,
-	}); err != nil {
+	}}); err != nil {
 		t.Fatalf("add draft rule failed: %v", err)
 	}
-	if err := uc.DeleteRuleFromDraft(context.Background(), 1); err != nil {
+	if _, err := uc.DeleteRuleFromDraft(context.Background(), contracts.RulesDraftDeleteRequest{RuleID: 1}); err != nil {
 		t.Fatalf("delete draft rule failed: %v", err)
 	}
 
-	preview, err := uc.DraftPreview(context.Background())
+	previewRes, err := uc.DraftPreview(context.Background(), contracts.RulesDraftPreviewRequest{})
 	if err != nil {
 		t.Fatalf("draft preview failed: %v", err)
 	}
+	preview := previewRes.Preview
 	if !preview.HasChanges {
 		t.Fatalf("expected pending changes")
 	}
@@ -138,32 +140,35 @@ func TestRulesUsecaseDraftPreviewSaveAndDiscard(t *testing.T) {
 		t.Fatalf("expected 2 preview rows, got %d", len(preview.Rows))
 	}
 
-	res, err := uc.SaveDraft(context.Background())
+	res, err := uc.SaveDraft(context.Background(), contracts.RulesDraftSaveRequest{})
 	if err != nil {
 		t.Fatalf("save draft failed: %v", err)
 	}
-	if res.Added != 1 || res.Deleted != 1 {
+	if res.Result.Added != 1 || res.Result.Deleted != 1 {
 		t.Fatalf("unexpected save result %+v", res)
 	}
 	if len(repo.appliedChanges.Adds) != 1 || len(repo.appliedChanges.Deletes) != 1 {
 		t.Fatalf("expected 1 add and 1 delete change")
 	}
 
-	if err := uc.AddRuleToDraft(context.Background(), domain.RuleInput{
+	if _, err := uc.AddRuleToDraft(context.Background(), contracts.RulesDraftAddRequest{Rule: domain.RuleInput{
 		Priority:     100,
 		AppPattern:   "(?i)^Firefox$",
 		TitlePattern: "(?i)^.*$",
 		ProjectID:    &projectID,
 		ActivityID:   &activityID,
-	}); err != nil {
+	}}); err != nil {
 		t.Fatalf("second add draft rule failed: %v", err)
 	}
-	uc.DiscardDraft()
+	if _, err := uc.DiscardDraft(context.Background(), contracts.RulesDraftDiscardRequest{}); err != nil {
+		t.Fatalf("discard draft failed: %v", err)
+	}
 
-	preview, err = uc.DraftPreview(context.Background())
+	previewRes, err = uc.DraftPreview(context.Background(), contracts.RulesDraftPreviewRequest{})
 	if err != nil {
 		t.Fatalf("preview after discard failed: %v", err)
 	}
+	preview = previewRes.Preview
 	if preview.HasChanges {
 		t.Fatalf("expected no changes after discard")
 	}
@@ -176,18 +181,20 @@ func TestRulesUsecaseReAddDefaultRulesSkipsMissingProject(t *testing.T) {
 	}
 	uc := NewRulesUsecase(repo)
 
-	warnings, err := uc.ReAddDefaultRulesToDraft(context.Background())
+	readdRes, err := uc.ReAddDefaultRulesToDraft(context.Background(), contracts.RulesDraftReAddDefaultsRequest{})
 	if err != nil {
 		t.Fatalf("re-add defaults failed: %v", err)
 	}
+	warnings := readdRes.Warnings
 	if len(warnings) == 0 {
 		t.Fatalf("expected warning for missing project a/development")
 	}
 
-	preview, err := uc.DraftPreview(context.Background())
+	previewRes, err := uc.DraftPreview(context.Background(), contracts.RulesDraftPreviewRequest{})
 	if err != nil {
 		t.Fatalf("preview failed: %v", err)
 	}
+	preview := previewRes.Preview
 	// one default skipped, two should remain.
 	added := 0
 	for _, row := range preview.Rows {
@@ -205,22 +212,26 @@ func TestRulesUsecaseAddRegexRuleFromGroups(t *testing.T) {
 	activityID := int64(100)
 	repo := &fakeRulesRepo{}
 	uc := NewRulesUsecase(repo)
-	err := uc.AddRegexRuleFromGroupsToDraft(context.Background(), []domain.GroupedEvent{
-		{AppName: "Firefox", WindowTitle: "Project Name A"},
-		{AppName: "Arc", WindowTitle: "Teams"},
-	}, domain.RuleInput{
-		Priority:   200,
-		ProjectID:  &projectID,
-		ActivityID: &activityID,
+	_, err := uc.AddRegexRuleFromGroupsToDraft(context.Background(), contracts.RulesDraftAddFromGroupsRequest{
+		Groups: []domain.GroupedEvent{
+			{AppName: "Firefox", WindowTitle: "Project Name A"},
+			{AppName: "Arc", WindowTitle: "Teams"},
+		},
+		Rule: domain.RuleInput{
+			Priority:   200,
+			ProjectID:  &projectID,
+			ActivityID: &activityID,
+		},
 	})
 	if err != nil {
 		t.Fatalf("add regex draft rule failed: %v", err)
 	}
 
-	preview, err := uc.DraftPreview(context.Background())
+	previewRes, err := uc.DraftPreview(context.Background(), contracts.RulesDraftPreviewRequest{})
 	if err != nil {
 		t.Fatalf("preview failed: %v", err)
 	}
+	preview := previewRes.Preview
 	if len(preview.Rows) != 1 {
 		t.Fatalf("expected one preview row, got %d", len(preview.Rows))
 	}
@@ -239,13 +250,15 @@ func TestRulesUsecaseAutoApplySuggestionsThreshold(t *testing.T) {
 	}
 	uc := NewRulesUsecase(repo)
 
-	res, err := uc.AutoApplySuggestions(context.Background(), domain.AutoApplySuggestionsInput{MinConfidence: 90, ApplyNow: false})
+	res, err := uc.AutoApplySuggestions(context.Background(), contracts.RulesAutoApplySuggestionsRequest{
+		Input: domain.AutoApplySuggestionsInput{MinConfidence: 90, ApplyNow: false},
+	})
 	if err != nil {
 		t.Fatalf("auto apply failed: %v", err)
 	}
 
-	if res.Accepted != 2 {
-		t.Fatalf("expected 2 accepted suggestions, got %d", res.Accepted)
+	if res.Result.Accepted != 2 {
+		t.Fatalf("expected 2 accepted suggestions, got %d", res.Result.Accepted)
 	}
 	if len(repo.added) != 2 {
 		t.Fatalf("expected 2 add calls, got %d", len(repo.added))
@@ -265,12 +278,12 @@ func TestRulesUsecaseApplyRulesUsesDomainEngine(t *testing.T) {
 	}
 	uc := NewRulesUsecase(repo)
 
-	res, err := uc.ApplyRules(context.Background(), domain.ApplyRulesInput{DryRun: false})
+	res, err := uc.ApplyRules(context.Background(), contracts.RulesApplyRequest{Input: domain.ApplyRulesInput{DryRun: false}})
 	if err != nil {
 		t.Fatalf("apply rules failed: %v", err)
 	}
-	if res.MatchedEvents != 1 {
-		t.Fatalf("expected 1 matched event, got %d", res.MatchedEvents)
+	if res.Result.MatchedEvents != 1 {
+		t.Fatalf("expected 1 matched event, got %d", res.Result.MatchedEvents)
 	}
 	if len(repo.applied) != 1 {
 		t.Fatalf("expected 1 persisted update, got %d", len(repo.applied))

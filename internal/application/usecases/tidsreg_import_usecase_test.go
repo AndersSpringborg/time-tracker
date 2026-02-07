@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"time-tracker/internal/application/contracts"
 	"time-tracker/internal/domain"
 )
 
@@ -77,10 +78,16 @@ func TestTidsregImportUsecaseBuildsPreview(t *testing.T) {
 	}
 	uc := NewTidsregImportUsecase(gateway, &fakeTidsregImportRepo{})
 
-	preview, err := uc.BuildPreview(context.Background(), "session=ok", domain.TidsregModeTime, gateway.customers, []int64{1})
+	previewRes, err := uc.BuildPreview(context.Background(), contracts.TidsregBuildPreviewRequest{
+		SessionCookie:       "session=ok",
+		Mode:                domain.TidsregModeTime,
+		Customers:           gateway.customers,
+		SelectedCustomerIDs: []int64{1},
+	})
 	if err != nil {
 		t.Fatalf("BuildPreview failed: %v", err)
 	}
+	preview := previewRes.Preview
 	if len(preview.Candidates) != 1 {
 		t.Fatalf("expected 1 candidate, got %d", len(preview.Candidates))
 	}
@@ -109,18 +116,21 @@ func TestTidsregImportUsecaseCommitPersistsSelectedCandidates(t *testing.T) {
 		},
 	}}
 
-	result, err := uc.Commit(context.Background(), preview, []string{"1:10:100"})
+	result, err := uc.Commit(context.Background(), contracts.TidsregCommitRequest{
+		Preview:      preview,
+		SelectedKeys: []string{"1:10:100"},
+	})
 	if err != nil {
 		t.Fatalf("Commit failed: %v", err)
 	}
-	if result.ImportedCandidates != 1 {
-		t.Fatalf("expected 1 imported candidate, got %d", result.ImportedCandidates)
+	if result.Result.ImportedCandidates != 1 {
+		t.Fatalf("expected 1 imported candidate, got %d", result.Result.ImportedCandidates)
 	}
-	if result.ProjectsCreated != 1 {
-		t.Fatalf("expected 1 project created, got %d", result.ProjectsCreated)
+	if result.Result.ProjectsCreated != 1 {
+		t.Fatalf("expected 1 project created, got %d", result.Result.ProjectsCreated)
 	}
-	if result.ActivitiesCreated != 1 {
-		t.Fatalf("expected 1 activity created, got %d", result.ActivitiesCreated)
+	if result.Result.ActivitiesCreated != 1 {
+		t.Fatalf("expected 1 activity created, got %d", result.Result.ActivitiesCreated)
 	}
 	if len(repo.upserts) != 1 {
 		t.Fatalf("expected one upsert call")
@@ -129,10 +139,18 @@ func TestTidsregImportUsecaseCommitPersistsSelectedCandidates(t *testing.T) {
 
 func TestTidsregImportUsecaseAuthenticateValidation(t *testing.T) {
 	uc := NewTidsregImportUsecase(&fakeTidsregGateway{authErr: errors.New("bad creds")}, &fakeTidsregImportRepo{})
-	if _, _, err := uc.AuthenticateAndListCustomers(context.Background(), "", "", domain.TidsregModeTime); err == nil {
+	if _, err := uc.AuthenticateAndListCustomers(context.Background(), contracts.TidsregAuthenticateRequest{
+		Username: "",
+		Password: "",
+		Mode:     domain.TidsregModeTime,
+	}); err == nil {
 		t.Fatalf("expected validation error")
 	}
-	if _, _, err := uc.AuthenticateAndListCustomers(context.Background(), "u", "p", domain.TidsregModeTime); err == nil {
+	if _, err := uc.AuthenticateAndListCustomers(context.Background(), contracts.TidsregAuthenticateRequest{
+		Username: "u",
+		Password: "p",
+		Mode:     domain.TidsregModeTime,
+	}); err == nil {
 		t.Fatalf("expected auth error")
 	}
 }

@@ -14,56 +14,56 @@ const (
 )
 
 type TidsregCustomer struct {
-	CustomerID int64  `json:"customer_id"`
-	Name       string `json:"name"`
+	CustomerID int64
+	Name       string
 }
 
 type TidsregProject struct {
-	ProjectID    int64  `json:"project_id"`
-	CustomerID   int64  `json:"customer_id"`
-	Name         string `json:"name"`
-	CustomerName string `json:"customer_name,omitempty"`
+	ProjectID    int64
+	CustomerID   int64
+	Name         string
+	CustomerName string
 }
 
 type TidsregPhase struct {
-	PhaseID     int64  `json:"phase_id"`
-	ProjectID   int64  `json:"project_id"`
-	Name        string `json:"name"`
-	ProjectName string `json:"project_name,omitempty"`
+	PhaseID     int64
+	ProjectID   int64
+	Name        string
+	ProjectName string
 }
 
 type TidsregActivity struct {
-	ActivityID int64  `json:"activity_id"`
-	PhaseID    int64  `json:"phase_id"`
-	Name       string `json:"name"`
+	ActivityID int64
+	PhaseID    int64
+	Name       string
 }
 
 type TidsregImportCandidate struct {
-	Key          string            `json:"key"`
-	CustomerID   int64             `json:"customer_id"`
-	CustomerName string            `json:"customer_name"`
-	ProjectID    int64             `json:"project_id"`
-	ProjectName  string            `json:"project_name"`
-	PhaseID      int64             `json:"phase_id"`
-	PhaseName    string            `json:"phase_name"`
-	TargetTitle  string            `json:"target_title"`
-	Activities   []TidsregActivity `json:"activities"`
+	Key          string
+	CustomerID   int64
+	CustomerName string
+	ProjectID    int64
+	ProjectName  string
+	PhaseID      int64
+	PhaseName    string
+	TargetTitle  string
+	Activities   []TidsregActivity
 }
 
 type TidsregImportPreview struct {
-	Mode          TidsregMode              `json:"mode"`
-	Customers     []TidsregCustomer        `json:"customers"`
-	Candidates    []TidsregImportCandidate `json:"candidates"`
-	GeneratedAtMS int64                    `json:"generated_at_ms"`
+	Mode          TidsregMode
+	Customers     []TidsregCustomer
+	Candidates    []TidsregImportCandidate
+	GeneratedAtMS int64
 }
 
 type TidsregImportResult struct {
-	ImportedCandidates int `json:"imported_candidates"`
-	ProjectsCreated    int `json:"projects_created"`
-	ProjectsUpdated    int `json:"projects_updated"`
-	ActivitiesCreated  int `json:"activities_created"`
-	ActivitiesUpdated  int `json:"activities_updated"`
-	ActivitiesDeleted  int `json:"activities_deleted"`
+	ImportedCandidates int
+	ProjectsCreated    int
+	ProjectsUpdated    int
+	ActivitiesCreated  int
+	ActivitiesUpdated  int
+	ActivitiesDeleted  int
 }
 
 type ImportedProjectUpsert struct {
