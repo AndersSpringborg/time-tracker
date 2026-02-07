@@ -20,9 +20,11 @@ func seedProjectActivity(t *testing.T, s *Store) {
 	t.Helper()
 	ctx := context.Background()
 	queries := []string{
-		"INSERT INTO projects (project_id, title, metadata) VALUES (10, 'web-app', 'notes')",
-		"INSERT INTO activities (activity_id, project_id, title) VALUES (100, 10, 'development')",
-		"INSERT INTO activities (activity_id, project_id, title) VALUES (101, 10, 'meeting')",
+		"INSERT INTO customers (customer_id, name) VALUES (1, 'internal')",
+		"INSERT INTO projects (project_id, customer_id, name, title, metadata) VALUES (10, 1, 'web-app', 'web-app', 'notes')",
+		"INSERT INTO phases (phase_id, project_id, name) VALUES (20, 10, 'build')",
+		"INSERT INTO activities (activity_id, phase_id, project_id, name, title) VALUES (100, 20, 10, 'development', 'development')",
+		"INSERT INTO activities (activity_id, phase_id, project_id, name, title) VALUES (101, 20, 10, 'meeting', 'meeting')",
 	}
 	for _, q := range queries {
 		if _, err := s.db.ExecContext(ctx, q); err != nil {

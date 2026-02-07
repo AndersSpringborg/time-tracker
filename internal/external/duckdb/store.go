@@ -770,23 +770,21 @@ LIMIT 1
 		if err != sql.ErrNoRows {
 			return domain.ImportedProjectUpsertResult{}, err
 		}
+		nextID, err := s.nextProjectID(ctx)
+		if err != nil {
+			return domain.ImportedProjectUpsertResult{}, err
+		}
 		res, err := s.db.ExecContext(ctx, `
-INSERT INTO projects (title, metadata, source, external_customer_id, external_project_id, external_phase_id)
-VALUES (?, ?, ?, ?, ?, ?)
-`, in.Title, in.Metadata, in.Source, in.ExternalCustomerID, in.ExternalProjectID, in.ExternalPhaseID)
+INSERT INTO projects (
+  project_id, customer_id, name, title, metadata, source, external_customer_id, external_project_id, external_phase_id
+) VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?)
+`, nextID, in.Title, in.Title, in.Metadata, in.Source, in.ExternalCustomerID, in.ExternalProjectID, in.ExternalPhaseID)
 		if err != nil {
 			return domain.ImportedProjectUpsertResult{}, err
 		}
 		insertedID, _ := res.LastInsertId()
 		if insertedID <= 0 {
-			if err := s.db.QueryRowContext(ctx, `
-SELECT project_id
-FROM projects
-WHERE source = ? AND external_customer_id = ? AND external_project_id = ? AND external_phase_id = ?
-LIMIT 1
-`, in.Source, in.ExternalCustomerID, in.ExternalProjectID, in.ExternalPhaseID).Scan(&insertedID); err != nil {
-				return domain.ImportedProjectUpsertResult{}, err
-			}
+			insertedID = nextID
 		}
 		return domain.ImportedProjectUpsertResult{ProjectID: insertedID, Created: true, Updated: false}, nil
 	}
@@ -839,11 +837,16 @@ LIMIT 1
 		if err != sql.ErrNoRows {
 			return result, err
 		}
+		nextID, err := s.nextActivityID(ctx)
+		if err != nil {
+			return result, err
+		}
 
 		if _, err := s.db.ExecContext(ctx, `
-INSERT INTO activities (project_id, title, source, external_activity_id)
-VALUES (?, ?, ?, ?)
-`, projectID, activity.Title, source, activity.ExternalActivityID); err != nil {
+INSERT INTO activities (
+  activity_id, phase_id, project_id, name, title, source, external_activity_id
+) VALUES (?, 0, ?, ?, ?, ?, ?)
+`, nextID, projectID, activity.Title, activity.Title, source, activity.ExternalActivityID); err != nil {
 			return result, err
 		}
 		result.Created++
@@ -952,6 +955,22 @@ func orDefaultSource(source domain.RuleSource) domain.RuleSource {
 		return domain.RuleSourceUser
 	}
 	return source
+}
+
+func (s *Store) nextProjectID(ctx context.Context) (int64, error) {
+	var id int64
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(project_id), 0) + 1 FROM projects`).Scan(&id); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+func (s *Store) nextActivityID(ctx context.Context) (int64, error) {
+	var id int64
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(activity_id), 0) + 1 FROM activities`).Scan(&id); err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
 func (s *Store) String() string { return fmt.Sprintf("duckdb-store(%p)", s.db) }
