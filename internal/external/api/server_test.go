@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -189,5 +190,70 @@ func TestRecoverMiddlewareReturns500AndLogsPanic(t *testing.T) {
 	}
 	if !strings.Contains(logLine, "status=500") {
 		t.Fatalf("expected status log, got %s", logLine)
+	}
+}
+
+func TestRequestLoggingMiddlewareIncludesErrorBody(t *testing.T) {
+	s, err := New(&usecases.App{})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	var buf bytes.Buffer
+	s.logger = log.New(&buf, "", 0)
+
+	handler := s.requestLoggingMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/failing", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", rr.Code)
+	}
+	logLine := buf.String()
+	if !strings.Contains(logLine, "status=500") {
+		t.Fatalf("expected status in log, got %s", logLine)
+	}
+	if !strings.Contains(logLine, `error_body="boom"`) {
+		t.Fatalf("expected error body in log, got %s", logLine)
+	}
+}
+
+func TestRulesDraftAddFromSelectionLogsFailureDetails(t *testing.T) {
+	app := &usecases.App{
+		Rules: usecases.NewRulesUsecase(&fakeRulesRepo{}),
+	}
+	s, err := New(app)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	var buf bytes.Buffer
+	s.logger = log.New(&buf, "", 0)
+
+	form := url.Values{}
+	form.Set("selected_idx", "0")
+	form.Set("group_app_0", "Google Chrome")
+	form.Set("group_title_0", "Daily standup")
+	form.Set("action_type", "assign_explicit")
+	form.Set("priority", "100")
+
+	req := httptest.NewRequest(http.MethodPost, "/rules/draft/add-from-selection", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	logLine := buf.String()
+	if !strings.Contains(logLine, "rules_add_from_selection parsed") {
+		t.Fatalf("expected parsed log, got %s", logLine)
+	}
+	if !strings.Contains(logLine, "handler_error method=POST path=/rules/draft/add-from-selection") {
+		t.Fatalf("expected handler error log, got %s", logLine)
 	}
 }
