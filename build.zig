@@ -9,8 +9,8 @@ pub fn build(b: *std.Build) void {
     });
     const flatbufferz_module = flatbufferz_dep.module("flatbufferz");
 
-    const duckdb_include_path: std.Build.LazyPath = .{ .cwd_relative = "vendor/duckdb/include" };
-    const duckdb_lib_path: std.Build.LazyPath = .{ .cwd_relative = "vendor/duckdb/lib" };
+    const duckdb_include_path: std.Build.LazyPath = .{ .cwd_relative = "third_party/duckdb/include" };
+    const duckdb_lib_path: std.Build.LazyPath = .{ .cwd_relative = "third_party/duckdb/lib" };
 
     const domain_glob_module = b.createModule(.{
         .root_source_file = b.path("src/domain/glob.zig"),
@@ -216,7 +216,7 @@ pub fn build(b: *std.Build) void {
         "-framework", "Cocoa",
         "-framework", "ApplicationServices",
         "-framework", "CoreWLAN",
-        "-L", "vendor/duckdb/lib",
+        "-L", "third_party/duckdb/lib",
         "-lduckdb_static",
         "-lcore_functions_extension",
         "-licu_extension",

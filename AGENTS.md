@@ -6,7 +6,7 @@ Low-power, event-driven time tracker daemon for macOS with hybrid Swift/Zig arch
 
 - **Swift** (`src/bridge/`): macOS sensor - Accessibility API for window/app tracking
 - **Zig** (`src/core/`): Main logic, CLI, database operations
-- **DuckDB**: Embedded SQL database (vendored in `vendor/duckdb/`)
+- **DuckDB**: Embedded SQL database (embedded assets in `third_party/duckdb/`)
 
 ## Build Commands
 
