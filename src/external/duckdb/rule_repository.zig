@@ -198,8 +198,7 @@ pub const DuckDbRuleRepository = struct {
         const sql =
             \\SELECT k.kind_id FROM kinds k
             \\JOIN activities a ON k.activity_id = a.activity_id
-            \\JOIN phases ph ON a.phase_id = ph.phase_id
-            \\WHERE ph.project_id = ? AND LOWER(k.name) = LOWER(?)
+            \\WHERE a.project_id = ? AND LOWER(k.name) = LOWER(?)
             \\LIMIT 1
         ;
 

@@ -83,7 +83,12 @@ func BuildProjectTitle(customerName, projectName, phaseName string) string {
 }
 
 func BuildProjectMetadata(customerID, projectID, phaseID int64) string {
-	return fmt.Sprintf("source=tidsreg customer_id=%d project_id=%d phase_id=%d", customerID, projectID, phaseID)
+	return fmt.Sprintf(
+		"source=tidsreg customer_id=%d project_id=%d variant_key=%s",
+		customerID,
+		projectID,
+		BuildImportKey(customerID, projectID, phaseID),
+	)
 }
 
 func normalizeSegment(v string) string {

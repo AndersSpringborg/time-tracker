@@ -45,12 +45,10 @@ pub const DuckDbHierarchyRepository = struct {
     pub fn importFromJson(self: *DuckDbHierarchyRepository, json_content: []const u8) HierarchyRepositoryError!ImportStats {
         var stats = ImportStats{};
 
-        // Clear existing data first (in reverse order due to foreign keys)
+        // Clear mutable leaf data first. Project/customer rows are upserted below.
+        // DuckDB table rewrites in migration 13 can leave delete dependencies on projects.
         self.execQuery("DELETE FROM kinds") catch return HierarchyRepositoryError.InsertFailed;
         self.execQuery("DELETE FROM activities") catch return HierarchyRepositoryError.InsertFailed;
-        self.execQuery("DELETE FROM phases") catch return HierarchyRepositoryError.InsertFailed;
-        self.execQuery("DELETE FROM projects") catch return HierarchyRepositoryError.InsertFailed;
-        self.execQuery("DELETE FROM customers") catch return HierarchyRepositoryError.InsertFailed;
 
         // Parse JSON
         const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, json_content, .{}) catch {
@@ -83,12 +81,6 @@ pub const DuckDbHierarchyRepository = struct {
                 for (phases) |phase_val| {
                     const phase_obj = phase_val.object;
 
-                    const phase_id = phase_obj.get("PhaseId").?.integer;
-                    const phase_name = phase_obj.get("Name").?.string;
-
-                    self.insertPhase(phase_id, project_id, phase_name) catch return HierarchyRepositoryError.InsertFailed;
-                    stats.phases += 1;
-
                     const activities = phase_obj.get("Activities").?.array.items;
                     for (activities) |activity_val| {
                         const activity_obj = activity_val.object;
@@ -96,7 +88,7 @@ pub const DuckDbHierarchyRepository = struct {
                         const activity_id = activity_obj.get("ActivityId").?.integer;
                         const activity_name = activity_obj.get("Name").?.string;
 
-                        self.insertActivity(activity_id, phase_id, activity_name) catch return HierarchyRepositoryError.InsertFailed;
+                        self.insertActivity(activity_id, project_id, activity_name) catch return HierarchyRepositoryError.InsertFailed;
                         stats.activities += 1;
 
                         const kinds = activity_obj.get("Kinds").?.array.items;
@@ -125,17 +117,16 @@ pub const DuckDbHierarchyRepository = struct {
         var stmt: c.duckdb_prepared_statement = undefined;
         const sql =
             \\SELECT k.activity_id, k.kind_id,
-            \\       cu.name || ' > ' || p.name || ' > ' || ph.name || ' > ' || a.name || ' > ' || k.name as full_path
+            \\       cu.name || ' > ' || p.name || ' > ' || a.name || ' > ' || k.name as full_path
             \\FROM kinds k
             \\JOIN activities a ON k.activity_id = a.activity_id
-            \\JOIN phases ph ON a.phase_id = ph.phase_id
-            \\JOIN projects p ON ph.project_id = p.project_id
+            \\JOIN projects p ON a.project_id = p.project_id
             \\JOIN customers cu ON p.customer_id = cu.customer_id
             \\WHERE LOWER(k.name) LIKE '%' || LOWER(?) || '%'
             \\   OR LOWER(a.name) LIKE '%' || LOWER(?) || '%'
             \\   OR LOWER(p.name) LIKE '%' || LOWER(?) || '%'
             \\   OR LOWER(cu.name) LIKE '%' || LOWER(?) || '%'
-            \\ORDER BY cu.name, p.name, ph.name, a.name, k.name
+            \\ORDER BY cu.name, p.name, a.name, k.name
             \\LIMIT 50
         ;
 
@@ -195,11 +186,10 @@ pub const DuckDbHierarchyRepository = struct {
     pub fn getKindPath(self: *DuckDbHierarchyRepository, kind_id: i64) HierarchyRepositoryError![]const u8 {
         var stmt: c.duckdb_prepared_statement = undefined;
         const sql =
-            \\SELECT cu.name || ' > ' || p.name || ' > ' || k.name
+            \\SELECT cu.name || ' > ' || p.name || ' > ' || a.name || ' > ' || k.name
             \\FROM kinds k
             \\JOIN activities a ON k.activity_id = a.activity_id
-            \\JOIN phases ph ON a.phase_id = ph.phase_id
-            \\JOIN projects p ON ph.project_id = p.project_id
+            \\JOIN projects p ON a.project_id = p.project_id
             \\JOIN customers cu ON p.customer_id = cu.customer_id
             \\WHERE k.kind_id = ?
         ;
@@ -245,8 +235,7 @@ pub const DuckDbHierarchyRepository = struct {
             \\SELECT cu.name || ' > ' || p.name, a.name
             \\FROM kinds k
             \\JOIN activities a ON k.activity_id = a.activity_id
-            \\JOIN phases ph ON a.phase_id = ph.phase_id
-            \\JOIN projects p ON ph.project_id = p.project_id
+            \\JOIN projects p ON a.project_id = p.project_id
             \\JOIN customers cu ON p.customer_id = cu.customer_id
             \\WHERE k.kind_id = ?
         ;
@@ -400,30 +389,9 @@ pub const DuckDbHierarchyRepository = struct {
         c.duckdb_destroy_result(&result);
     }
 
-    fn insertPhase(self: *DuckDbHierarchyRepository, phase_id: i64, project_id: i64, name: []const u8) !void {
+    fn insertActivity(self: *DuckDbHierarchyRepository, activity_id: i64, project_id: i64, name: []const u8) !void {
         var stmt: c.duckdb_prepared_statement = undefined;
-        const sql = "INSERT INTO phases (phase_id, project_id, name) VALUES (?, ?, ?) ON CONFLICT (phase_id) DO UPDATE SET project_id = excluded.project_id, name = excluded.name";
-
-        if (c.duckdb_prepare(self.conn, sql, &stmt) == c.DuckDBError) {
-            return error.InsertFailed;
-        }
-        defer c.duckdb_destroy_prepare(&stmt);
-
-        _ = c.duckdb_bind_int64(stmt, 1, phase_id);
-        _ = c.duckdb_bind_int64(stmt, 2, project_id);
-        _ = c.duckdb_bind_varchar_length(stmt, 3, name.ptr, name.len);
-
-        var result: c.duckdb_result = undefined;
-        if (c.duckdb_execute_prepared(stmt, &result) == c.DuckDBError) {
-            c.duckdb_destroy_result(&result);
-            return error.InsertFailed;
-        }
-        c.duckdb_destroy_result(&result);
-    }
-
-    fn insertActivity(self: *DuckDbHierarchyRepository, activity_id: i64, phase_id: i64, name: []const u8) !void {
-        var stmt: c.duckdb_prepared_statement = undefined;
-        const sql = "INSERT INTO activities (activity_id, phase_id, name) VALUES (?, ?, ?) ON CONFLICT (activity_id) DO UPDATE SET phase_id = excluded.phase_id, name = excluded.name";
+        const sql = "INSERT INTO activities (activity_id, project_id, name, title) VALUES (?, ?, ?, ?) ON CONFLICT (activity_id) DO UPDATE SET project_id = excluded.project_id, name = excluded.name, title = excluded.title";
 
         if (c.duckdb_prepare(self.conn, sql, &stmt) == c.DuckDBError) {
             return error.InsertFailed;
@@ -431,8 +399,9 @@ pub const DuckDbHierarchyRepository = struct {
         defer c.duckdb_destroy_prepare(&stmt);
 
         _ = c.duckdb_bind_int64(stmt, 1, activity_id);
-        _ = c.duckdb_bind_int64(stmt, 2, phase_id);
+        _ = c.duckdb_bind_int64(stmt, 2, project_id);
         _ = c.duckdb_bind_varchar_length(stmt, 3, name.ptr, name.len);
+        _ = c.duckdb_bind_varchar_length(stmt, 4, name.ptr, name.len);
 
         var result: c.duckdb_result = undefined;
         if (c.duckdb_execute_prepared(stmt, &result) == c.DuckDBError) {

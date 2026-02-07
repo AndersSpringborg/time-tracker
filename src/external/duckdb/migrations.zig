@@ -66,6 +66,21 @@ pub const migrations = [_]Migration{
         .name = "simplify_project_activity_model",
         .up = @embedFile("sql/010_simplify_project_activity_model.sql"),
     },
+    .{
+        .version = 11,
+        .name = "add_regex_rule_actions_and_keys",
+        .up = @embedFile("sql/011_add_regex_rule_actions_and_keys.sql"),
+    },
+    .{
+        .version = 12,
+        .name = "add_tidsreg_import_columns",
+        .up = @embedFile("sql/012_add_tidsreg_import_columns.sql"),
+    },
+    .{
+        .version = 13,
+        .name = "remove_phases",
+        .up = @embedFile("sql/013_remove_phases.sql"),
+    },
 };
 
 pub const Migrator = struct {
@@ -114,11 +129,38 @@ pub const Migrator = struct {
     }
 
     fn applyMigration(self: *Migrator, migration: Migration) MigrationError!void {
-        // Run the migration SQL
-        self.execQuery(migration.up) catch {
-            std.debug.print("Migration {d} ({s}) failed\n", .{ migration.version, migration.name });
-            return MigrationError.QueryFailed;
-        };
+        var stmt_buf: std.ArrayListUnmanaged(u8) = .{};
+        defer stmt_buf.deinit(std.heap.page_allocator);
+
+        var lines = std.mem.splitScalar(u8, migration.up, '\n');
+        while (lines.next()) |line| {
+            const trimmed = std.mem.trim(u8, line, " \t\r");
+            if (trimmed.len == 0 or std.mem.startsWith(u8, trimmed, "--")) {
+                continue;
+            }
+
+            stmt_buf.appendSlice(std.heap.page_allocator, line) catch return MigrationError.QueryFailed;
+            stmt_buf.append(std.heap.page_allocator, '\n') catch return MigrationError.QueryFailed;
+
+            if (std.mem.endsWith(u8, trimmed, ";")) {
+                const statement = std.mem.trim(u8, stmt_buf.items, " \t\r\n");
+                if (statement.len > 0) {
+                    self.execQuery(statement) catch {
+                        std.debug.print("Migration {d} ({s}) failed\n", .{ migration.version, migration.name });
+                        return MigrationError.QueryFailed;
+                    };
+                }
+                stmt_buf.clearRetainingCapacity();
+            }
+        }
+
+        const trailing_statement = std.mem.trim(u8, stmt_buf.items, " \t\r\n");
+        if (trailing_statement.len > 0) {
+            self.execQuery(trailing_statement) catch {
+                std.debug.print("Migration {d} ({s}) failed\n", .{ migration.version, migration.name });
+                return MigrationError.QueryFailed;
+            };
+        }
 
         // Record the migration
         try self.recordMigration(migration);

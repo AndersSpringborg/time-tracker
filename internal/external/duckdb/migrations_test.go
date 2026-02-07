@@ -49,6 +49,38 @@ func assertSimplifiedProjectSchema(t *testing.T, db *sql.DB) {
 	if titleColumnCount != 1 {
 		t.Fatalf("expected projects.title column after migration")
 	}
+
+	var variantColumnCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name = 'external_variant_key'`).Scan(&variantColumnCount); err != nil {
+		t.Fatalf("inspect projects external_variant_key column failed: %v", err)
+	}
+	if variantColumnCount != 1 {
+		t.Fatalf("expected projects.external_variant_key column after migration")
+	}
+
+	var externalPhaseColumnCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name = 'external_phase_id'`).Scan(&externalPhaseColumnCount); err != nil {
+		t.Fatalf("inspect projects external_phase_id column failed: %v", err)
+	}
+	if externalPhaseColumnCount != 1 {
+		t.Fatalf("expected projects.external_phase_id column to remain for compatibility")
+	}
+
+	var activityPhaseColumnCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('activities') WHERE name = 'phase_id'`).Scan(&activityPhaseColumnCount); err != nil {
+		t.Fatalf("inspect activities.phase_id failed: %v", err)
+	}
+	if activityPhaseColumnCount != 0 {
+		t.Fatalf("expected activities.phase_id to be removed after migration")
+	}
+
+	var phasesTableCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'phases'`).Scan(&phasesTableCount); err != nil {
+		t.Fatalf("inspect phases table failed: %v", err)
+	}
+	if phasesTableCount != 0 {
+		t.Fatalf("expected phases table to be removed after migration")
+	}
 }
 
 func assertRuleCompatibilitySchema(t *testing.T, db *sql.DB) {
@@ -157,8 +189,64 @@ func TestOpenMigratesLegacyVersion9DatabaseFromDisk(t *testing.T) {
 	if err := store.db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&version); err != nil {
 		t.Fatalf("query schema_migrations failed: %v", err)
 	}
-	if version != 12 {
-		t.Fatalf("expected schema version 12, got %d", version)
+	if version != 13 {
+		t.Fatalf("expected schema version 13, got %d", version)
+	}
+}
+
+func TestMigrateHandlesVersion12WithoutKindsTable(t *testing.T) {
+	db, err := sql.Open("duckdb", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	setup := []string{
+		`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name VARCHAR NOT NULL, applied_at TIMESTAMP DEFAULT current_timestamp);`,
+		`INSERT INTO schema_migrations (version, name) VALUES (12, 'add_tidsreg_import_columns');`,
+		`CREATE TABLE customers (customer_id INTEGER PRIMARY KEY, name VARCHAR);`,
+		`CREATE TABLE projects (project_id INTEGER PRIMARY KEY, customer_id INTEGER, name VARCHAR, title VARCHAR, metadata VARCHAR, source VARCHAR, external_customer_id BIGINT, external_project_id BIGINT, external_phase_id BIGINT);`,
+		`CREATE UNIQUE INDEX projects_source_external_idx ON projects (source, external_customer_id, external_project_id, external_phase_id);`,
+		`CREATE TABLE phases (phase_id INTEGER PRIMARY KEY, project_id INTEGER, name VARCHAR);`,
+		`CREATE TABLE activities (activity_id INTEGER PRIMARY KEY, phase_id INTEGER, project_id INTEGER, name VARCHAR, title VARCHAR, source VARCHAR, external_activity_id BIGINT);`,
+		`CREATE TABLE mapping_rules (id INTEGER PRIMARY KEY, priority INTEGER, app_pattern VARCHAR, title_pattern VARCHAR, project_id INTEGER, activity_id INTEGER, kind_id INTEGER, is_global BOOLEAN, kind_name VARCHAR, follow_previous BOOLEAN, created_at TIMESTAMP, rule_key VARCHAR, source VARCHAR, action_type VARCHAR, action_project_title VARCHAR, action_activity_title VARCHAR, pattern_format VARCHAR);`,
+		`INSERT INTO customers (customer_id, name) VALUES (1, 'Acme');`,
+		`INSERT INTO projects (project_id, customer_id, name, title, metadata, source, external_customer_id, external_project_id, external_phase_id) VALUES (10, 1, 'P', 'P', '', 'tidsreg', 1, 2, 3);`,
+		`INSERT INTO phases (phase_id, project_id, name) VALUES (20, 10, 'Legacy');`,
+		`INSERT INTO activities (activity_id, phase_id, project_id, name, title, source, external_activity_id) VALUES (30, 20, 10, 'A', 'A', 'tidsreg', 99);`,
+	}
+	for _, stmt := range setup {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("setup failed (%s): %v", stmt, err)
+		}
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate failed: %v", err)
+	}
+
+	var version int
+	if err := db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&version); err != nil {
+		t.Fatalf("query schema_migrations failed: %v", err)
+	}
+	if version != 13 {
+		t.Fatalf("expected schema version 13, got %d", version)
+	}
+
+	var phasesCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'phases'`).Scan(&phasesCount); err != nil {
+		t.Fatalf("inspect phases table failed: %v", err)
+	}
+	if phasesCount != 0 {
+		t.Fatalf("expected phases table to be removed")
+	}
+
+	var kindsCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'kinds'`).Scan(&kindsCount); err != nil {
+		t.Fatalf("inspect kinds table failed: %v", err)
+	}
+	if kindsCount != 1 {
+		t.Fatalf("expected kinds table to be recreated")
 	}
 }
 

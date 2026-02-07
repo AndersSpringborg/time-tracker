@@ -4,7 +4,7 @@ type ImportedProjectUpsert struct {
 	Source             string
 	ExternalCustomerID int64
 	ExternalProjectID  int64
-	ExternalPhaseID    int64
+	ExternalVariantKey string
 	Title              string
 	Metadata           string
 }

@@ -34,6 +34,22 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if m.Version <= currentVersion {
 			continue
 		}
+		if m.Version == 13 {
+			// DuckDB may keep transient dependency metadata for legacy FK graphs
+			// until statement commit boundaries. Run this migration outside a
+			// wrapping transaction to preserve statement-level commits.
+			stmts := splitSQLStatements(m.SQL)
+			for _, stmt := range stmts {
+				if _, err := db.Exec(stmt); err != nil {
+					return fmt.Errorf("apply migration %d (%s), stmt %q: %w", m.Version, m.Name, compactStmt(stmt), err)
+				}
+			}
+			if _, err := db.Exec(`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`, m.Version, m.Name); err != nil {
+				return fmt.Errorf("record migration %d: %w", m.Version, err)
+			}
+			continue
+		}
+
 		tx, err := db.Begin()
 		if err != nil {
 			return fmt.Errorf("begin migration %d (%s): %w", m.Version, m.Name, err)

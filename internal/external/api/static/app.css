@@ -120,6 +120,34 @@ th, td {
 .status.loaded, .status.not_loaded { border-left: 4px solid #b8701c; padding-left: .75rem; }
 .actions { display: flex; gap: .5rem; margin-top: .4rem; }
 
+.htmx-indicator { display: none; }
+.htmx-request.htmx-indicator { display: inline-flex; }
+
+.tidsreg-loader {
+  align-items: center;
+  gap: .5rem;
+  margin-bottom: .8rem;
+  padding: .45rem .7rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff7ea;
+  color: var(--accent-2);
+  font-weight: 600;
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid #d5c9b7;
+  border-top-color: var(--accent);
+  animation: tt-spin .8s linear infinite;
+}
+
+@keyframes tt-spin {
+  to { transform: rotate(360deg); }
+}
+
 .badge {
   display: inline-block;
   padding: .2rem .45rem;

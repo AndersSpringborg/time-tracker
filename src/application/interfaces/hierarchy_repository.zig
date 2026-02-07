@@ -50,7 +50,7 @@ pub const HierarchyRepository = struct {
         return self.vtable.searchFullHierarchy(self.ptr, search_term);
     }
 
-    /// Get the full path for a kind (e.g., "Customer > Project > Phase > Activity > Kind").
+    /// Get the full path for a kind (e.g., "Customer > Project > Activity > Kind").
     /// Caller must call freePath() when done.
     pub fn getKindPath(self: HierarchyRepository, kind_id: i64) HierarchyRepositoryError![]const u8 {
         return self.vtable.getKindPath(self.ptr, kind_id);

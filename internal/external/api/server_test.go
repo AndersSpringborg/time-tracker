@@ -279,8 +279,11 @@ func TestTidsregIntegrationPageRendersLoginForm(t *testing.T) {
 	if !strings.Contains(body, "autocomplete=\"username\"") {
 		t.Fatalf("expected username autocomplete in body")
 	}
-	if !strings.Contains(body, "Load Customers") {
+	if !strings.Contains(body, "Load Step 1: Customers") {
 		t.Fatalf("expected tidsreg login form in body")
+	}
+	if !strings.Contains(body, "id=\"tidsreg-loader\"") {
+		t.Fatalf("expected tidsreg loader in body")
 	}
 }
 
@@ -300,6 +303,45 @@ func TestTidsregCustomersTemplateDefaultsToUnchecked(t *testing.T) {
 	body := rr.Body.String()
 	if strings.Contains(body, "name=\"customer_ids\" value=\"1\" checked") {
 		t.Fatalf("expected customer checkbox to start unchecked")
+	}
+	if !strings.Contains(body, "hx-post=\"/integrations/tidsreg/projects\"") {
+		t.Fatalf("expected customers step to post to projects route")
+	}
+	if !strings.Contains(body, "Check/Uncheck All") {
+		t.Fatalf("expected check/uncheck button in customers step")
+	}
+	if !strings.Contains(body, "hx-indicator=\"#tidsreg-loader\"") {
+		t.Fatalf("expected customers step loader indicator wiring")
+	}
+}
+
+func TestTidsregProjectsTemplateRendersProjectSelection(t *testing.T) {
+	s, err := New(&usecases.App{})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	rr := httptest.NewRecorder()
+	s.render(rr, "partials/tidsreg_projects", pageData{
+		TidsregProjects: []tidsregmodel.Project{{
+			ProjectID:    42,
+			CustomerID:   7,
+			Name:         "Portal",
+			CustomerName: "Trifork",
+		}},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "name=\"project_ids\" value=\"42\"") {
+		t.Fatalf("expected project checkbox in projects step")
+	}
+	if !strings.Contains(body, "Check/Uncheck All") {
+		t.Fatalf("expected check/uncheck button in projects step")
+	}
+	if !strings.Contains(body, "hx-indicator=\"#tidsreg-loader\"") {
+		t.Fatalf("expected projects step loader indicator wiring")
 	}
 }
 

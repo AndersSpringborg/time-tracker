@@ -23,9 +23,8 @@ func seedProjectActivity(t *testing.T, s *Store) {
 	queries := []string{
 		"INSERT INTO customers (customer_id, name) VALUES (1, 'internal')",
 		"INSERT INTO projects (project_id, customer_id, name, title, metadata) VALUES (10, 1, 'web-app', 'web-app', 'notes')",
-		"INSERT INTO phases (phase_id, project_id, name) VALUES (20, 10, 'build')",
-		"INSERT INTO activities (activity_id, phase_id, project_id, name, title) VALUES (100, 20, 10, 'development', 'development')",
-		"INSERT INTO activities (activity_id, phase_id, project_id, name, title) VALUES (101, 20, 10, 'meeting', 'meeting')",
+		"INSERT INTO activities (activity_id, project_id, name, title) VALUES (100, 10, 'development', 'development')",
+		"INSERT INTO activities (activity_id, project_id, name, title) VALUES (101, 10, 'meeting', 'meeting')",
 	}
 	for _, q := range queries {
 		if _, err := s.db.ExecContext(ctx, q); err != nil {
@@ -199,7 +198,7 @@ func TestUpsertImportedProjectCreatesAndUpdates(t *testing.T) {
 		Source:             "tidsreg",
 		ExternalCustomerID: 1,
 		ExternalProjectID:  10,
-		ExternalPhaseID:    100,
+		ExternalVariantKey: "1:10:100",
 		Title:              "A > B > C",
 		Metadata:           "meta1",
 	})
@@ -214,7 +213,7 @@ func TestUpsertImportedProjectCreatesAndUpdates(t *testing.T) {
 		Source:             "tidsreg",
 		ExternalCustomerID: 1,
 		ExternalProjectID:  10,
-		ExternalPhaseID:    100,
+		ExternalVariantKey: "1:10:100",
 		Title:              "A > B > C updated",
 		Metadata:           "meta2",
 	})
@@ -223,6 +222,35 @@ func TestUpsertImportedProjectCreatesAndUpdates(t *testing.T) {
 	}
 	if second.Created || !second.Updated || second.ProjectID != first.ProjectID {
 		t.Fatalf("expected update on same project, got %+v", second)
+	}
+}
+
+func TestUpsertImportedProjectMatchesLegacyRowWithoutVariantKey(t *testing.T) {
+	s := openTestStore(t)
+	defer s.Close()
+	ctx := context.Background()
+
+	if _, err := s.db.ExecContext(ctx, `
+INSERT INTO projects (
+	project_id, customer_id, name, title, metadata, source, external_customer_id, external_project_id, external_phase_id
+) VALUES (77, 0, 'Legacy', 'Legacy', 'legacy-meta', 'tidsreg', 1, 10, 100)
+`); err != nil {
+		t.Fatalf("insert legacy project failed: %v", err)
+	}
+
+	result, err := s.UpsertImportedProject(ctx, domain.ImportedProjectUpsert{
+		Source:             "tidsreg",
+		ExternalCustomerID: 1,
+		ExternalProjectID:  10,
+		ExternalVariantKey: "1:10:100",
+		Title:              "Legacy Updated",
+		Metadata:           "meta-updated",
+	})
+	if err != nil {
+		t.Fatalf("upsert legacy match failed: %v", err)
+	}
+	if result.Created || !result.Updated || result.ProjectID != 77 {
+		t.Fatalf("expected existing legacy row to be updated, got %+v", result)
 	}
 }
 
@@ -235,8 +263,8 @@ func TestSyncImportedActivitiesReconcilesRows(t *testing.T) {
 		Source:             "tidsreg",
 		ExternalCustomerID: 7,
 		ExternalProjectID:  8,
-		ExternalPhaseID:    9,
-		Title:              "Cust > Proj > Phase",
+		ExternalVariantKey: "7:8:9",
+		Title:              "Cust > Proj > Variant",
 		Metadata:           "meta",
 	})
 	if err != nil {
