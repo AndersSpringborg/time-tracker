@@ -225,6 +225,35 @@ func TestUpsertImportedProjectCreatesAndUpdates(t *testing.T) {
 	}
 }
 
+func TestUpsertImportedProjectMatchesLegacyRowWithoutVariantKey(t *testing.T) {
+	s := openTestStore(t)
+	defer s.Close()
+	ctx := context.Background()
+
+	if _, err := s.db.ExecContext(ctx, `
+INSERT INTO projects (
+	project_id, customer_id, name, title, metadata, source, external_customer_id, external_project_id, external_phase_id
+) VALUES (77, 0, 'Legacy', 'Legacy', 'legacy-meta', 'tidsreg', 1, 10, 100)
+`); err != nil {
+		t.Fatalf("insert legacy project failed: %v", err)
+	}
+
+	result, err := s.UpsertImportedProject(ctx, domain.ImportedProjectUpsert{
+		Source:             "tidsreg",
+		ExternalCustomerID: 1,
+		ExternalProjectID:  10,
+		ExternalVariantKey: "1:10:100",
+		Title:              "Legacy Updated",
+		Metadata:           "meta-updated",
+	})
+	if err != nil {
+		t.Fatalf("upsert legacy match failed: %v", err)
+	}
+	if result.Created || !result.Updated || result.ProjectID != 77 {
+		t.Fatalf("expected existing legacy row to be updated, got %+v", result)
+	}
+}
+
 func TestSyncImportedActivitiesReconcilesRows(t *testing.T) {
 	s := openTestStore(t)
 	defer s.Close()

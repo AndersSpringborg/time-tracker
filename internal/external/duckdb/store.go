@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -770,6 +771,20 @@ FROM projects
 WHERE source = ? AND external_variant_key = ?
 LIMIT 1
 `, in.Source, in.ExternalVariantKey).Scan(&projectID, &title, &metadata)
+	if err == sql.ErrNoRows {
+		if legacyPhaseID, ok := parseLegacyVariantPhaseID(in.ExternalVariantKey); ok {
+			err = s.db.QueryRowContext(ctx, `
+SELECT project_id, title, metadata
+FROM projects
+WHERE source = ?
+  AND external_variant_key IS NULL
+  AND external_customer_id = ?
+  AND external_project_id = ?
+  AND external_phase_id = ?
+LIMIT 1
+`, in.Source, in.ExternalCustomerID, in.ExternalProjectID, legacyPhaseID).Scan(&projectID, &title, &metadata)
+		}
+	}
 	if err != nil {
 		if err != sql.ErrNoRows {
 			return domain.ImportedProjectUpsertResult{}, err
@@ -937,6 +952,18 @@ func nullIfEmpty(value string) any {
 		return nil
 	}
 	return value
+}
+
+func parseLegacyVariantPhaseID(value string) (int64, bool) {
+	parts := strings.Split(strings.TrimSpace(value), ":")
+	if len(parts) != 3 {
+		return 0, false
+	}
+	phaseID, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return phaseID, true
 }
 
 func nullStringValue(value sql.NullString) string {
