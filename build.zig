@@ -254,53 +254,184 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-    const test_step = b.step("test", "Run worker-focused unit tests");
+    const test_step = b.step("test", "Run all Zig unit and adapter tests");
 
-    const domain_glob_tests = b.addTest(.{ .root_module = b.createModule(.{
-        .root_source_file = b.path("src/domain/glob_test.zig"),
-        .target = target,
-        .optimize = optimize,
-    }) });
-    test_step.dependOn(&b.addRunArtifact(domain_glob_tests).step);
+    const add_zig_test = struct {
+        fn linkDuckDbStaticLibs(step: *std.Build.Step.Compile) void {
+            const libs = [_][]const u8{
+                "duckdb_static",
+                "core_functions_extension",
+                "icu_extension",
+                "json_extension",
+                "parquet_extension",
+                "autocomplete_extension",
+                "duckdb_fastpforlib",
+                "duckdb_fmt",
+                "duckdb_fsst",
+                "duckdb_hyperloglog",
+                "duckdb_mbedtls",
+                "duckdb_miniz",
+                "duckdb_pg_query",
+                "duckdb_re2",
+                "duckdb_skiplistlib",
+                "duckdb_utf8proc",
+                "duckdb_yyjson",
+                "duckdb_zstd",
+            };
+            inline for (libs) |lib_name| {
+                step.root_module.linkSystemLibrary(lib_name, .{});
+            }
+            step.linkLibCpp();
+        }
 
-    const domain_event_tests = b.addTest(.{ .root_module = b.createModule(.{
-        .root_source_file = b.path("src/domain/event_test.zig"),
-        .target = target,
-        .optimize = optimize,
-    }) });
-    test_step.dependOn(&b.addRunArtifact(domain_event_tests).step);
+        fn run(
+            build_ctx: *std.Build,
+            suite_step: *std.Build.Step,
+            root_source_file: std.Build.LazyPath,
+            build_target: std.Build.ResolvedTarget,
+            build_optimize: std.builtin.OptimizeMode,
+            imports: []const std.Build.Module.Import,
+            include_path: std.Build.LazyPath,
+            lib_path: std.Build.LazyPath,
+            link_duckdb: bool,
+        ) void {
+            const root_module = build_ctx.createModule(.{
+                .root_source_file = root_source_file,
+                .target = build_target,
+                .optimize = build_optimize,
+                .imports = imports,
+            });
 
-    const domain_rule_tests = b.addTest(.{ .root_module = b.createModule(.{
-        .root_source_file = b.path("src/domain/rule_test.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
+            if (link_duckdb) {
+                root_module.addIncludePath(include_path);
+                root_module.addLibraryPath(lib_path);
+            }
+
+            const test_artifact = build_ctx.addTest(.{ .root_module = root_module });
+            if (link_duckdb) {
+                linkDuckDbStaticLibs(test_artifact);
+            }
+
+            suite_step.dependOn(&build_ctx.addRunArtifact(test_artifact).step);
+        }
+    }.run;
+
+    add_zig_test(b, test_step, b.path("src/domain/glob_test.zig"), target, optimize, &.{}, duckdb_include_path, duckdb_lib_path, false);
+    add_zig_test(b, test_step, b.path("src/domain/event_test.zig"), target, optimize, &.{}, duckdb_include_path, duckdb_lib_path, false);
+    add_zig_test(
+        b,
+        test_step,
+        b.path("src/domain/rule_test.zig"),
+        target,
+        optimize,
+        &.{
             .{ .name = "glob", .module = domain_glob_module },
         },
-    }) });
-    test_step.dependOn(&b.addRunArtifact(domain_rule_tests).step);
-
-    const tracker_tests = b.addTest(.{ .root_module = b.createModule(.{
-        .root_source_file = b.path("src/application/services/tracker_test.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
+        duckdb_include_path,
+        duckdb_lib_path,
+        false,
+    );
+    add_zig_test(
+        b,
+        test_step,
+        b.path("src/application/services/tracker_test.zig"),
+        target,
+        optimize,
+        &.{
             .{ .name = "domain_event", .module = domain_event_module },
         },
-    }) });
-    test_step.dependOn(&b.addRunArtifact(tracker_tests).step);
-
-    const event_dto_mapper_tests = b.addTest(.{ .root_module = b.createModule(.{
-        .root_source_file = b.path("src/external/dto/event_mapper_test.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
+        duckdb_include_path,
+        duckdb_lib_path,
+        false,
+    );
+    add_zig_test(
+        b,
+        test_step,
+        b.path("src/external/dto/event_mapper_test.zig"),
+        target,
+        optimize,
+        &.{
             .{ .name = "flatbufferz", .module = flatbufferz_module },
             .{ .name = "event_dto_generated", .module = event_dto_generated_module },
             .{ .name = "domain_event", .module = domain_event_module },
         },
-    }) });
-    test_step.dependOn(&b.addRunArtifact(event_dto_mapper_tests).step);
+        duckdb_include_path,
+        duckdb_lib_path,
+        false,
+    );
 
-    // Keep zig test scope to worker-safe unit tests without external link-time coupling.
+    add_zig_test(b, test_step, b.path("src/external/duckdb/migrations_test.zig"), target, optimize, &.{}, duckdb_include_path, duckdb_lib_path, true);
+    add_zig_test(
+        b,
+        test_step,
+        b.path("src/external/duckdb/legacy_repository_test.zig"),
+        target,
+        optimize,
+        &.{
+            .{ .name = "domain_event", .module = domain_event_module },
+            .{ .name = "migrations", .module = migrations_module },
+        },
+        duckdb_include_path,
+        duckdb_lib_path,
+        true,
+    );
+    add_zig_test(
+        b,
+        test_step,
+        b.path("src/external/duckdb/buffered_repository_test.zig"),
+        target,
+        optimize,
+        &.{
+            .{ .name = "domain_event", .module = domain_event_module },
+            .{ .name = "legacy_repository", .module = legacy_repo_module },
+        },
+        duckdb_include_path,
+        duckdb_lib_path,
+        true,
+    );
+    add_zig_test(
+        b,
+        test_step,
+        b.path("src/external/duckdb/event_repository_test.zig"),
+        target,
+        optimize,
+        &.{
+            .{ .name = "domain_event", .module = domain_event_module },
+            .{ .name = "event_repository", .module = event_repository_interface },
+            .{ .name = "duckdb_event_repository", .module = duckdb_event_repository },
+            .{ .name = "migrations", .module = migrations_module },
+        },
+        duckdb_include_path,
+        duckdb_lib_path,
+        true,
+    );
+    add_zig_test(
+        b,
+        test_step,
+        b.path("src/external/duckdb/rule_repository_test.zig"),
+        target,
+        optimize,
+        &.{
+            .{ .name = "domain_rule", .module = domain_rule_module },
+            .{ .name = "duckdb_rule_repository", .module = duckdb_rule_repository },
+            .{ .name = "migrations", .module = migrations_module },
+        },
+        duckdb_include_path,
+        duckdb_lib_path,
+        true,
+    );
+    add_zig_test(
+        b,
+        test_step,
+        b.path("src/external/duckdb/hierarchy_repository_test.zig"),
+        target,
+        optimize,
+        &.{
+            .{ .name = "duckdb_hierarchy_repository", .module = duckdb_hierarchy_repository },
+            .{ .name = "migrations", .module = migrations_module },
+        },
+        duckdb_include_path,
+        duckdb_lib_path,
+        true,
+    );
 }

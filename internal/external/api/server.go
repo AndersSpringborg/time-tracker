@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"html/template"
 	"io/fs"
+	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"time-tracker/internal/application/contracts"
 	tidsregmodel "time-tracker/internal/application/integrations/tidsreg"
@@ -25,6 +28,7 @@ type Server struct {
 	app            *usecases.App
 	templates      *template.Template
 	tidsregSession *tidsregSessionStore
+	logger         *log.Logger
 }
 
 type pageData struct {
@@ -63,7 +67,12 @@ func New(app *usecases.App) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{app: app, templates: tpl, tidsregSession: newTidsregSessionStore()}, nil
+	return &Server{
+		app:            app,
+		templates:      tpl,
+		tidsregSession: newTidsregSessionStore(),
+		logger:         log.New(os.Stderr, "api ", log.LstdFlags),
+	}, nil
 }
 
 func (s *Server) Routes() http.Handler {
@@ -105,7 +114,88 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/collector/start", s.handleCollectorStart)
 	mux.HandleFunc("/collector/stop", s.handleCollectorStop)
 	mux.HandleFunc("/collector/status", s.handleCollectorStatus)
-	return mux
+	return s.requestLoggingMiddleware(s.recoverMiddleware(mux))
+}
+
+type loggingResponseWriter struct {
+	http.ResponseWriter
+	statusCode int
+	bodyBytes  []byte
+}
+
+func (w *loggingResponseWriter) WriteHeader(code int) {
+	w.statusCode = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *loggingResponseWriter) Write(p []byte) (int, error) {
+	if w.statusCode == 0 {
+		w.statusCode = http.StatusOK
+	}
+	const maxBodyLog = 512
+	if len(w.bodyBytes) < maxBodyLog {
+		remaining := maxBodyLog - len(w.bodyBytes)
+		if remaining > len(p) {
+			remaining = len(p)
+		}
+		w.bodyBytes = append(w.bodyBytes, p[:remaining]...)
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *loggingResponseWriter) status() int {
+	if w.statusCode == 0 {
+		return http.StatusOK
+	}
+	return w.statusCode
+}
+
+func (s *Server) requestLoggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		lrw := &loggingResponseWriter{ResponseWriter: w}
+		next.ServeHTTP(lrw, r)
+		duration := time.Since(start)
+		status := lrw.status()
+		if status >= 400 {
+			body := strings.TrimSpace(strings.ReplaceAll(string(lrw.bodyBytes), "\n", " "))
+			s.logf(
+				"request method=%s path=%s status=%d duration_ms=%d remote=%s ua=%q error_body=%q",
+				r.Method,
+				r.URL.RequestURI(),
+				status,
+				duration.Milliseconds(),
+				r.RemoteAddr,
+				r.UserAgent(),
+				body,
+			)
+			return
+		}
+		s.logf("request method=%s path=%s status=%d duration_ms=%d remote=%s", r.Method, r.URL.RequestURI(), status, duration.Milliseconds(), r.RemoteAddr)
+	})
+}
+
+func (s *Server) recoverMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				s.logf("panic method=%s path=%s err=%v", r.Method, r.URL.RequestURI(), rec)
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) logf(format string, args ...any) {
+	if s.logger != nil {
+		s.logger.Printf(format, args...)
+	}
+}
+
+func (s *Server) internalError(w http.ResponseWriter, r *http.Request, err error) {
+	s.logf("handler_error method=%s path=%s err=%v", r.Method, r.URL.RequestURI(), err)
+	http.Error(w, err.Error(), http.StatusInternalServerError)
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
@@ -314,10 +404,20 @@ func (s *Server) handleRulesDraftAddFromSelection(w http.ResponseWriter, r *http
 	}
 	in, err := parseRuleInput(r)
 	if err != nil {
+		s.logf("rules_add_from_selection invalid_rule_input err=%v", err)
 		http.Error(w, err.Error(), 400)
 		return
 	}
 	groups := parseSelectedGroups(r)
+	s.logf(
+		"rules_add_from_selection parsed selected_idx=%d groups=%d action_type=%s project_id=%q activity_id=%q sample=%q",
+		len(r.Form["selected_idx"]),
+		len(groups),
+		string(in.ActionType),
+		strings.TrimSpace(r.Form.Get("project_id")),
+		strings.TrimSpace(r.Form.Get("activity_id")),
+		summarizeGroups(groups, 3),
+	)
 	if len(groups) == 0 {
 		http.Error(w, "select at least one event group", 400)
 		return
@@ -326,7 +426,7 @@ func (s *Server) handleRulesDraftAddFromSelection(w http.ResponseWriter, r *http
 		Groups: groups,
 		Rule:   in,
 	}); err != nil {
-		http.Error(w, err.Error(), 500)
+		s.internalError(w, r, fmt.Errorf("add regex rule from selection failed: %w", err))
 		return
 	}
 	s.renderRulesEditor(w, r, "Regex rule staged from selected events")
@@ -657,6 +757,23 @@ func parseSelectedGroups(r *http.Request) []domain.GroupedEvent {
 		})
 	}
 	return out
+}
+
+func summarizeGroups(groups []domain.GroupedEvent, limit int) string {
+	if len(groups) == 0 {
+		return ""
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+	parts := make([]string, 0, limit)
+	for i, g := range groups {
+		if i >= limit {
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%s|%s", strings.TrimSpace(g.AppName), strings.TrimSpace(g.WindowTitle)))
+	}
+	return strings.Join(parts, "; ")
 }
 
 func suggestionQueryFromRequest(r *http.Request) domain.SuggestionQuery {

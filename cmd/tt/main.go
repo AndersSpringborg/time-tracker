@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 
@@ -75,6 +76,7 @@ func runServer(addr string, app *usecases.App) error {
 	if err != nil {
 		return err
 	}
+	log.Printf("api serve addr=%s", addr)
 	err = http.ListenAndServe(addr, srv.Routes())
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err

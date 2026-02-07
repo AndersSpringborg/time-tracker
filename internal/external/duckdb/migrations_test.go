@@ -51,6 +51,25 @@ func assertSimplifiedProjectSchema(t *testing.T, db *sql.DB) {
 	}
 }
 
+func assertRuleCompatibilitySchema(t *testing.T, db *sql.DB) {
+	t.Helper()
+
+	for _, col := range []string{"kind_id", "is_global", "kind_name"} {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('mapping_rules') WHERE name = ?`, col).Scan(&n); err != nil {
+			t.Fatalf("inspect mapping_rules.%s failed: %v", col, err)
+		}
+		if n != 1 {
+			t.Fatalf("expected mapping_rules.%s column after migration", col)
+		}
+	}
+
+	var kindsOK int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('kinds')`).Scan(&kindsOK); err != nil {
+		t.Fatalf("inspect kinds table failed: %v", err)
+	}
+}
+
 func TestMigrateHandlesLegacyKindsNewDependencyAtVersion9(t *testing.T) {
 	db, err := sql.Open("duckdb", ":memory:")
 	if err != nil {
@@ -70,6 +89,7 @@ func TestMigrateHandlesLegacyKindsNewDependencyAtVersion9(t *testing.T) {
 	}
 
 	assertSimplifiedProjectSchema(t, db)
+	assertRuleCompatibilitySchema(t, db)
 
 	var sourceColumnCount int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name = 'source'`).Scan(&sourceColumnCount); err != nil {
@@ -99,6 +119,7 @@ func TestMigrateHandlesLegacyKindsNewReferencingKinds(t *testing.T) {
 	}
 
 	assertSimplifiedProjectSchema(t, db)
+	assertRuleCompatibilitySchema(t, db)
 }
 
 func TestOpenMigratesLegacyVersion9DatabaseFromDisk(t *testing.T) {

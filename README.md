@@ -37,12 +37,20 @@ make test
 
 Includes:
 
+- Zig unit and DuckDB adapter tests (`zig build test`)
 - domain tests
 - usecase tests
 - duckdb integration tests
 - API route tests
 - CLI LLM-help tests
 - clean-architecture boundary tests
+- race detection and shuffled Go package order (`go test -race -shuffle=on -count=1`)
+
+Fast local loop:
+
+```bash
+make test-fast
+```
 
 ## CLI Commands
 

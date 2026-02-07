@@ -109,7 +109,7 @@ test "Migrator.getCurrentVersion returns highest applied version after run" {
 }
 
 // Test 7: simplified project/activity tables are created
-test "Migrator.run creates simplified project tables" {
+test "Migrator.run creates simplified project tables with legacy hierarchy compatibility" {
     const conn = try openInMemoryDb();
     var migrator = try Migrator.init(conn);
 
@@ -117,9 +117,12 @@ test "Migrator.run creates simplified project tables" {
 
     try std.testing.expect(tableExists(conn, "projects"));
     try std.testing.expect(tableExists(conn, "activities"));
-    try std.testing.expect(!tableExists(conn, "customers"));
-    try std.testing.expect(!tableExists(conn, "phases"));
-    try std.testing.expect(!tableExists(conn, "kinds"));
+    try std.testing.expect(tableExists(conn, "customers"));
+    try std.testing.expect(tableExists(conn, "phases"));
+    try std.testing.expect(!tableExists(conn, "kinds_new"));
+    try std.testing.expect(tableExists(conn, "kinds"));
+    try std.testing.expect(columnExists(conn, "projects", "title"));
+    try std.testing.expect(columnExists(conn, "activities", "title"));
 }
 
 // Test 8: mapping_rules table is created
@@ -131,6 +134,9 @@ test "Migrator.run creates mapping_rules table" {
 
     // Migration 4 creates mapping_rules table
     try std.testing.expect(tableExists(conn, "mapping_rules"));
+    try std.testing.expect(columnExists(conn, "mapping_rules", "kind_id"));
+    try std.testing.expect(columnExists(conn, "mapping_rules", "is_global"));
+    try std.testing.expect(columnExists(conn, "mapping_rules", "kind_name"));
 }
 
 // Test 9: event mapping columns are added
