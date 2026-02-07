@@ -23,9 +23,8 @@ func seedProjectActivity(t *testing.T, s *Store) {
 	queries := []string{
 		"INSERT INTO customers (customer_id, name) VALUES (1, 'internal')",
 		"INSERT INTO projects (project_id, customer_id, name, title, metadata) VALUES (10, 1, 'web-app', 'web-app', 'notes')",
-		"INSERT INTO phases (phase_id, project_id, name) VALUES (20, 10, 'build')",
-		"INSERT INTO activities (activity_id, phase_id, project_id, name, title) VALUES (100, 20, 10, 'development', 'development')",
-		"INSERT INTO activities (activity_id, phase_id, project_id, name, title) VALUES (101, 20, 10, 'meeting', 'meeting')",
+		"INSERT INTO activities (activity_id, project_id, name, title) VALUES (100, 10, 'development', 'development')",
+		"INSERT INTO activities (activity_id, project_id, name, title) VALUES (101, 10, 'meeting', 'meeting')",
 	}
 	for _, q := range queries {
 		if _, err := s.db.ExecContext(ctx, q); err != nil {
@@ -199,7 +198,7 @@ func TestUpsertImportedProjectCreatesAndUpdates(t *testing.T) {
 		Source:             "tidsreg",
 		ExternalCustomerID: 1,
 		ExternalProjectID:  10,
-		ExternalPhaseID:    100,
+		ExternalVariantKey: "1:10:100",
 		Title:              "A > B > C",
 		Metadata:           "meta1",
 	})
@@ -214,7 +213,7 @@ func TestUpsertImportedProjectCreatesAndUpdates(t *testing.T) {
 		Source:             "tidsreg",
 		ExternalCustomerID: 1,
 		ExternalProjectID:  10,
-		ExternalPhaseID:    100,
+		ExternalVariantKey: "1:10:100",
 		Title:              "A > B > C updated",
 		Metadata:           "meta2",
 	})
@@ -235,8 +234,8 @@ func TestSyncImportedActivitiesReconcilesRows(t *testing.T) {
 		Source:             "tidsreg",
 		ExternalCustomerID: 7,
 		ExternalProjectID:  8,
-		ExternalPhaseID:    9,
-		Title:              "Cust > Proj > Phase",
+		ExternalVariantKey: "7:8:9",
+		Title:              "Cust > Proj > Variant",
 		Metadata:           "meta",
 	})
 	if err != nil {

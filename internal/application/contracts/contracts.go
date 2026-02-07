@@ -237,11 +237,21 @@ type TidsregAuthenticateResponse struct {
 	Customers     []tidsregmodel.Customer
 }
 
-type TidsregBuildPreviewRequest struct {
+type TidsregBuildProjectsRequest struct {
 	SessionCookie       string
 	Mode                tidsregmodel.Mode
 	Customers           []tidsregmodel.Customer
 	SelectedCustomerIDs []int64
+}
+type TidsregBuildProjectsResponse struct {
+	Projects []tidsregmodel.Project
+}
+
+type TidsregBuildPreviewRequest struct {
+	SessionCookie      string
+	Mode               tidsregmodel.Mode
+	Projects           []tidsregmodel.Project
+	SelectedProjectIDs []int64
 }
 type TidsregBuildPreviewResponse struct {
 	Preview tidsregmodel.ImportPreview

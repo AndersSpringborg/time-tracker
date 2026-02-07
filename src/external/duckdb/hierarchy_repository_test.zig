@@ -54,7 +54,6 @@ test "DuckDbHierarchyRepository imports JSON hierarchy" {
 
     try std.testing.expectEqual(@as(u32, 1), stats.customers);
     try std.testing.expectEqual(@as(u32, 1), stats.projects);
-    try std.testing.expectEqual(@as(u32, 1), stats.phases);
     try std.testing.expectEqual(@as(u32, 1), stats.activities);
     try std.testing.expectEqual(@as(u32, 1), stats.kinds);
 }

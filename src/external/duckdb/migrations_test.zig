@@ -104,8 +104,8 @@ test "Migrator.getCurrentVersion returns highest applied version after run" {
     try migrator.run();
 
     const version = try migrator.getCurrentVersion();
-    // Should be 10 after running all migrations
-    try std.testing.expectEqual(@as(u32, 10), version);
+    // Should be 13 after running all migrations
+    try std.testing.expectEqual(@as(u32, 13), version);
 }
 
 // Test 7: simplified project/activity tables are created
@@ -118,11 +118,14 @@ test "Migrator.run creates simplified project tables with legacy hierarchy compa
     try std.testing.expect(tableExists(conn, "projects"));
     try std.testing.expect(tableExists(conn, "activities"));
     try std.testing.expect(tableExists(conn, "customers"));
-    try std.testing.expect(tableExists(conn, "phases"));
+    try std.testing.expect(!tableExists(conn, "phases"));
     try std.testing.expect(!tableExists(conn, "kinds_new"));
     try std.testing.expect(tableExists(conn, "kinds"));
     try std.testing.expect(columnExists(conn, "projects", "title"));
     try std.testing.expect(columnExists(conn, "activities", "title"));
+    try std.testing.expect(columnExists(conn, "projects", "external_variant_key"));
+    try std.testing.expect(columnExists(conn, "projects", "external_phase_id"));
+    try std.testing.expect(!columnExists(conn, "activities", "phase_id"));
 }
 
 // Test 8: mapping_rules table is created

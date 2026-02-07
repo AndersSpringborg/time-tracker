@@ -767,9 +767,9 @@ func (s *Store) UpsertImportedProject(ctx context.Context, in domain.ImportedPro
 	err := s.db.QueryRowContext(ctx, `
 SELECT project_id, title, metadata
 FROM projects
-WHERE source = ? AND external_customer_id = ? AND external_project_id = ? AND external_phase_id = ?
+WHERE source = ? AND external_variant_key = ?
 LIMIT 1
-`, in.Source, in.ExternalCustomerID, in.ExternalProjectID, in.ExternalPhaseID).Scan(&projectID, &title, &metadata)
+`, in.Source, in.ExternalVariantKey).Scan(&projectID, &title, &metadata)
 	if err != nil {
 		if err != sql.ErrNoRows {
 			return domain.ImportedProjectUpsertResult{}, err
@@ -780,9 +780,9 @@ LIMIT 1
 		}
 		res, err := s.db.ExecContext(ctx, `
 INSERT INTO projects (
-  project_id, customer_id, name, title, metadata, source, external_customer_id, external_project_id, external_phase_id
+  project_id, customer_id, name, title, metadata, source, external_customer_id, external_project_id, external_variant_key
 ) VALUES (?, 0, ?, ?, ?, ?, ?, ?, ?)
-`, nextID, in.Title, in.Title, in.Metadata, in.Source, in.ExternalCustomerID, in.ExternalProjectID, in.ExternalPhaseID)
+`, nextID, in.Title, in.Title, in.Metadata, in.Source, in.ExternalCustomerID, in.ExternalProjectID, in.ExternalVariantKey)
 		if err != nil {
 			return domain.ImportedProjectUpsertResult{}, err
 		}
@@ -848,8 +848,8 @@ LIMIT 1
 
 		if _, err := s.db.ExecContext(ctx, `
 INSERT INTO activities (
-  activity_id, phase_id, project_id, name, title, source, external_activity_id
-) VALUES (?, 0, ?, ?, ?, ?, ?)
+  activity_id, project_id, name, title, source, external_activity_id
+) VALUES (?, ?, ?, ?, ?, ?)
 `, nextID, projectID, activity.Title, activity.Title, source, activity.ExternalActivityID); err != nil {
 			return result, err
 		}

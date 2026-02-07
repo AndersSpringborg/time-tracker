@@ -22,6 +22,7 @@ type tidsregSessionData struct {
 	Cookie    string
 	Mode      tidsregmodel.Mode
 	Customers []tidsregmodel.Customer
+	Projects  []tidsregmodel.Project
 	Preview   *tidsregmodel.ImportPreview
 	ExpiresAt time.Time
 }
@@ -153,6 +154,47 @@ func (s *Server) handleTidsregSession(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "partials/tidsreg_customers", pageData{TidsregCustomers: customers, TidsregMode: strconv.Itoa(int(mode))})
 }
 
+func (s *Server) handleTidsregProjects(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.NotFound(w, r)
+		return
+	}
+	if s.app.Tidsreg == nil {
+		http.Error(w, "tidsreg usecase is not configured", 500)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", 400)
+		return
+	}
+	sessionID, session, ok := s.requireTidsregSession(r)
+	if !ok {
+		s.render(w, "partials/tidsreg_login", pageData{TidsregError: "Session expired. Please log in again.", TidsregMode: "0"})
+		return
+	}
+
+	selectedCustomers, err := parseInt64Values(r.Form["customer_ids"])
+	if err != nil {
+		s.render(w, "partials/tidsreg_customers", pageData{TidsregCustomers: session.Customers, TidsregError: "Invalid customer selection", TidsregMode: strconv.Itoa(int(session.Mode))})
+		return
+	}
+	projectsRes, err := s.app.Tidsreg.BuildProjects(r.Context(), contracts.TidsregBuildProjectsRequest{
+		SessionCookie:       session.Cookie,
+		Mode:                session.Mode,
+		Customers:           session.Customers,
+		SelectedCustomerIDs: selectedCustomers,
+	})
+	if err != nil {
+		s.render(w, "partials/tidsreg_customers", pageData{TidsregCustomers: session.Customers, TidsregError: err.Error(), TidsregMode: strconv.Itoa(int(session.Mode))})
+		return
+	}
+
+	session.Projects = projectsRes.Projects
+	session.Preview = nil
+	s.tidsregSession.update(sessionID, session)
+	s.render(w, "partials/tidsreg_projects", pageData{TidsregProjects: projectsRes.Projects, TidsregMode: strconv.Itoa(int(session.Mode))})
+}
+
 func (s *Server) handleTidsregSessionClear(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.NotFound(w, r)
@@ -184,20 +226,20 @@ func (s *Server) handleTidsregPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	selectedCustomers, err := parseInt64Values(r.Form["customer_ids"])
+	selectedProjects, err := parseInt64Values(r.Form["project_ids"])
 	if err != nil {
-		s.render(w, "partials/tidsreg_customers", pageData{TidsregCustomers: session.Customers, TidsregError: "Invalid customer selection", TidsregMode: strconv.Itoa(int(session.Mode))})
+		s.render(w, "partials/tidsreg_projects", pageData{TidsregProjects: session.Projects, TidsregError: "Invalid project selection", TidsregMode: strconv.Itoa(int(session.Mode))})
 		return
 	}
 
 	previewRes, err := s.app.Tidsreg.BuildPreview(r.Context(), contracts.TidsregBuildPreviewRequest{
-		SessionCookie:       session.Cookie,
-		Mode:                session.Mode,
-		Customers:           session.Customers,
-		SelectedCustomerIDs: selectedCustomers,
+		SessionCookie:      session.Cookie,
+		Mode:               session.Mode,
+		Projects:           session.Projects,
+		SelectedProjectIDs: selectedProjects,
 	})
 	if err != nil {
-		s.render(w, "partials/tidsreg_customers", pageData{TidsregCustomers: session.Customers, TidsregError: err.Error(), TidsregMode: strconv.Itoa(int(session.Mode))})
+		s.render(w, "partials/tidsreg_projects", pageData{TidsregProjects: session.Projects, TidsregError: err.Error(), TidsregMode: strconv.Itoa(int(session.Mode))})
 		return
 	}
 	preview := previewRes.Preview
@@ -237,7 +279,7 @@ func (s *Server) handleTidsregImport(w http.ResponseWriter, r *http.Request) {
 
 	s.tidsregSession.delete(sessionID)
 	http.SetCookie(w, &http.Cookie{Name: tidsregSessionCookieName, Value: "", Path: "/", Expires: time.Unix(0, 0), MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
-	summary := "Imported " + strconv.Itoa(result.ImportedCandidates) + " project phases"
+	summary := "Imported " + strconv.Itoa(result.ImportedCandidates) + " project variants"
 	s.render(w, "partials/tidsreg_result", pageData{TidsregResult: result, TidsregSummary: summary, TidsregMode: "0"})
 }
 

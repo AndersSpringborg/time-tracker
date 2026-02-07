@@ -49,6 +49,38 @@ func assertSimplifiedProjectSchema(t *testing.T, db *sql.DB) {
 	if titleColumnCount != 1 {
 		t.Fatalf("expected projects.title column after migration")
 	}
+
+	var variantColumnCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name = 'external_variant_key'`).Scan(&variantColumnCount); err != nil {
+		t.Fatalf("inspect projects external_variant_key column failed: %v", err)
+	}
+	if variantColumnCount != 1 {
+		t.Fatalf("expected projects.external_variant_key column after migration")
+	}
+
+	var externalPhaseColumnCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name = 'external_phase_id'`).Scan(&externalPhaseColumnCount); err != nil {
+		t.Fatalf("inspect projects external_phase_id column failed: %v", err)
+	}
+	if externalPhaseColumnCount != 1 {
+		t.Fatalf("expected projects.external_phase_id column to remain for compatibility")
+	}
+
+	var activityPhaseColumnCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('activities') WHERE name = 'phase_id'`).Scan(&activityPhaseColumnCount); err != nil {
+		t.Fatalf("inspect activities.phase_id failed: %v", err)
+	}
+	if activityPhaseColumnCount != 0 {
+		t.Fatalf("expected activities.phase_id to be removed after migration")
+	}
+
+	var phasesTableCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'phases'`).Scan(&phasesTableCount); err != nil {
+		t.Fatalf("inspect phases table failed: %v", err)
+	}
+	if phasesTableCount != 0 {
+		t.Fatalf("expected phases table to be removed after migration")
+	}
 }
 
 func assertRuleCompatibilitySchema(t *testing.T, db *sql.DB) {
@@ -157,8 +189,8 @@ func TestOpenMigratesLegacyVersion9DatabaseFromDisk(t *testing.T) {
 	if err := store.db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&version); err != nil {
 		t.Fatalf("query schema_migrations failed: %v", err)
 	}
-	if version != 12 {
-		t.Fatalf("expected schema version 12, got %d", version)
+	if version != 13 {
+		t.Fatalf("expected schema version 13, got %d", version)
 	}
 }
 

@@ -79,11 +79,21 @@ func TestTidsregImportUsecaseBuildsPreview(t *testing.T) {
 	}
 	uc := NewTidsregImportUsecase(gateway, &fakeTidsregImportRepo{})
 
-	previewRes, err := uc.BuildPreview(context.Background(), contracts.TidsregBuildPreviewRequest{
+	projectsRes, err := uc.BuildProjects(context.Background(), contracts.TidsregBuildProjectsRequest{
 		SessionCookie:       "session=ok",
 		Mode:                tidsregmodel.ModeTime,
 		Customers:           gateway.customers,
 		SelectedCustomerIDs: []int64{1},
+	})
+	if err != nil {
+		t.Fatalf("BuildProjects failed: %v", err)
+	}
+
+	previewRes, err := uc.BuildPreview(context.Background(), contracts.TidsregBuildPreviewRequest{
+		SessionCookie:      "session=ok",
+		Mode:               tidsregmodel.ModeTime,
+		Projects:           projectsRes.Projects,
+		SelectedProjectIDs: []int64{10},
 	})
 	if err != nil {
 		t.Fatalf("BuildPreview failed: %v", err)
@@ -97,6 +107,18 @@ func TestTidsregImportUsecaseBuildsPreview(t *testing.T) {
 	}
 	if len(preview.Candidates[0].Activities) != 1 {
 		t.Fatalf("expected one activity")
+	}
+}
+
+func TestTidsregImportUsecaseBuildProjectsValidation(t *testing.T) {
+	uc := NewTidsregImportUsecase(&fakeTidsregGateway{}, &fakeTidsregImportRepo{})
+	if _, err := uc.BuildProjects(context.Background(), contracts.TidsregBuildProjectsRequest{
+		SessionCookie:       "session=ok",
+		Mode:                tidsregmodel.ModeTime,
+		Customers:           []tidsregmodel.Customer{{CustomerID: 1, Name: "Trifork"}},
+		SelectedCustomerIDs: []int64{},
+	}); err == nil {
+		t.Fatalf("expected validation error for empty customer selection")
 	}
 }
 
@@ -135,6 +157,9 @@ func TestTidsregImportUsecaseCommitPersistsSelectedCandidates(t *testing.T) {
 	}
 	if len(repo.upserts) != 1 {
 		t.Fatalf("expected one upsert call")
+	}
+	if repo.upserts[0].ExternalVariantKey != "1:10:100" {
+		t.Fatalf("expected variant key 1:10:100, got %q", repo.upserts[0].ExternalVariantKey)
 	}
 }
 

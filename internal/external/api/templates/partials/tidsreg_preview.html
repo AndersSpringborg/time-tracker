@@ -1,9 +1,9 @@
 {{define "partials/tidsreg_preview"}}
 <div class="stack">
-  <h3>Confirm Import</h3>
+  <h3>Step 3: Confirm Import</h3>
   {{if .TidsregError}}<p class="flash">{{.TidsregError}}</p>{{end}}
   {{if .TidsregPreview.Candidates}}
-    <form hx-post="/integrations/tidsreg/import" hx-target="#tidsreg-flow" hx-swap="innerHTML">
+    <form hx-post="/integrations/tidsreg/import" hx-target="#tidsreg-flow" hx-swap="innerHTML" hx-indicator="#tidsreg-loader">
       <table>
         <thead><tr><th>Import</th><th>Customer</th><th>Project</th><th>Phase</th><th>Target Project</th><th>Activities</th></tr></thead>
         <tbody>
@@ -20,13 +20,14 @@
         </tbody>
       </table>
       <div class="actions">
+        <button type="button" data-toggle-checkboxes data-checkbox-name="candidate_keys">Check/Uncheck All</button>
         <button type="submit">Import Selected</button>
-        <button type="button" hx-post="/integrations/tidsreg/session/clear" hx-target="#tidsreg-flow" hx-swap="innerHTML">Cancel</button>
+        <button type="button" hx-post="/integrations/tidsreg/session/clear" hx-target="#tidsreg-flow" hx-swap="innerHTML" hx-indicator="#tidsreg-loader">Cancel</button>
       </div>
     </form>
   {{else}}
-    <p class="muted">No project phases found for selected customers.</p>
-    <button type="button" hx-post="/integrations/tidsreg/session/clear" hx-target="#tidsreg-flow" hx-swap="innerHTML">Back to Login</button>
+    <p class="muted">No project variants found for selected projects.</p>
+    <button type="button" hx-post="/integrations/tidsreg/session/clear" hx-target="#tidsreg-flow" hx-swap="innerHTML" hx-indicator="#tidsreg-loader">Back to Login</button>
   {{end}}
 </div>
 {{end}}

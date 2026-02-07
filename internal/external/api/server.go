@@ -57,6 +57,7 @@ type pageData struct {
 	DraftGroups       []domain.GroupedEvent
 	RuleSummary       string
 	TidsregCustomers  []tidsregmodel.Customer
+	TidsregProjects   []tidsregmodel.Project
 	TidsregPreview    tidsregmodel.ImportPreview
 	TidsregResult     tidsregmodel.ImportResult
 	TidsregSummary    string
@@ -111,6 +112,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/partials/tidsreg/login", s.handleTidsregLoginPartial)
 	mux.HandleFunc("/integrations/tidsreg/session", s.handleTidsregSession)
 	mux.HandleFunc("/integrations/tidsreg/session/clear", s.handleTidsregSessionClear)
+	mux.HandleFunc("/integrations/tidsreg/projects", s.handleTidsregProjects)
 	mux.HandleFunc("/integrations/tidsreg/preview", s.handleTidsregPreview)
 	mux.HandleFunc("/integrations/tidsreg/import", s.handleTidsregImport)
 	mux.HandleFunc("/settings", s.handleSettings)

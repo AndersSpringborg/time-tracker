@@ -12,6 +12,6 @@
       <tr><th>Activities Deleted</th><td>{{.TidsregResult.ActivitiesDeleted}}</td></tr>
     </tbody>
   </table>
-  <button type="button" hx-get="/partials/tidsreg/login" hx-target="#tidsreg-flow" hx-swap="innerHTML">Import Again</button>
+  <button type="button" hx-get="/partials/tidsreg/login" hx-target="#tidsreg-flow" hx-swap="innerHTML" hx-indicator="#tidsreg-loader">Import Again</button>
 </div>
 {{end}}

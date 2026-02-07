@@ -1,9 +1,9 @@
 {{define "partials/tidsreg_customers"}}
 <div class="stack">
-  <h3>Select Customers</h3>
+  <h3>Step 1: Select Customers</h3>
   {{if .TidsregError}}<p class="flash">{{.TidsregError}}</p>{{end}}
   {{if .TidsregCustomers}}
-    <form hx-post="/integrations/tidsreg/preview" hx-target="#tidsreg-flow" hx-swap="innerHTML">
+    <form hx-post="/integrations/tidsreg/projects" hx-target="#tidsreg-flow" hx-swap="innerHTML" hx-indicator="#tidsreg-loader">
       <table>
         <thead><tr><th>Include</th><th>Customer</th></tr></thead>
         <tbody>
@@ -16,13 +16,14 @@
         </tbody>
       </table>
       <div class="actions">
-        <button type="submit">Fetch Projects</button>
-        <button type="button" hx-post="/integrations/tidsreg/session/clear" hx-target="#tidsreg-flow" hx-swap="innerHTML">Start Over</button>
+        <button type="button" data-toggle-checkboxes data-checkbox-name="customer_ids">Check/Uncheck All</button>
+        <button type="submit">Load Step 2: Projects</button>
+        <button type="button" hx-post="/integrations/tidsreg/session/clear" hx-target="#tidsreg-flow" hx-swap="innerHTML" hx-indicator="#tidsreg-loader">Start Over</button>
       </div>
     </form>
   {{else}}
     <p class="muted">No customers returned by tidsreg for this account.</p>
-    <button type="button" hx-post="/integrations/tidsreg/session/clear" hx-target="#tidsreg-flow" hx-swap="innerHTML">Back to Login</button>
+    <button type="button" hx-post="/integrations/tidsreg/session/clear" hx-target="#tidsreg-flow" hx-swap="innerHTML" hx-indicator="#tidsreg-loader">Back to Login</button>
   {{end}}
 </div>
 {{end}}
