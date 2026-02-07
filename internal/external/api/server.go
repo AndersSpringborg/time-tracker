@@ -73,7 +73,10 @@ type ruleTargetOption struct {
 }
 
 func New(app *usecases.App) (*Server, error) {
-	funcs := template.FuncMap{"formatDuration": domain.FormatDuration}
+	funcs := template.FuncMap{
+		"formatDuration":   domain.FormatDuration,
+		"formatActivities": formatActivities,
+	}
 	tpl, err := template.New("root").Funcs(funcs).ParseFS(assets, "templates/*.html", "templates/partials/*.html")
 	if err != nil {
 		return nil, err
@@ -979,4 +982,22 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func formatActivities(items []tidsregmodel.Activity) string {
+	if len(items) == 0 {
+		return "0"
+	}
+	names := make([]string, 0, len(items))
+	for _, item := range items {
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			continue
+		}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return "0"
+	}
+	return strings.Join(names, ", ")
 }

@@ -110,6 +110,63 @@ func TestTidsregImportUsecaseBuildsPreview(t *testing.T) {
 	}
 }
 
+func TestTidsregImportUsecaseBuildPreviewFallsBackToProjectActivities(t *testing.T) {
+	gateway := &fakeTidsregGateway{
+		customers: []tidsregmodel.Customer{{CustomerID: 1, Name: "Trifork"}},
+		projects: map[int64][]tidsregmodel.Project{
+			1: {{ProjectID: 10, CustomerID: 1, Name: "Portal"}},
+		},
+		phases: map[int64][]tidsregmodel.Phase{
+			10: {
+				{PhaseID: 100, ProjectID: 10, Name: "Phase A"},
+				{PhaseID: 200, ProjectID: 10, Name: "Phase B"},
+			},
+		},
+		activities: map[int64][]tidsregmodel.Activity{
+			100: nil,
+			200: nil,
+			10: {
+				{ActivityID: 1, PhaseID: 10, Name: "Development"},
+				{ActivityID: 2, PhaseID: 10, Name: "Meeting"},
+				{ActivityID: 3, PhaseID: 10, Name: "Design"},
+				{ActivityID: 4, PhaseID: 10, Name: "Test & implementation"},
+				{ActivityID: 5, PhaseID: 10, Name: "Transport"},
+			},
+		},
+	}
+	uc := NewTidsregImportUsecase(gateway, &fakeTidsregImportRepo{})
+
+	projectsRes, err := uc.BuildProjects(context.Background(), contracts.TidsregBuildProjectsRequest{
+		SessionCookie:       "session=ok",
+		Mode:                tidsregmodel.ModeTime,
+		Customers:           gateway.customers,
+		SelectedCustomerIDs: []int64{1},
+	})
+	if err != nil {
+		t.Fatalf("BuildProjects failed: %v", err)
+	}
+
+	previewRes, err := uc.BuildPreview(context.Background(), contracts.TidsregBuildPreviewRequest{
+		SessionCookie:      "session=ok",
+		Mode:               tidsregmodel.ModeTime,
+		Projects:           projectsRes.Projects,
+		SelectedProjectIDs: []int64{10},
+	})
+	if err != nil {
+		t.Fatalf("BuildPreview failed: %v", err)
+	}
+	preview := previewRes.Preview
+	if len(preview.Candidates) != 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(preview.Candidates))
+	}
+	if len(preview.Candidates[0].Activities) != 5 {
+		t.Fatalf("expected fallback activities on first candidate, got %d", len(preview.Candidates[0].Activities))
+	}
+	if preview.Candidates[0].Activities[0].Name != "Design" {
+		t.Fatalf("expected normalized/sorted activity names, got %+v", preview.Candidates[0].Activities)
+	}
+}
+
 func TestTidsregImportUsecaseBuildProjectsValidation(t *testing.T) {
 	uc := NewTidsregImportUsecase(&fakeTidsregGateway{}, &fakeTidsregImportRepo{})
 	if _, err := uc.BuildProjects(context.Background(), contracts.TidsregBuildProjectsRequest{

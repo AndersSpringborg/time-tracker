@@ -190,6 +190,7 @@ func (u *TidsregImportUsecase) BuildPreview(ctx context.Context, req contracts.T
 			return strings.ToLower(phases[i].Name) < strings.ToLower(phases[j].Name)
 		})
 
+		projectCandidates := make([]tidsregmodel.ImportCandidate, 0, len(phases))
 		for _, phase := range phases {
 			activities, err := u.gateway.ListActivities(ctx, req.SessionCookie, phase.PhaseID, req.Mode)
 			if err != nil {
@@ -207,8 +208,49 @@ func (u *TidsregImportUsecase) BuildPreview(ctx context.Context, req contracts.T
 				TargetTitle:  tidsregmodel.BuildProjectTitle(project.CustomerName, projectName, phase.Name),
 				Activities:   activities,
 			}
-			preview.Candidates = append(preview.Candidates, candidate)
+			projectCandidates = append(projectCandidates, candidate)
 		}
+
+		if len(projectCandidates) == 0 {
+			activities, err := u.gateway.ListActivities(ctx, req.SessionCookie, project.ProjectID, req.Mode)
+			if err != nil {
+				return contracts.TidsregBuildPreviewResponse{}, err
+			}
+			activities = tidsregmodel.NormalizeActivities(activities)
+			if len(activities) > 0 {
+				projectCandidates = append(projectCandidates, tidsregmodel.ImportCandidate{
+					Key:          tidsregmodel.BuildImportKey(project.CustomerID, project.ProjectID, project.ProjectID),
+					CustomerID:   project.CustomerID,
+					CustomerName: project.CustomerName,
+					ProjectID:    project.ProjectID,
+					ProjectName:  projectName,
+					PhaseID:      project.ProjectID,
+					PhaseName:    "General",
+					TargetTitle:  tidsregmodel.BuildProjectTitle(project.CustomerName, projectName, "General"),
+					Activities:   activities,
+				})
+			}
+		}
+
+		hasActivities := false
+		for _, candidate := range projectCandidates {
+			if len(candidate.Activities) > 0 {
+				hasActivities = true
+				break
+			}
+		}
+		if !hasActivities && len(projectCandidates) > 0 {
+			fallbackActivities, err := u.gateway.ListActivities(ctx, req.SessionCookie, project.ProjectID, req.Mode)
+			if err != nil {
+				return contracts.TidsregBuildPreviewResponse{}, err
+			}
+			fallbackActivities = tidsregmodel.NormalizeActivities(fallbackActivities)
+			if len(fallbackActivities) > 0 {
+				projectCandidates[0].Activities = fallbackActivities
+			}
+		}
+
+		preview.Candidates = append(preview.Candidates, projectCandidates...)
 	}
 
 	sort.Slice(preview.Candidates, func(i, j int) bool {

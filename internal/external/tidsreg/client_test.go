@@ -72,3 +72,29 @@ func TestListCustomersUsesModeAndCookie(t *testing.T) {
 		t.Fatalf("unexpected customers: %+v", customers)
 	}
 }
+
+func TestListActivitiesParsesAlternateFields(t *testing.T) {
+	c := newTestClient(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/Find/SelectActivities" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if r.URL.Query().Get("phaseId") != "42" {
+			t.Fatalf("unexpected phase id: %s", r.URL.Query().Get("phaseId"))
+		}
+		return response(http.StatusOK, map[string][]string{"Content-Type": {"application/json"}}, `[{"Id":"1000","Title":"Development"},{"activityId":1001,"name":"Meeting"}]`), nil
+	})
+
+	activities, err := c.ListActivities(context.Background(), "session=abc", 42, tidsregmodel.ModeTime)
+	if err != nil {
+		t.Fatalf("ListActivities failed: %v", err)
+	}
+	if len(activities) != 2 {
+		t.Fatalf("expected 2 activities, got %d", len(activities))
+	}
+	if activities[0].ActivityID != 1000 || activities[0].Name != "Development" {
+		t.Fatalf("unexpected first activity: %+v", activities[0])
+	}
+	if activities[1].ActivityID != 1001 || activities[1].Name != "Meeting" {
+		t.Fatalf("unexpected second activity: %+v", activities[1])
+	}
+}

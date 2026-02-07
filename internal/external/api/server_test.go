@@ -362,6 +362,38 @@ func TestTidsregProjectsTemplateRendersProjectSelection(t *testing.T) {
 	}
 }
 
+func TestTidsregPreviewTemplateRendersActivityNames(t *testing.T) {
+	s, err := New(&usecases.App{})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	rr := httptest.NewRecorder()
+	s.render(rr, "partials/tidsreg_preview", pageData{
+		TidsregPreview: tidsregmodel.ImportPreview{
+			Candidates: []tidsregmodel.ImportCandidate{{
+				Key:          "1:10:100",
+				CustomerName: "Trifork",
+				ProjectName:  "Portal",
+				PhaseName:    "Build",
+				TargetTitle:  "Trifork > Portal > Build",
+				Activities: []tidsregmodel.Activity{
+					{ActivityID: 1, Name: "Development"},
+					{ActivityID: 2, Name: "Meeting"},
+					{ActivityID: 3, Name: "Design"},
+				},
+			}},
+		},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "Development, Meeting, Design") {
+		t.Fatalf("expected activity names in preview body, got %s", body)
+	}
+}
+
 func TestRequestLoggingMiddlewareLogsMethodPathAndStatus(t *testing.T) {
 	s, err := New(&usecases.App{})
 	if err != nil {

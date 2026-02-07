@@ -118,19 +118,63 @@ func (c *Client) ListPhases(ctx context.Context, sessionCookie string, projectID
 }
 
 func (c *Client) ListActivities(ctx context.Context, sessionCookie string, phaseID int64, mode tidsregmodel.Mode) ([]tidsregmodel.Activity, error) {
-	var payload []struct {
-		ActivityID int64  `json:"ActivityId"`
-		Name       string `json:"Name"`
-	}
+	var payload []map[string]any
 	path := fmt.Sprintf("/Find/SelectActivities?mode=%d&phaseId=%d", mode, phaseID)
 	if err := c.getJSON(ctx, sessionCookie, path, &payload); err != nil {
 		return nil, err
 	}
 	out := make([]tidsregmodel.Activity, 0, len(payload))
 	for _, item := range payload {
-		out = append(out, tidsregmodel.Activity{ActivityID: item.ActivityID, PhaseID: phaseID, Name: item.Name})
+		out = append(out, tidsregmodel.Activity{
+			ActivityID: parseID(item, "ActivityId", "activityId", "Id", "id"),
+			PhaseID:    phaseID,
+			Name:       parseString(item, "Name", "name", "Title", "title", "Text", "text", "Label", "label"),
+		})
 	}
 	return out, nil
+}
+
+func parseID(values map[string]any, keys ...string) int64 {
+	for _, key := range keys {
+		value, ok := values[key]
+		if !ok {
+			continue
+		}
+		switch typed := value.(type) {
+		case float64:
+			return int64(typed)
+		case int64:
+			return typed
+		case int:
+			return int64(typed)
+		case json.Number:
+			id, err := typed.Int64()
+			if err == nil {
+				return id
+			}
+		case string:
+			id, err := strconv.ParseInt(strings.TrimSpace(typed), 10, 64)
+			if err == nil {
+				return id
+			}
+		}
+	}
+	return 0
+}
+
+func parseString(values map[string]any, keys ...string) string {
+	for _, key := range keys {
+		value, ok := values[key]
+		if !ok {
+			continue
+		}
+		if str, ok := value.(string); ok {
+			if strings.TrimSpace(str) != "" {
+				return str
+			}
+		}
+	}
+	return ""
 }
 
 func (c *Client) getJSON(ctx context.Context, sessionCookie, path string, out any) error {
