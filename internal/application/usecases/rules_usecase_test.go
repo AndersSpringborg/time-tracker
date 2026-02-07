@@ -195,15 +195,60 @@ func TestRulesUsecaseReAddDefaultRulesSkipsMissingProject(t *testing.T) {
 		t.Fatalf("preview failed: %v", err)
 	}
 	preview := previewRes.Preview
-	// one default skipped, two should remain.
+	// one default skipped, all other defaults should remain.
 	added := 0
 	for _, row := range preview.Rows {
 		if row.Change == domain.RuleDraftAdded {
 			added++
 		}
 	}
-	if added != 2 {
-		t.Fatalf("expected 2 added default rows, got %d", added)
+	expected := len(domain.DefaultRules()) - 1
+	if added != expected {
+		t.Fatalf("expected %d added default rows, got %d", expected, added)
+	}
+}
+
+func TestRulesUsecaseReAddDefaultRulesIsIdempotent(t *testing.T) {
+	projectID := int64(10)
+	activityID := int64(100)
+	repo := &fakeRulesRepo{
+		projectByTitle: map[string]*int64{
+			"project a": &projectID,
+		},
+		activityByKey: map[string]*int64{
+			fmt.Sprintf("%d::%s", projectID, "development"): &activityID,
+		},
+	}
+	uc := NewRulesUsecase(repo)
+
+	if _, err := uc.ReAddDefaultRulesToDraft(context.Background(), contracts.RulesDraftReAddDefaultsRequest{}); err != nil {
+		t.Fatalf("first re-add defaults failed: %v", err)
+	}
+	if _, err := uc.ReAddDefaultRulesToDraft(context.Background(), contracts.RulesDraftReAddDefaultsRequest{}); err != nil {
+		t.Fatalf("second re-add defaults failed: %v", err)
+	}
+
+	previewRes, err := uc.DraftPreview(context.Background(), contracts.RulesDraftPreviewRequest{})
+	if err != nil {
+		t.Fatalf("preview failed: %v", err)
+	}
+	preview := previewRes.Preview
+	added := 0
+	keys := map[string]struct{}{}
+	for _, row := range preview.Rows {
+		if row.Change != domain.RuleDraftAdded {
+			continue
+		}
+		added++
+		keys[row.Rule.RuleKey] = struct{}{}
+	}
+
+	expected := len(domain.DefaultRules())
+	if added != expected {
+		t.Fatalf("expected %d added default rows, got %d", expected, added)
+	}
+	if len(keys) != expected {
+		t.Fatalf("expected %d unique default rule keys, got %d", expected, len(keys))
 	}
 }
 

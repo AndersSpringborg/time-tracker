@@ -250,6 +250,40 @@ func DefaultBrowserRules() []RuleInput {
 	}
 }
 
+func DefaultFollowContextAppRules() []RuleInput {
+	return []RuleInput{
+		defaultFollowContextRule("default.app.follow_current_context.spotify", "Spotify", 90),
+		defaultFollowContextRule("default.app.follow_current_context.calendar", "Calendar", 90),
+		defaultFollowContextRule("default.app.follow_current_context.slack", "Slack", 90),
+		defaultFollowContextRule("default.app.follow_current_context.discord", "Discord", 90),
+		defaultFollowContextRule("default.app.follow_current_context.messages", "Messages", 90),
+		defaultFollowContextRule("default.app.follow_current_context.mail", "Mail", 90),
+		defaultFollowContextRule("default.app.follow_current_context.outlook", "Outlook", 90),
+		defaultFollowContextRule("default.app.follow_current_context.notes", "Notes", 90),
+		defaultFollowContextRule("default.app.follow_current_context.obsidian", "Obsidian", 90),
+		defaultFollowContextRule("default.app.follow_current_context.linear", "Linear", 90),
+		defaultFollowContextRule("default.app.follow_current_context.notion", "Notion", 90),
+	}
+}
+
+func DefaultRules() []RuleInput {
+	defaults := make([]RuleInput, 0, len(DefaultBrowserRules())+len(DefaultFollowContextAppRules()))
+	defaults = append(defaults, DefaultBrowserRules()...)
+	defaults = append(defaults, DefaultFollowContextAppRules()...)
+	return defaults
+}
+
+func defaultFollowContextRule(ruleKey, appName string, priority int) RuleInput {
+	return RuleInput{
+		RuleKey:      ruleKey,
+		Source:       RuleSourceDefault,
+		Priority:     priority,
+		AppPattern:   "(?i)^" + regexp.QuoteMeta(appName) + "$",
+		TitlePattern: matchAnyRegex,
+		ActionType:   RuleActionFollowCurrentContext,
+	}
+}
+
 func BuildRegexRuleFromGroups(groups []GroupedEvent) (string, string, error) {
 	if len(groups) == 0 {
 		return "", "", fmt.Errorf("at least one group is required")

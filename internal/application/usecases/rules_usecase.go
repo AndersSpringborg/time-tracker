@@ -110,7 +110,7 @@ func (u *RulesUsecase) ReAddDefaultRulesToDraft(ctx context.Context, _ contracts
 		return contracts.RulesDraftReAddDefaultsResponse{}, err
 	}
 
-	defaults := domain.DefaultBrowserRules()
+	defaults := domain.DefaultRules()
 	warnings := make([]string, 0)
 	for _, def := range defaults {
 		def = domain.NormalizeRuleInput(def)

@@ -195,6 +195,50 @@ func TestDefaultBrowserRulesIncludesExpectedKeys(t *testing.T) {
 	}
 }
 
+func TestDefaultFollowContextAppRulesIncludesExpectedKeys(t *testing.T) {
+	defaults := DefaultFollowContextAppRules()
+	if len(defaults) != 11 {
+		t.Fatalf("expected 11 app default rules, got %d", len(defaults))
+	}
+
+	if defaults[0].RuleKey != "default.app.follow_current_context.spotify" {
+		t.Fatalf("unexpected first key: %s", defaults[0].RuleKey)
+	}
+	if defaults[1].RuleKey != "default.app.follow_current_context.calendar" {
+		t.Fatalf("unexpected second key: %s", defaults[1].RuleKey)
+	}
+	if defaults[len(defaults)-1].RuleKey != "default.app.follow_current_context.notion" {
+		t.Fatalf("unexpected last key: %s", defaults[len(defaults)-1].RuleKey)
+	}
+
+	calendar := defaults[1]
+	if calendar.AppPattern != "(?i)^Calendar$" {
+		t.Fatalf("unexpected calendar app pattern: %s", calendar.AppPattern)
+	}
+	if calendar.TitlePattern != matchAnyRegex {
+		t.Fatalf("unexpected calendar title pattern: %s", calendar.TitlePattern)
+	}
+	if calendar.ActionType != RuleActionFollowCurrentContext {
+		t.Fatalf("unexpected calendar action: %s", calendar.ActionType)
+	}
+	if calendar.Priority != 90 {
+		t.Fatalf("unexpected calendar priority: %d", calendar.Priority)
+	}
+}
+
+func TestDefaultRulesCombinesBrowserAndAppDefaults(t *testing.T) {
+	defaults := DefaultRules()
+	if len(defaults) != len(DefaultBrowserRules())+len(DefaultFollowContextAppRules()) {
+		t.Fatalf("unexpected total defaults count: %d", len(defaults))
+	}
+	if defaults[0].RuleKey != "default.browser.project_a_development" {
+		t.Fatalf("expected browser defaults to come first")
+	}
+	if defaults[len(defaults)-1].RuleKey != "default.app.follow_current_context.notion" {
+		t.Fatalf("unexpected last combined key: %s", defaults[len(defaults)-1].RuleKey)
+	}
+}
+
 func TestBuildRegexRuleFromGroups(t *testing.T) {
 	appPattern, titlePattern, err := BuildRegexRuleFromGroups([]GroupedEvent{
 		{AppName: "Firefox", WindowTitle: "Project Name A - Browser"},
