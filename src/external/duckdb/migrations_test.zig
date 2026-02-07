@@ -104,8 +104,8 @@ test "Migrator.getCurrentVersion returns highest applied version after run" {
     try migrator.run();
 
     const version = try migrator.getCurrentVersion();
-    // Should be 8 after running all migrations
-    try std.testing.expectEqual(@as(u32, 8), version);
+    // Should be 9 after running all migrations
+    try std.testing.expectEqual(@as(u32, 9), version);
 }
 
 // Test 7: hierarchy tables are created
@@ -159,4 +159,14 @@ test "Migrator.run creates project_assignments table" {
     try std.testing.expect(columnExists(conn, "project_assignments", "project_id"));
     try std.testing.expect(columnExists(conn, "project_assignments", "started_at"));
     try std.testing.expect(columnExists(conn, "project_assignments", "ended_at"));
+}
+
+// Test 11: follow_previous column is added to mapping_rules
+test "Migrator.run adds follow_previous to mapping_rules" {
+    const conn = try openInMemoryDb();
+    var migrator = try Migrator.init(conn);
+
+    try migrator.run();
+
+    try std.testing.expect(columnExists(conn, "mapping_rules", "follow_previous"));
 }

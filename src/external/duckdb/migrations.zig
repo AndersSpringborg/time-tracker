@@ -130,6 +130,13 @@ pub const migrations = [_]Migration{
         \\ALTER TABLE kinds_new RENAME TO kinds
         ,
     },
+    .{
+        .version = 9,
+        .name = "add_follow_previous_rules",
+        .up =
+        \\ALTER TABLE mapping_rules ADD COLUMN IF NOT EXISTS follow_previous BOOLEAN DEFAULT false
+        ,
+    },
 };
 
 pub const Migrator = struct {

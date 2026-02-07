@@ -2,7 +2,6 @@ const std = @import("std");
 const rule = @import("rule.zig");
 const Rule = rule.Rule;
 const RuleInput = rule.RuleInput;
-const Match = rule.Match;
 
 test "Rule.matches with exact app pattern" {
     const r = Rule{
@@ -14,6 +13,7 @@ test "Rule.matches with exact app pattern" {
         .priority = 0,
         .is_global = false,
         .kind_name = null,
+        .follow_previous = false,
     };
 
     try std.testing.expect(r.matches("Slack", "any title"));
@@ -31,6 +31,7 @@ test "Rule.matches with wildcard app pattern" {
         .priority = 0,
         .is_global = false,
         .kind_name = null,
+        .follow_previous = false,
     };
 
     try std.testing.expect(r.matches("Slack", "any title"));
@@ -49,6 +50,7 @@ test "Rule.matches with title pattern" {
         .priority = 0,
         .is_global = false,
         .kind_name = null,
+        .follow_previous = false,
     };
 
     try std.testing.expect(r.matches("Firefox", "Pull Request - GitHub"));
@@ -67,6 +69,7 @@ test "Rule.matches with null patterns matches anything" {
         .priority = 0,
         .is_global = false,
         .kind_name = null,
+        .follow_previous = false,
     };
 
     try std.testing.expect(r.matches("Any App", "Any Title"));
@@ -84,6 +87,7 @@ test "findFirstMatch returns first matching rule" {
             .priority = 10,
             .is_global = false,
             .kind_name = null,
+            .follow_previous = false,
         },
         .{
             .id = 2,
@@ -94,6 +98,7 @@ test "findFirstMatch returns first matching rule" {
             .priority = 0,
             .is_global = false,
             .kind_name = null,
+            .follow_previous = false,
         },
     };
 
@@ -101,8 +106,9 @@ test "findFirstMatch returns first matching rule" {
     const match = rule.findFirstMatch(&rules, "Slack", "Some channel");
     try std.testing.expect(match != null);
     try std.testing.expectEqual(@as(i64, 1), match.?.rule_id);
-    try std.testing.expectEqual(@as(i64, 10), match.?.activity_id);
-    try std.testing.expectEqual(@as(i64, 100), match.?.kind_id);
+    try std.testing.expectEqual(rule.MatchAction.map_kind, match.?.action);
+    try std.testing.expectEqual(@as(?i64, 10), match.?.activity_id);
+    try std.testing.expectEqual(@as(?i64, 100), match.?.kind_id);
 }
 
 test "findFirstMatch returns null when no match" {
@@ -116,6 +122,7 @@ test "findFirstMatch returns null when no match" {
             .priority = 10,
             .is_global = false,
             .kind_name = null,
+            .follow_previous = false,
         },
     };
 
@@ -134,6 +141,7 @@ test "findFirstMatch skips global rules" {
             .priority = 10,
             .is_global = true, // Global rule - should be skipped
             .kind_name = "Communication",
+            .follow_previous = false,
         },
         .{
             .id = 2,
@@ -144,6 +152,7 @@ test "findFirstMatch skips global rules" {
             .priority = 5,
             .is_global = false,
             .kind_name = null,
+            .follow_previous = false,
         },
     };
 
@@ -164,6 +173,7 @@ test "RuleInput can be created with defaults" {
     try std.testing.expectEqual(@as(i32, 0), input.priority);
     try std.testing.expect(!input.is_global);
     try std.testing.expect(input.kind_name == null);
+    try std.testing.expect(!input.follow_previous);
 }
 
 test "RuleInput can be created as global" {
@@ -179,4 +189,26 @@ test "RuleInput can be created as global" {
     try std.testing.expect(input.is_global);
     try std.testing.expect(input.kind_name != null);
     try std.testing.expectEqualStrings("Development", input.kind_name.?);
+}
+
+test "findFirstMatch returns follow_previous action" {
+    const rules = [_]Rule{
+        .{
+            .id = 1,
+            .app_pattern = "Slack",
+            .title_pattern = null,
+            .activity_id = 0,
+            .kind_id = 0,
+            .priority = 10,
+            .is_global = false,
+            .kind_name = null,
+            .follow_previous = true,
+        },
+    };
+
+    const match = rule.findFirstMatch(&rules, "Slack", "any");
+    try std.testing.expect(match != null);
+    try std.testing.expectEqual(rule.MatchAction.follow_previous, match.?.action);
+    try std.testing.expectEqual(@as(?i64, null), match.?.activity_id);
+    try std.testing.expectEqual(@as(?i64, null), match.?.kind_id);
 }

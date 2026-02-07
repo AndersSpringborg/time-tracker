@@ -11,6 +11,7 @@ pub const RuleInput = struct {
     priority: i32 = 0,
     is_global: bool = false,
     kind_name: ?[]const u8 = null,
+    follow_previous: bool = false,
 };
 
 /// A mapping rule that maps app/title patterns to an activity/kind.
@@ -24,6 +25,7 @@ pub const Rule = struct {
     priority: i32,
     is_global: bool,
     kind_name: ?[]const u8,
+    follow_previous: bool,
 
     /// Check if this rule matches the given app name and window title.
     pub fn matches(self: Rule, app_name: []const u8, window_title: []const u8) bool {
@@ -45,8 +47,14 @@ pub const Rule = struct {
 /// Contains the IDs needed to map an event to an activity/kind.
 pub const Match = struct {
     rule_id: i64,
-    activity_id: i64,
-    kind_id: i64,
+    action: MatchAction,
+    activity_id: ?i64,
+    kind_id: ?i64,
+};
+
+pub const MatchAction = enum {
+    map_kind,
+    follow_previous,
 };
 
 /// Find the first matching rule from a list of rules.
@@ -60,8 +68,18 @@ pub fn findFirstMatch(rules: []const Rule, app_name: []const u8, window_title: [
             if (rule.is_global) {
                 continue;
             }
+            if (rule.follow_previous) {
+                return Match{
+                    .rule_id = rule.id,
+                    .action = .follow_previous,
+                    .activity_id = null,
+                    .kind_id = null,
+                };
+            }
+
             return Match{
                 .rule_id = rule.id,
+                .action = .map_kind,
                 .activity_id = rule.activity_id,
                 .kind_id = rule.kind_id,
             };

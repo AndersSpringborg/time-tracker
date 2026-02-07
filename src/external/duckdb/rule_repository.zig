@@ -33,6 +33,15 @@ pub const DuckDbRuleRepository = struct {
         // Rules are sorted by priority (DESC)
         for (fetched_rules) |rule| {
             if (rule.matches(app_name, window_title)) {
+                if (rule.follow_previous) {
+                    return Match{
+                        .rule_id = rule.id,
+                        .action = .follow_previous,
+                        .activity_id = null,
+                        .kind_id = null,
+                    };
+                }
+
                 if (rule.is_global) {
                     // Global rule: resolve kind_name in current project
                     if (current_project_id) |project_id| {
@@ -41,6 +50,7 @@ pub const DuckDbRuleRepository = struct {
                                 if (self.getActivityIdForKind(resolved_kind_id)) |resolved_activity_id| {
                                     return Match{
                                         .rule_id = rule.id,
+                                        .action = .map_kind,
                                         .activity_id = resolved_activity_id,
                                         .kind_id = resolved_kind_id,
                                     };
@@ -54,6 +64,7 @@ pub const DuckDbRuleRepository = struct {
                     // Regular rule: use stored kind_id
                     return Match{
                         .rule_id = rule.id,
+                        .action = .map_kind,
                         .activity_id = rule.activity_id,
                         .kind_id = rule.kind_id,
                     };
@@ -66,7 +77,7 @@ pub const DuckDbRuleRepository = struct {
 
     pub fn addRule(self: *DuckDbRuleRepository, rule: RuleInput) RuleRepositoryError!void {
         var stmt: c.duckdb_prepared_statement = undefined;
-        const sql = "INSERT INTO mapping_rules (app_pattern, title_pattern, activity_id, kind_id, priority, is_global, kind_name) VALUES (?, ?, ?, ?, ?, ?, ?)";
+        const sql = "INSERT INTO mapping_rules (app_pattern, title_pattern, activity_id, kind_id, priority, is_global, kind_name, follow_previous) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
 
         if (c.duckdb_prepare(self.conn, sql, &stmt) == c.DuckDBError) {
             return error.InsertFailed;
@@ -95,6 +106,7 @@ pub const DuckDbRuleRepository = struct {
         } else {
             _ = c.duckdb_bind_null(stmt, 7);
         }
+        _ = c.duckdb_bind_boolean(stmt, 8, rule.follow_previous);
 
         var result: c.duckdb_result = undefined;
         if (c.duckdb_execute_prepared(stmt, &result) == c.DuckDBError) {
@@ -119,7 +131,7 @@ pub const DuckDbRuleRepository = struct {
     /// List all rules sorted by priority. Caller must call freeRules when done.
     pub fn listRules(self: *DuckDbRuleRepository) RuleRepositoryError![]Rule {
         var result: c.duckdb_result = undefined;
-        const query = "SELECT id, app_pattern, title_pattern, activity_id, kind_id, priority, is_global, kind_name FROM mapping_rules ORDER BY priority DESC";
+        const query = "SELECT id, app_pattern, title_pattern, activity_id, kind_id, priority, is_global, kind_name, follow_previous FROM mapping_rules ORDER BY priority DESC";
 
         if (c.duckdb_query(self.conn, query, &result) == c.DuckDBError) {
             return error.QueryFailed;
@@ -144,6 +156,7 @@ pub const DuckDbRuleRepository = struct {
                 .priority = @intCast(c.duckdb_value_int32(&result, 5, row)),
                 .is_global = c.duckdb_value_boolean(&result, 6, row),
                 .kind_name = self.copyStringValue(&result, 7, row) catch return error.OutOfMemory,
+                .follow_previous = c.duckdb_value_boolean(&result, 8, row),
             };
         }
 

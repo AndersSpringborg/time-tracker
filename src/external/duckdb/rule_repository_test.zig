@@ -67,8 +67,9 @@ test "DuckDbRuleRepository finds matching rule" {
 
     const match = try repo.findMatch("Safari", "Google Search");
     try std.testing.expect(match != null);
-    try std.testing.expectEqual(@as(i64, 1), match.?.activity_id);
-    try std.testing.expectEqual(@as(i64, 10), match.?.kind_id);
+    try std.testing.expectEqual(domain_rule.MatchAction.map_kind, match.?.action);
+    try std.testing.expectEqual(@as(?i64, 1), match.?.activity_id);
+    try std.testing.expectEqual(@as(?i64, 10), match.?.kind_id);
 }
 
 test "DuckDbRuleRepository returns null when no match" {
@@ -110,8 +111,8 @@ test "DuckDbRuleRepository matches by priority" {
 
     const match = try repo.findMatch("Code", "main.zig");
     try std.testing.expect(match != null);
-    try std.testing.expectEqual(@as(i64, 2), match.?.activity_id);
-    try std.testing.expectEqual(@as(i64, 20), match.?.kind_id);
+    try std.testing.expectEqual(@as(?i64, 2), match.?.activity_id);
+    try std.testing.expectEqual(@as(?i64, 20), match.?.kind_id);
 }
 
 test "DuckDbRuleRepository matches glob patterns" {
@@ -127,7 +128,7 @@ test "DuckDbRuleRepository matches glob patterns" {
 
     const match1 = try repo.findMatch("Code", "main.zig");
     try std.testing.expect(match1 != null);
-    try std.testing.expectEqual(@as(i64, 50), match1.?.kind_id);
+    try std.testing.expectEqual(@as(?i64, 50), match1.?.kind_id);
 
     const match2 = try repo.findMatch("Code", "main.rs");
     try std.testing.expect(match2 == null);
@@ -150,7 +151,7 @@ test "DuckDbRuleRepository works through interface" {
 
     const match = try repo.findMatch("Terminal", "zsh");
     try std.testing.expect(match != null);
-    try std.testing.expectEqual(@as(i64, 30), match.?.kind_id);
+    try std.testing.expectEqual(@as(?i64, 30), match.?.kind_id);
 }
 
 test "DuckDbRuleRepository skips global rules without context" {
@@ -180,6 +181,26 @@ test "DuckDbRuleRepository skips global rules without context" {
     // findMatch should skip the global rule and match the non-global one
     const match = try repo.findMatch("Code", "main.zig");
     try std.testing.expect(match != null);
-    try std.testing.expectEqual(@as(i64, 2), match.?.activity_id);
-    try std.testing.expectEqual(@as(i64, 20), match.?.kind_id);
+    try std.testing.expectEqual(@as(?i64, 2), match.?.activity_id);
+    try std.testing.expectEqual(@as(?i64, 20), match.?.kind_id);
+}
+
+test "DuckDbRuleRepository returns follow_previous action" {
+    const conn = try openInMemoryDb();
+    var repo = DuckDbRuleRepository.init(conn, std.testing.allocator);
+
+    try repo.addRule(.{
+        .app_pattern = "Slack",
+        .title_pattern = null,
+        .activity_id = 0,
+        .kind_id = 0,
+        .priority = 50,
+        .follow_previous = true,
+    });
+
+    const match = try repo.findMatch("Slack", "channel");
+    try std.testing.expect(match != null);
+    try std.testing.expectEqual(domain_rule.MatchAction.follow_previous, match.?.action);
+    try std.testing.expectEqual(@as(?i64, null), match.?.activity_id);
+    try std.testing.expectEqual(@as(?i64, null), match.?.kind_id);
 }
