@@ -22,6 +22,8 @@ type RulesRepository interface {
 	CurrentProjectID(ctx context.Context) (*int64, error)
 	FindProjectIDByTitle(ctx context.Context, title string) (*int64, error)
 	FindActivityIDByTitle(ctx context.Context, projectID int64, title string) (*int64, error)
+	ListAllProjects(ctx context.Context) ([]domain.Project, error)
+	ListActivitiesByProject(ctx context.Context, projectID int64) ([]domain.Activity, error)
 }
 
 type ReportsRepository interface {

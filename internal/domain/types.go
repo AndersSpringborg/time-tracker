@@ -81,6 +81,21 @@ type RuleTarget struct {
 	ActivityID int64
 }
 
+type RuleAssignmentTarget struct {
+	ProjectTitle  string
+	ActivityTitle string
+}
+
+func (t RuleAssignmentTarget) DisplayPath() string {
+	if t.ProjectTitle == "" {
+		return t.ActivityTitle
+	}
+	if t.ActivityTitle == "" {
+		return t.ProjectTitle
+	}
+	return t.ProjectTitle + " > " + t.ActivityTitle
+}
+
 type RuleTargetResolver interface {
 	FindProjectIDByTitle(title string) (*int64, error)
 	FindActivityIDByTitle(projectID int64, activityTitle string) (*int64, error)

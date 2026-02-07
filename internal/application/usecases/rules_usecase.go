@@ -73,6 +73,14 @@ func (u *RulesUsecase) AddRuleToDraft(ctx context.Context, req contracts.RulesDr
 	return contracts.RulesDraftAddResponse{}, nil
 }
 
+func (u *RulesUsecase) AddRuleToDraftFromForm(ctx context.Context, req contracts.RulesDraftAddFromFormRequest) (contracts.RulesDraftAddResponse, error) {
+	in, err := u.resolveDraftRuleInput(ctx, req.Rule, req.TargetProjectName, req.TargetActivity)
+	if err != nil {
+		return contracts.RulesDraftAddResponse{}, err
+	}
+	return u.AddRuleToDraft(ctx, contracts.RulesDraftAddRequest{Rule: in})
+}
+
 func (u *RulesUsecase) AddRegexRuleFromGroupsToDraft(ctx context.Context, req contracts.RulesDraftAddFromGroupsRequest) (contracts.RulesDraftAddFromGroupsResponse, error) {
 	appPattern, titlePattern, err := domain.BuildRegexRuleFromGroups(req.Groups)
 	if err != nil {
@@ -83,6 +91,17 @@ func (u *RulesUsecase) AddRegexRuleFromGroupsToDraft(ctx context.Context, req co
 	in.TitlePattern = titlePattern
 	_, err = u.AddRuleToDraft(ctx, contracts.RulesDraftAddRequest{Rule: in})
 	return contracts.RulesDraftAddFromGroupsResponse{}, err
+}
+
+func (u *RulesUsecase) AddRegexRuleFromGroupsToDraftFromForm(ctx context.Context, req contracts.RulesDraftAddFromGroupsFormRequest) (contracts.RulesDraftAddFromGroupsResponse, error) {
+	in, err := u.resolveDraftRuleInput(ctx, req.Rule, req.TargetProjectName, req.TargetActivityName)
+	if err != nil {
+		return contracts.RulesDraftAddFromGroupsResponse{}, err
+	}
+	return u.AddRegexRuleFromGroupsToDraft(ctx, contracts.RulesDraftAddFromGroupsRequest{
+		Groups: req.Groups,
+		Rule:   in,
+	})
 }
 
 func (u *RulesUsecase) DeleteRuleFromDraft(ctx context.Context, req contracts.RulesDraftDeleteRequest) (contracts.RulesDraftDeleteResponse, error) {
@@ -338,6 +357,27 @@ func (u *RulesUsecase) ApplyRules(ctx context.Context, req contracts.RulesApplyR
 	return contracts.RulesApplyResponse{Result: res}, nil
 }
 
+func (u *RulesUsecase) ListAssignmentTargets(ctx context.Context, _ contracts.RulesAssignmentTargetsRequest) (contracts.RulesAssignmentTargetsResponse, error) {
+	projects, err := u.repo.ListAllProjects(ctx)
+	if err != nil {
+		return contracts.RulesAssignmentTargetsResponse{}, err
+	}
+	targets := make([]domain.RuleAssignmentTarget, 0)
+	for _, project := range projects {
+		activities, err := u.repo.ListActivitiesByProject(ctx, project.ProjectID)
+		if err != nil {
+			return contracts.RulesAssignmentTargetsResponse{}, err
+		}
+		for _, activity := range activities {
+			targets = append(targets, domain.RuleAssignmentTarget{
+				ProjectTitle:  project.Title,
+				ActivityTitle: activity.Title,
+			})
+		}
+	}
+	return contracts.RulesAssignmentTargetsResponse{Targets: targets}, nil
+}
+
 type ruleResolver struct {
 	ctx  context.Context
 	repo ports.RulesRepository
@@ -499,6 +539,39 @@ func cloneStrings(values []string) []string {
 	out := make([]string, len(values))
 	copy(out, values)
 	return out
+}
+
+func (u *RulesUsecase) resolveDraftRuleInput(ctx context.Context, in domain.RuleInput, targetProjectTitle, targetActivityName string) (domain.RuleInput, error) {
+	in = domain.NormalizeRuleInput(in)
+	if in.ActionType != domain.RuleActionAssignExplicit {
+		return in, nil
+	}
+	if in.ProjectID != nil && in.ActivityID != nil {
+		return in, nil
+	}
+
+	projectTitle := strings.TrimSpace(targetProjectTitle)
+	activityName := strings.TrimSpace(targetActivityName)
+	if projectTitle == "" || activityName == "" {
+		return domain.RuleInput{}, fmt.Errorf("select a project and activity target")
+	}
+	projectID, err := u.repo.FindProjectIDByTitle(ctx, projectTitle)
+	if err != nil {
+		return domain.RuleInput{}, err
+	}
+	if projectID == nil {
+		return domain.RuleInput{}, fmt.Errorf("project %q not found", projectTitle)
+	}
+	activityID, err := u.repo.FindActivityIDByTitle(ctx, *projectID, activityName)
+	if err != nil {
+		return domain.RuleInput{}, err
+	}
+	if activityID == nil {
+		return domain.RuleInput{}, fmt.Errorf("activity %q not found in project %q", activityName, projectTitle)
+	}
+	in.ProjectID = cloneInt64Ptr(projectID)
+	in.ActivityID = cloneInt64Ptr(activityID)
+	return in, nil
 }
 
 func validateRuleInput(in domain.RuleInput) error {

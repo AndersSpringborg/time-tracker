@@ -189,6 +189,24 @@ func TestFindProjectAndActivityByTitle(t *testing.T) {
 	}
 }
 
+func TestListActivitiesByProject(t *testing.T) {
+	s := openTestStore(t)
+	defer s.Close()
+	seedProjectActivity(t, s)
+	ctx := context.Background()
+
+	activities, err := s.ListActivitiesByProject(ctx, 10)
+	if err != nil {
+		t.Fatalf("list activities by project failed: %v", err)
+	}
+	if len(activities) != 2 {
+		t.Fatalf("expected 2 activities, got %d", len(activities))
+	}
+	if activities[0].Title != "development" || activities[1].Title != "meeting" {
+		t.Fatalf("unexpected activity order: %+v", activities)
+	}
+}
+
 func TestUpsertImportedProjectCreatesAndUpdates(t *testing.T) {
 	s := openTestStore(t)
 	defer s.Close()

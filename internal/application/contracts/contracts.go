@@ -27,11 +27,24 @@ type RulesDraftAddRequest struct {
 }
 type RulesDraftAddResponse struct{}
 
+type RulesDraftAddFromFormRequest struct {
+	Rule              domain.RuleInput
+	TargetProjectName string
+	TargetActivity    string
+}
+
 type RulesDraftAddFromGroupsRequest struct {
 	Groups []domain.GroupedEvent
 	Rule   domain.RuleInput
 }
 type RulesDraftAddFromGroupsResponse struct{}
+
+type RulesDraftAddFromGroupsFormRequest struct {
+	Groups             []domain.GroupedEvent
+	Rule               domain.RuleInput
+	TargetProjectName  string
+	TargetActivityName string
+}
 
 type RulesDraftDeleteRequest struct {
 	RuleID int64
@@ -97,6 +110,11 @@ type RulesApplyRequest struct {
 }
 type RulesApplyResponse struct {
 	Result domain.ApplyRulesResult
+}
+
+type RulesAssignmentTargetsRequest struct{}
+type RulesAssignmentTargetsResponse struct {
+	Targets []domain.RuleAssignmentTarget
 }
 
 type ReportsDashboardRequest struct{}

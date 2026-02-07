@@ -26,6 +26,8 @@ type fakeRulesRepo struct {
 	currentProjectID *int64
 	projectByTitle   map[string]*int64
 	activityByKey    map[string]*int64
+	projects         []domain.Project
+	activities       map[int64][]domain.Activity
 }
 
 func (f *fakeRulesRepo) ListRules(context.Context) ([]domain.Rule, error) { return f.rules, nil }
@@ -77,6 +79,12 @@ func (f *fakeRulesRepo) FindProjectIDByTitle(_ context.Context, title string) (*
 }
 func (f *fakeRulesRepo) FindActivityIDByTitle(_ context.Context, projectID int64, title string) (*int64, error) {
 	return f.activityByKey[fmt.Sprintf("%d::%s", projectID, strings.ToLower(strings.TrimSpace(title)))], nil
+}
+func (f *fakeRulesRepo) ListAllProjects(context.Context) ([]domain.Project, error) {
+	return f.projects, nil
+}
+func (f *fakeRulesRepo) ListActivitiesByProject(_ context.Context, projectID int64) ([]domain.Activity, error) {
+	return f.activities[projectID], nil
 }
 
 func TestRulesUsecaseAddRuleNormalizesDefaults(t *testing.T) {
@@ -335,5 +343,91 @@ func TestRulesUsecaseApplyRulesUsesDomainEngine(t *testing.T) {
 	}
 	if repo.applied[0].ProjectID != 10 || repo.applied[0].ActivityID != 100 {
 		t.Fatalf("unexpected mapping target")
+	}
+}
+
+func TestRulesUsecaseAddRuleToDraftFromFormResolvesProjectAndActivityTitles(t *testing.T) {
+	projectID := int64(10)
+	activityID := int64(101)
+	repo := &fakeRulesRepo{
+		projectByTitle: map[string]*int64{"project a": &projectID},
+		activityByKey: map[string]*int64{
+			fmt.Sprintf("%d::%s", projectID, "meeting"): &activityID,
+		},
+	}
+	uc := NewRulesUsecase(repo)
+
+	_, err := uc.AddRuleToDraftFromForm(context.Background(), contracts.RulesDraftAddFromFormRequest{
+		Rule: domain.RuleInput{
+			ActionType:   domain.RuleActionAssignExplicit,
+			Priority:     180,
+			AppPattern:   "(?i)^Chrome$",
+			TitlePattern: "(?i)^.*teams.*$",
+		},
+		TargetProjectName: "project a",
+		TargetActivity:    "meeting",
+	})
+	if err != nil {
+		t.Fatalf("add draft from form failed: %v", err)
+	}
+
+	previewRes, err := uc.DraftPreview(context.Background(), contracts.RulesDraftPreviewRequest{})
+	if err != nil {
+		t.Fatalf("preview failed: %v", err)
+	}
+	if len(previewRes.Preview.Rows) != 1 {
+		t.Fatalf("expected one draft row, got %d", len(previewRes.Preview.Rows))
+	}
+	rule := previewRes.Preview.Rows[0].Rule
+	if rule.ProjectID == nil || *rule.ProjectID != projectID {
+		t.Fatalf("expected project id %d in staged rule, got %+v", projectID, rule.ProjectID)
+	}
+	if rule.ActivityID == nil || *rule.ActivityID != activityID {
+		t.Fatalf("expected activity id %d in staged rule, got %+v", activityID, rule.ActivityID)
+	}
+}
+
+func TestRulesUsecaseAddRuleToDraftFromFormRequiresTargetForExplicitAction(t *testing.T) {
+	uc := NewRulesUsecase(&fakeRulesRepo{})
+	_, err := uc.AddRuleToDraftFromForm(context.Background(), contracts.RulesDraftAddFromFormRequest{
+		Rule: domain.RuleInput{
+			ActionType: domain.RuleActionAssignExplicit,
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "select a project and activity target") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRulesUsecaseListAssignmentTargets(t *testing.T) {
+	repo := &fakeRulesRepo{
+		projects: []domain.Project{
+			{ProjectID: 10, Title: "project a"},
+			{ProjectID: 20, Title: "project b"},
+		},
+		activities: map[int64][]domain.Activity{
+			10: {
+				{ActivityID: 100, ProjectID: 10, Title: "development"},
+				{ActivityID: 101, ProjectID: 10, Title: "meeting"},
+			},
+			20: {
+				{ActivityID: 200, ProjectID: 20, Title: "planning"},
+			},
+		},
+	}
+	uc := NewRulesUsecase(repo)
+
+	res, err := uc.ListAssignmentTargets(context.Background(), contracts.RulesAssignmentTargetsRequest{})
+	if err != nil {
+		t.Fatalf("list assignment targets failed: %v", err)
+	}
+	if len(res.Targets) != 3 {
+		t.Fatalf("expected 3 targets, got %d", len(res.Targets))
+	}
+	if res.Targets[0].DisplayPath() != "project a > development" {
+		t.Fatalf("unexpected first target: %+v", res.Targets[0])
 	}
 }

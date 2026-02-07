@@ -638,6 +638,29 @@ ORDER BY title
 	return out, rows.Err()
 }
 
+func (s *Store) ListActivitiesByProject(ctx context.Context, projectID int64) ([]domain.Activity, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT activity_id, project_id, title
+FROM activities
+WHERE project_id = ?
+ORDER BY title ASC, activity_id ASC
+`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]domain.Activity, 0)
+	for rows.Next() {
+		var activity domain.Activity
+		if err := rows.Scan(&activity.ActivityID, &activity.ProjectID, &activity.Title); err != nil {
+			return nil, err
+		}
+		out = append(out, activity)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) ActivateProject(ctx context.Context, projectID int64) error {
 	var count int64
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM project_assignments WHERE project_id = ? AND ended_at IS NULL`, projectID).Scan(&count); err != nil {
