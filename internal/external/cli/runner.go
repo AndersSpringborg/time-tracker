@@ -92,7 +92,8 @@ func (r *Runner) Run(ctx context.Context, args []string, stdout, stderr io.Write
 		r.printAccessibilityHint(stdout)
 		if workerLogHasAccessibilityError() {
 			fmt.Fprintln(stdout, "collector stderr: /tmp/time-tracker-worker.err.log (Accessibility permission still denied)")
-			fmt.Fprintln(stdout, "collector recovery: remove/re-add worker in Accessibility and restart collector")
+			fmt.Fprintln(stdout, "collector quick-fix: remove and re-add the worker binary in Accessibility, then run `./tracker start`")
+			r.printAccessibilityTroubleshootingGuide(stdout)
 		}
 		return 0
 	case "serve":
@@ -807,6 +808,25 @@ func (r *Runner) printAccessibilityHint(out io.Writer) {
 	fmt.Fprintln(out, "accessibility: grant permission to the worker binary in System Settings -> Privacy & Security -> Accessibility")
 	fmt.Fprintf(out, "accessibility-worker: %s\n", workerPath)
 	fmt.Fprintln(out, "accessibility-note: keep the worker running; tracking starts automatically after permission is granted")
+}
+
+func (r *Runner) printAccessibilityTroubleshootingGuide(out io.Writer) {
+	workerPath := strings.TrimSpace(r.WorkerPath)
+	if workerPath == "" {
+		workerPath = "~/.local/bin/tt-worker"
+	}
+
+	fmt.Fprintln(out, "accessibility-troubleshooting:")
+	fmt.Fprintln(out, "  quick-fix: remove and re-add the worker binary in Accessibility, then run `./tracker start`")
+	fmt.Fprintln(out, "  1) verify tccd decision for current worker pid:")
+	fmt.Fprintln(out, "     ./tracker status")
+	fmt.Fprintln(out, "     log show --style compact --last 5m --predicate 'process == \"tccd\" AND eventMessage CONTAINS \"sender_pid=<PID>\"'")
+	fmt.Fprintln(out, "  2) if log shows AUTHREQ_RESULT ... authValue=0 for tt-worker, permission is denied despite toggle")
+	fmt.Fprintln(out, "  3) fix sequence:")
+	fmt.Fprintln(out, "     ./tracker stop")
+	fmt.Fprintf(out, "     remove and re-add %s in Accessibility settings\n", workerPath)
+	fmt.Fprintln(out, "     ./tracker start")
+	fmt.Fprintln(out, "  4) avoid running an older tracker binary that overwrites the worker after permission is granted")
 }
 
 var workerErrLogPath = "/tmp/time-tracker-worker.err.log"
