@@ -57,7 +57,7 @@ func (s *Service) Install(context.Context) error {
 	}
 
 	_ = s.bootout()
-	if err := s.bootstrap(plistPath); err != nil {
+	if err := s.bootstrapWithRetry(plistPath, 12, 100*time.Millisecond); err != nil {
 		return err
 	}
 	if err := s.waitUntilLoaded(2 * time.Second); err != nil {
@@ -154,6 +154,25 @@ func (s *Service) bootstrap(plistPath string) error {
 		return fmt.Errorf("launchctl bootstrap failed: %w: %s", err, msg)
 	}
 	return nil
+}
+
+func (s *Service) bootstrapWithRetry(plistPath string, attempts int, delay time.Duration) error {
+	if attempts < 1 {
+		attempts = 1
+	}
+
+	var lastErr error
+	for range attempts {
+		lastErr = s.bootstrap(plistPath)
+		if lastErr == nil {
+			return nil
+		}
+		if !strings.Contains(lastErr.Error(), "Input/output error") {
+			return lastErr
+		}
+		time.Sleep(delay)
+	}
+	return lastErr
 }
 
 func (s *Service) bootout() error {
