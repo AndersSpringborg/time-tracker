@@ -210,22 +210,31 @@ func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.
 		priority := fs.Int("priority", 100, "priority")
 		appPattern := fs.String("app-pattern", "*", "app glob pattern")
 		titlePattern := fs.String("title-pattern", "*", "title glob pattern")
+		projectID := fs.Int64("project-id", 0, "project id")
 		activityID := fs.Int64("activity-id", 0, "activity id")
-		kindID := fs.Int64("kind-id", 0, "kind id")
 		followPrevious := fs.Bool("follow-previous", false, "follow current project mapping")
-		isGlobal := fs.Bool("global", false, "global kind-name rule")
-		kindName := fs.String("kind-name", "", "kind name for global rules")
 		if err := fs.Parse(args[1:]); err != nil {
 			return 2
 		}
-		var aid, kid *int64
+		var pid, aid *int64
+		if *projectID > 0 {
+			pid = projectID
+		}
 		if *activityID > 0 {
 			aid = activityID
 		}
-		if *kindID > 0 {
-			kid = kindID
+		if !*followPrevious && (pid == nil || aid == nil) {
+			fmt.Fprintln(stderr, "project-id and activity-id are required unless --follow-previous is set")
+			return 2
 		}
-		id, err := r.App.Rules.AddRule(ctx, domain.RuleInput{Priority: *priority, AppPattern: *appPattern, TitlePattern: *titlePattern, ActivityID: aid, KindID: kid, FollowPrevious: *followPrevious, IsGlobal: *isGlobal, KindName: *kindName})
+		id, err := r.App.Rules.AddRule(ctx, domain.RuleInput{
+			Priority:       *priority,
+			AppPattern:     *appPattern,
+			TitlePattern:   *titlePattern,
+			ProjectID:      pid,
+			ActivityID:     aid,
+			FollowPrevious: *followPrevious,
+		})
 		if err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
@@ -286,21 +295,30 @@ func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.
 		fs.SetOutput(stderr)
 		appPattern := fs.String("app-pattern", "", "app pattern")
 		titlePattern := fs.String("title-pattern", "", "title pattern")
+		projectID := fs.Int64("project-id", 0, "project id")
 		activityID := fs.Int64("activity-id", 0, "activity id")
-		kindID := fs.Int64("kind-id", 0, "kind id")
 		applyNow := fs.Bool("apply-now", true, "apply immediately")
 		if err := fs.Parse(args[1:]); err != nil {
 			return 2
 		}
-		if *appPattern == "" || *activityID == 0 || *kindID == 0 {
-			fmt.Fprintln(stderr, "app-pattern, activity-id and kind-id are required")
+		if *appPattern == "" || *projectID == 0 || *activityID == 0 {
+			fmt.Fprintln(stderr, "app-pattern, project-id and activity-id are required")
 			return 2
 		}
 		var tp *string
 		if strings.TrimSpace(*titlePattern) != "" {
 			tp = titlePattern
 		}
-		res, err := r.App.Rules.AcceptSuggestion(ctx, domain.ApplySuggestionInput{Suggestion: domain.RuleSuggestion{SuggestionType: domain.SuggestionTypeAppOnly, AppPattern: *appPattern, TitlePattern: tp, ActivityID: *activityID, KindID: *kindID}, ApplyNow: *applyNow})
+		res, err := r.App.Rules.AcceptSuggestion(ctx, domain.ApplySuggestionInput{
+			Suggestion: domain.RuleSuggestion{
+				SuggestionType: domain.SuggestionTypeAppOnly,
+				AppPattern:     *appPattern,
+				TitlePattern:   tp,
+				ProjectID:      *projectID,
+				ActivityID:     *activityID,
+			},
+			ApplyNow: *applyNow,
+		})
 		if err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
@@ -377,7 +395,7 @@ func (r *Runner) runProjects(ctx context.Context, args []string, stdout, stderr 
 				return 0
 			}
 			for _, p := range items {
-				fmt.Fprintf(stdout, "%d %s > %s (started %s)\n", p.ProjectID, p.Customer, p.Name, p.StartedAt)
+				fmt.Fprintf(stdout, "%d %s\n", p.ProjectID, p.Title)
 			}
 			return 0
 		}
@@ -680,16 +698,16 @@ func (r *Runner) runReview(ctx context.Context, args []string, stdout, stderr io
 		date := fs.String("date", "", "date")
 		app := fs.String("app", "", "app")
 		title := fs.String("title", "", "title")
+		project := fs.Int64("project-id", 0, "project")
 		activity := fs.Int64("activity-id", 0, "activity")
-		kind := fs.Int64("kind-id", 0, "kind")
 		if err := fs.Parse(args[1:]); err != nil {
 			return 2
 		}
-		if *date == "" || *app == "" || *title == "" || *activity == 0 || *kind == 0 {
-			fmt.Fprintln(stderr, "--date --app --title --activity-id --kind-id are required")
+		if *date == "" || *app == "" || *title == "" || *project == 0 || *activity == 0 {
+			fmt.Fprintln(stderr, "--date --app --title --project-id --activity-id are required")
 			return 2
 		}
-		n, err := r.App.Review.MapGroup(ctx, *date, *app, *title, *activity, *kind)
+		n, err := r.App.Review.MapGroup(ctx, *date, *app, *title, *project, *activity)
 		if err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1

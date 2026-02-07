@@ -16,27 +16,31 @@ type fakeRulesRepo struct{}
 func (f *fakeRulesRepo) ListRules(context.Context) ([]domain.Rule, error)         { return nil, nil }
 func (f *fakeRulesRepo) AddRule(context.Context, domain.RuleInput) (int64, error) { return 1, nil }
 func (f *fakeRulesRepo) DeleteRule(context.Context, int64) error                  { return nil }
-func (f *fakeRulesRepo) AnalyzeSuggestions(context.Context, domain.SuggestionQuery) ([]domain.RuleSuggestion, error) {
+func (f *fakeRulesRepo) ListUnmappedEvents(context.Context, *string, int64) ([]domain.Event, error) {
+	return nil, nil
+}
+func (f *fakeRulesRepo) ListAppSuggestions(context.Context, domain.SuggestionQuery) ([]domain.RuleSuggestion, error) {
+	return nil, nil
+}
+func (f *fakeRulesRepo) ListTitleSuggestions(context.Context, domain.SuggestionQuery) ([]domain.RuleSuggestion, error) {
 	title := "*standup*"
 	return []domain.RuleSuggestion{{
 		SuggestionType:   domain.SuggestionTypeAppAndTitle,
 		AppPattern:       "Slack",
 		TitlePattern:     &title,
-		ActivityID:       1000,
-		KindID:           10000,
-		DisplayPath:      "Acme > Platform > Build > Coding > Feature",
+		ProjectID:        10,
+		ActivityID:       101,
+		DisplayPath:      "web-app > meeting",
 		Confidence:       88,
 		ImpactCount:      3,
 		ImpactDurationMS: 180000,
 		EvidenceCount:    5,
 	}}, nil
 }
-func (f *fakeRulesRepo) AcceptSuggestion(context.Context, domain.ApplySuggestionInput) (domain.ApplySuggestionResult, error) {
-	return domain.ApplySuggestionResult{RuleCreated: true, MappedEvents: 3}, nil
+func (f *fakeRulesRepo) ApplyEventMappings(context.Context, []domain.EventMappingUpdate, bool) (int64, error) {
+	return 0, nil
 }
-func (f *fakeRulesRepo) ApplyRules(context.Context, domain.ApplyRulesInput) (domain.ApplyRulesResult, error) {
-	return domain.ApplyRulesResult{UnmappedEvents: 3, MatchedEvents: 3}, nil
-}
+func (f *fakeRulesRepo) CurrentProjectID(context.Context) (*int64, error) { return nil, nil }
 
 func TestSuggestionsPartialRendersRows(t *testing.T) {
 	app := &usecases.App{

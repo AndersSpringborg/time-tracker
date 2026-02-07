@@ -16,15 +16,13 @@ func openTestStore(t *testing.T) *Store {
 	return s
 }
 
-func seedHierarchy(t *testing.T, s *Store) {
+func seedProjectActivity(t *testing.T, s *Store) {
 	t.Helper()
 	ctx := context.Background()
 	queries := []string{
-		"INSERT INTO customers (customer_id, name) VALUES (1, 'Acme')",
-		"INSERT INTO projects (project_id, customer_id, name) VALUES (10, 1, 'Platform')",
-		"INSERT INTO phases (phase_id, project_id, name) VALUES (100, 10, 'Build')",
-		"INSERT INTO activities (activity_id, phase_id, name) VALUES (1000, 100, 'Coding')",
-		"INSERT INTO kinds (activity_id, kind_id, name, billable) VALUES (1000, 10000, 'Feature', true)",
+		"INSERT INTO projects (project_id, title, metadata) VALUES (10, 'web-app', 'notes')",
+		"INSERT INTO activities (activity_id, project_id, title) VALUES (100, 10, 'development')",
+		"INSERT INTO activities (activity_id, project_id, title) VALUES (101, 10, 'meeting')",
 	}
 	for _, q := range queries {
 		if _, err := s.db.ExecContext(ctx, q); err != nil {
@@ -33,14 +31,14 @@ func seedHierarchy(t *testing.T, s *Store) {
 	}
 }
 
-func TestAnalyzeSuggestionsReturnsAppSuggestion(t *testing.T) {
+func TestListAppSuggestionsReturnsProjectActivityTarget(t *testing.T) {
 	s := openTestStore(t)
 	defer s.Close()
-	seedHierarchy(t, s)
+	seedProjectActivity(t, s)
 	ctx := context.Background()
 
 	for i := 0; i < 5; i++ {
-		if _, err := s.db.ExecContext(ctx, `INSERT INTO events (timestamp_ms, app_name, window_title, duration_ms, activity_id, kind_id, manually_mapped) VALUES (?, 'Code', 'main.go', 60000, 1000, 10000, true)`, int64(i+1)); err != nil {
+		if _, err := s.db.ExecContext(ctx, `INSERT INTO events (timestamp_ms, app_name, window_title, duration_ms, project_id, activity_id, manually_mapped) VALUES (?, 'Code', 'main.go', 60000, 10, 100, true)`, int64(i+1)); err != nil {
 			t.Fatalf("insert mapped event: %v", err)
 		}
 	}
@@ -50,9 +48,9 @@ func TestAnalyzeSuggestionsReturnsAppSuggestion(t *testing.T) {
 		}
 	}
 
-	suggestions, err := s.AnalyzeSuggestions(ctx, domain.SuggestionQuery{Limit: 10, MinDurationMS: 1000})
+	suggestions, err := s.ListAppSuggestions(ctx, domain.SuggestionQuery{Limit: 10, MinDurationMS: 1000})
 	if err != nil {
-		t.Fatalf("analyze suggestions: %v", err)
+		t.Fatalf("list app suggestions: %v", err)
 	}
 	if len(suggestions) == 0 {
 		t.Fatalf("expected suggestions")
@@ -60,38 +58,39 @@ func TestAnalyzeSuggestionsReturnsAppSuggestion(t *testing.T) {
 	if suggestions[0].AppPattern != "Code" {
 		t.Fatalf("expected app pattern Code, got %s", suggestions[0].AppPattern)
 	}
+	if suggestions[0].ProjectID != 10 || suggestions[0].ActivityID != 100 {
+		t.Fatalf("expected target project/activity 10/100, got %d/%d", suggestions[0].ProjectID, suggestions[0].ActivityID)
+	}
 }
 
-func TestAcceptSuggestionCreatesRuleAndMaps(t *testing.T) {
+func TestApplyEventMappingsUpdatesEvents(t *testing.T) {
 	s := openTestStore(t)
 	defer s.Close()
-	seedHierarchy(t, s)
+	seedProjectActivity(t, s)
 	ctx := context.Background()
 
-	for i := 0; i < 2; i++ {
-		if _, err := s.db.ExecContext(ctx, `INSERT INTO events (timestamp_ms, app_name, window_title, duration_ms, manually_mapped) VALUES (?, 'Slack', 'daily standup', 60000, false)`, int64(100+i)); err != nil {
-			t.Fatalf("insert unmapped event: %v", err)
-		}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO events (id, timestamp_ms, app_name, window_title, duration_ms, manually_mapped) VALUES (1, 100, 'Slack', 'daily standup', 60000, false)`); err != nil {
+		t.Fatalf("insert event: %v", err)
 	}
 
-	title := "*standup*"
-	res, err := s.AcceptSuggestion(ctx, domain.ApplySuggestionInput{
-		Suggestion: domain.RuleSuggestion{
-			SuggestionType: domain.SuggestionTypeAppAndTitle,
-			AppPattern:     "Slack",
-			TitlePattern:   &title,
-			ActivityID:     1000,
-			KindID:         10000,
-		},
-		ApplyNow: true,
-	})
+	n, err := s.ApplyEventMappings(ctx, []domain.EventMappingUpdate{{
+		EventID:    1,
+		ProjectID:  10,
+		ActivityID: 101,
+	}}, true)
 	if err != nil {
-		t.Fatalf("accept suggestion: %v", err)
+		t.Fatalf("apply event mappings: %v", err)
 	}
-	if !res.RuleCreated {
-		t.Fatalf("expected rule to be created")
+	if n != 1 {
+		t.Fatalf("expected 1 updated row, got %d", n)
 	}
-	if res.MappedEvents != 2 {
-		t.Fatalf("expected 2 mapped events, got %d", res.MappedEvents)
+
+	var projectID, activityID int64
+	var manual bool
+	if err := s.db.QueryRowContext(ctx, `SELECT project_id, activity_id, manually_mapped FROM events WHERE id = 1`).Scan(&projectID, &activityID, &manual); err != nil {
+		t.Fatalf("query event: %v", err)
+	}
+	if projectID != 10 || activityID != 101 || !manual {
+		t.Fatalf("unexpected event mapping project=%d activity=%d manual=%v", projectID, activityID, manual)
 	}
 }

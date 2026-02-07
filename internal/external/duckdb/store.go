@@ -4,8 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -33,22 +31,14 @@ SELECT
   mr.priority,
   COALESCE(mr.app_pattern, ''),
   COALESCE(mr.title_pattern, ''),
+  mr.project_id,
   mr.activity_id,
-  mr.kind_id,
   COALESCE(mr.follow_previous, false),
-  COALESCE(mr.is_global, false),
-  COALESCE(mr.kind_name, ''),
-  COALESCE(c.name, ''),
-  COALESCE(p.name, ''),
-  COALESCE(ph.name, ''),
-  COALESCE(a.name, ''),
-  COALESCE(k.name, '')
+  COALESCE(p.title, ''),
+  COALESCE(a.title, '')
 FROM mapping_rules mr
+LEFT JOIN projects p ON p.project_id = mr.project_id
 LEFT JOIN activities a ON a.activity_id = mr.activity_id
-LEFT JOIN phases ph ON ph.phase_id = a.phase_id
-LEFT JOIN projects p ON p.project_id = ph.project_id
-LEFT JOIN customers c ON c.customer_id = p.customer_id
-LEFT JOIN kinds k ON k.activity_id = mr.activity_id AND k.kind_id = mr.kind_id
 ORDER BY mr.priority DESC, mr.id DESC
 `)
 	if err != nil {
@@ -56,46 +46,39 @@ ORDER BY mr.priority DESC, mr.id DESC
 	}
 	defer rows.Close()
 
-	var out []domain.Rule
+	out := make([]domain.Rule, 0)
 	for rows.Next() {
-		var r domain.Rule
-		var customer, project, phase, activity, kind string
+		var rule domain.Rule
+		var projectTitle, activityTitle string
 		if err := rows.Scan(
-			&r.ID,
-			&r.Priority,
-			&r.AppPattern,
-			&r.TitlePattern,
-			&r.ActivityID,
-			&r.KindID,
-			&r.FollowPrevious,
-			&r.IsGlobal,
-			&r.KindName,
-			&customer,
-			&project,
-			&phase,
-			&activity,
-			&kind,
+			&rule.ID,
+			&rule.Priority,
+			&rule.AppPattern,
+			&rule.TitlePattern,
+			&rule.ProjectID,
+			&rule.ActivityID,
+			&rule.FollowPrevious,
+			&projectTitle,
+			&activityTitle,
 		); err != nil {
 			return nil, err
 		}
-		r.DisplayTarget = buildDisplayTarget(r, customer, project, phase, activity, kind)
-		out = append(out, r)
+		rule.DisplayTarget = buildDisplayTarget(rule, projectTitle, activityTitle)
+		out = append(out, rule)
 	}
 	return out, rows.Err()
 }
 
-func buildDisplayTarget(r domain.Rule, customer, project, phase, activity, kind string) string {
-	if r.FollowPrevious {
+func buildDisplayTarget(rule domain.Rule, projectTitle, activityTitle string) string {
+	if rule.FollowPrevious {
 		return "Follow current project"
 	}
-	if r.IsGlobal && r.KindName != "" {
-		return "Global kind: " + r.KindName
+	parts := make([]string, 0, 2)
+	if strings.TrimSpace(projectTitle) != "" {
+		parts = append(parts, projectTitle)
 	}
-	parts := []string{}
-	for _, p := range []string{customer, project, phase, activity, kind} {
-		if p != "" {
-			parts = append(parts, p)
-		}
+	if strings.TrimSpace(activityTitle) != "" {
+		parts = append(parts, activityTitle)
 	}
 	if len(parts) == 0 {
 		return "Unmapped"
@@ -104,31 +87,11 @@ func buildDisplayTarget(r domain.Rule, customer, project, phase, activity, kind 
 }
 
 func (s *Store) AddRule(ctx context.Context, in domain.RuleInput) (int64, error) {
-	if in.Priority == 0 {
-		in.Priority = 100
-	}
-	if strings.TrimSpace(in.AppPattern) == "" {
-		in.AppPattern = "*"
-	}
-	if strings.TrimSpace(in.TitlePattern) == "" {
-		in.TitlePattern = "*"
-	}
-	if in.FollowPrevious {
-		in.ActivityID = nil
-		in.KindID = nil
-		in.IsGlobal = false
-		in.KindName = ""
-	}
-	if in.IsGlobal {
-		in.ActivityID = nil
-		in.KindID = nil
-	}
-
 	res, err := s.db.ExecContext(ctx, `
 INSERT INTO mapping_rules (
-  priority, app_pattern, title_pattern, activity_id, kind_id, follow_previous, is_global, kind_name
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-`, in.Priority, nullIfEmpty(in.AppPattern), nullIfEmpty(in.TitlePattern), in.ActivityID, in.KindID, in.FollowPrevious, in.IsGlobal, nullIfEmpty(in.KindName))
+  priority, app_pattern, title_pattern, project_id, activity_id, follow_previous
+) VALUES (?, ?, ?, ?, ?, ?)
+`, in.Priority, nullIfEmpty(in.AppPattern), nullIfEmpty(in.TitlePattern), in.ProjectID, in.ActivityID, in.FollowPrevious)
 	if err != nil {
 		return 0, err
 	}
@@ -141,75 +104,92 @@ func (s *Store) DeleteRule(ctx context.Context, id int64) error {
 	return err
 }
 
-func (s *Store) AnalyzeSuggestions(ctx context.Context, q domain.SuggestionQuery) ([]domain.RuleSuggestion, error) {
-	if q.MinDurationMS <= 0 {
-		q.MinDurationMS = 2000
+func (s *Store) ListUnmappedEvents(ctx context.Context, date *string, minDurationMS int64) ([]domain.Event, error) {
+	query := `
+SELECT id, timestamp_ms, app_name, window_title, duration_ms
+FROM events
+WHERE project_id IS NULL AND activity_id IS NULL AND manually_mapped = false
+`
+	args := make([]any, 0, 2)
+	if minDurationMS > 0 {
+		query += ` AND duration_ms >= ?`
+		args = append(args, minDurationMS)
 	}
-	if q.Limit <= 0 {
-		q.Limit = 50
+	if date != nil && strings.TrimSpace(*date) != "" {
+		query += ` AND DATE(TO_TIMESTAMP(timestamp_ms / 1000)) = ?`
+		args = append(args, *date)
 	}
-
-	appSuggestions, err := s.analyzeAppSuggestions(ctx, q)
+	query += ` ORDER BY timestamp_ms ASC, id ASC`
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
-	titleSuggestions, err := s.analyzeTitleSuggestions(ctx, q)
-	if err != nil {
-		return nil, err
-	}
-
-	all := append(appSuggestions, titleSuggestions...)
-	sort.Slice(all, func(i, j int) bool {
-		if all[i].ImpactDurationMS == all[j].ImpactDurationMS {
-			return all[i].Confidence > all[j].Confidence
+	defer rows.Close()
+	out := make([]domain.Event, 0)
+	for rows.Next() {
+		var event domain.Event
+		if err := rows.Scan(&event.ID, &event.TimestampMS, &event.AppName, &event.WindowTitle, &event.DurationMS); err != nil {
+			return nil, err
 		}
-		return all[i].ImpactDurationMS > all[j].ImpactDurationMS
-	})
-	if len(all) > q.Limit {
-		all = all[:q.Limit]
+		out = append(out, event)
 	}
-	return all, nil
+	return out, rows.Err()
 }
 
-func (s *Store) analyzeAppSuggestions(ctx context.Context, q domain.SuggestionQuery) ([]domain.RuleSuggestion, error) {
-	where := "WHERE activity_id IS NULL AND manually_mapped = false AND duration_ms >= ?"
-	args := []any{q.MinDurationMS}
-	if q.Date != nil && *q.Date != "" {
+func (s *Store) ListAppSuggestions(ctx context.Context, q domain.SuggestionQuery) ([]domain.RuleSuggestion, error) {
+	where := "WHERE project_id IS NULL AND activity_id IS NULL AND manually_mapped = false"
+	args := make([]any, 0, 3)
+	if q.MinDurationMS > 0 {
+		where += " AND duration_ms >= ?"
+		args = append(args, q.MinDurationMS)
+	}
+	if q.Date != nil && strings.TrimSpace(*q.Date) != "" {
 		where += " AND DATE(TO_TIMESTAMP(timestamp_ms / 1000)) = ?"
 		args = append(args, *q.Date)
 	}
+	limit := q.Limit
+	if limit <= 0 {
+		limit = 50
+	}
 
-	query := `
+	rows, err := s.db.QueryContext(ctx, `
 WITH mapped AS (
-  SELECT app_name, activity_id, kind_id, COUNT(*) AS cnt
+  SELECT app_name, project_id, activity_id, COUNT(*) AS cnt
   FROM events
-  WHERE activity_id IS NOT NULL AND kind_id IS NOT NULL
-  GROUP BY app_name, activity_id, kind_id
+  WHERE project_id IS NOT NULL AND activity_id IS NOT NULL
+  GROUP BY app_name, project_id, activity_id
 ), app_totals AS (
   SELECT app_name, SUM(cnt) AS total_cnt
-  FROM mapped GROUP BY app_name
+  FROM mapped
+  GROUP BY app_name
 ), top_map AS (
   SELECT m.*, ROW_NUMBER() OVER (PARTITION BY m.app_name ORDER BY m.cnt DESC) AS rn
   FROM mapped m
 ), unmapped AS (
-  SELECT app_name, COUNT(*) AS impact_count, COALESCE(SUM(duration_ms),0) AS impact_duration_ms
+  SELECT app_name, COUNT(*) AS impact_count, COALESCE(SUM(duration_ms), 0) AS impact_duration_ms
   FROM events
-  ` + where + `
+  `+where+`
   GROUP BY app_name
 )
-SELECT tm.app_name, tm.activity_id, tm.kind_id,
-       CAST(tm.cnt * 100.0 / NULLIF(app_tot.total_cnt,0) AS INTEGER) AS confidence,
-       u.impact_count, u.impact_duration_ms, tm.cnt
+SELECT
+  tm.app_name,
+  tm.project_id,
+  tm.activity_id,
+  CAST(tm.cnt * 100.0 / NULLIF(app_tot.total_cnt, 0) AS INTEGER) AS confidence,
+  u.impact_count,
+  u.impact_duration_ms,
+  tm.cnt,
+  COALESCE(p.title, ''),
+  COALESCE(a.title, '')
 FROM top_map tm
 JOIN app_totals app_tot ON app_tot.app_name = tm.app_name
 JOIN unmapped u ON u.app_name = tm.app_name
+LEFT JOIN projects p ON p.project_id = tm.project_id
+LEFT JOIN activities a ON a.activity_id = tm.activity_id
 WHERE tm.rn = 1 AND u.impact_count > 0
 ORDER BY u.impact_duration_ms DESC
 LIMIT ?
-`
-	args = append(args, q.Limit)
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
+`, append(args, limit)...)
 	if err != nil {
 		return nil, err
 	}
@@ -217,64 +197,74 @@ LIMIT ?
 
 	out := make([]domain.RuleSuggestion, 0)
 	for rows.Next() {
-		var app string
-		var activityID, kindID int64
-		var confidence, impactCount, evidence int
-		var impactDuration int64
-		if err := rows.Scan(&app, &activityID, &kindID, &confidence, &impactCount, &impactDuration, &evidence); err != nil {
+		var item domain.RuleSuggestion
+		var projectTitle, activityTitle string
+		if err := rows.Scan(
+			&item.AppPattern,
+			&item.ProjectID,
+			&item.ActivityID,
+			&item.Confidence,
+			&item.ImpactCount,
+			&item.ImpactDurationMS,
+			&item.EvidenceCount,
+			&projectTitle,
+			&activityTitle,
+		); err != nil {
 			return nil, err
 		}
-		if confidence < 60 {
-			continue
-		}
-		path, _ := s.getDisplayPath(ctx, activityID, kindID)
-		out = append(out, domain.RuleSuggestion{
-			SuggestionType:   domain.SuggestionTypeAppOnly,
-			AppPattern:       app,
-			TitlePattern:     nil,
-			ActivityID:       activityID,
-			KindID:           kindID,
-			DisplayPath:      path,
-			Confidence:       confidence,
-			ImpactCount:      impactCount,
-			ImpactDurationMS: impactDuration,
-			EvidenceCount:    evidence,
-		})
+		item.SuggestionType = domain.SuggestionTypeAppOnly
+		item.DisplayPath = buildPath(projectTitle, activityTitle)
+		out = append(out, item)
 	}
 	return out, rows.Err()
 }
 
-func (s *Store) analyzeTitleSuggestions(ctx context.Context, q domain.SuggestionQuery) ([]domain.RuleSuggestion, error) {
-	where := "WHERE activity_id IS NULL AND manually_mapped = false AND duration_ms >= ?"
-	args := []any{q.MinDurationMS}
-	if q.Date != nil && *q.Date != "" {
+func (s *Store) ListTitleSuggestions(ctx context.Context, q domain.SuggestionQuery) ([]domain.RuleSuggestion, error) {
+	where := "WHERE project_id IS NULL AND activity_id IS NULL AND manually_mapped = false"
+	args := make([]any, 0, 3)
+	if q.MinDurationMS > 0 {
+		where += " AND duration_ms >= ?"
+		args = append(args, q.MinDurationMS)
+	}
+	if q.Date != nil && strings.TrimSpace(*q.Date) != "" {
 		where += " AND DATE(TO_TIMESTAMP(timestamp_ms / 1000)) = ?"
 		args = append(args, *q.Date)
 	}
+	limit := q.Limit
+	if limit <= 0 {
+		limit = 50
+	}
 
-	query := `
+	rows, err := s.db.QueryContext(ctx, `
 WITH mapped_title AS (
-  SELECT app_name, window_title, activity_id, kind_id, COUNT(*) AS cnt
+  SELECT app_name, window_title, project_id, activity_id, COUNT(*) AS cnt
   FROM events
-  WHERE activity_id IS NOT NULL AND kind_id IS NOT NULL AND window_title <> ''
-  GROUP BY app_name, window_title, activity_id, kind_id
+  WHERE project_id IS NOT NULL AND activity_id IS NOT NULL AND window_title <> ''
+  GROUP BY app_name, window_title, project_id, activity_id
 ), unmapped_title AS (
-  SELECT app_name, window_title, COUNT(*) AS impact_count, COALESCE(SUM(duration_ms),0) AS impact_duration_ms
+  SELECT app_name, window_title, COUNT(*) AS impact_count, COALESCE(SUM(duration_ms), 0) AS impact_duration_ms
   FROM events
-  ` + where + `
+  `+where+`
   GROUP BY app_name, window_title
 )
-SELECT m.app_name, m.window_title, m.activity_id, m.kind_id, m.cnt, u.impact_count, u.impact_duration_ms
+SELECT
+  m.app_name,
+  m.window_title,
+  m.project_id,
+  m.activity_id,
+  m.cnt,
+  u.impact_count,
+  u.impact_duration_ms,
+  COALESCE(p.title, ''),
+  COALESCE(a.title, '')
 FROM mapped_title m
-JOIN unmapped_title u
-  ON u.app_name = m.app_name AND u.window_title = m.window_title
+JOIN unmapped_title u ON u.app_name = m.app_name AND u.window_title = m.window_title
+LEFT JOIN projects p ON p.project_id = m.project_id
+LEFT JOIN activities a ON a.activity_id = m.activity_id
 WHERE m.cnt >= 2 AND u.impact_count > 0
 ORDER BY u.impact_duration_ms DESC
 LIMIT ?
-`
-	args = append(args, q.Limit)
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
+`, append(args, limit)...)
 	if err != nil {
 		return nil, err
 	}
@@ -282,210 +272,97 @@ LIMIT ?
 
 	out := make([]domain.RuleSuggestion, 0)
 	for rows.Next() {
-		var app, title string
-		var activityID, kindID int64
-		var evidence, impactCount int
-		var impactDuration int64
-		if err := rows.Scan(&app, &title, &activityID, &kindID, &evidence, &impactCount, &impactDuration); err != nil {
+		var item domain.RuleSuggestion
+		var rawTitle string
+		var projectTitle, activityTitle string
+		if err := rows.Scan(
+			&item.AppPattern,
+			&rawTitle,
+			&item.ProjectID,
+			&item.ActivityID,
+			&item.EvidenceCount,
+			&item.ImpactCount,
+			&item.ImpactDurationMS,
+			&projectTitle,
+			&activityTitle,
+		); err != nil {
 			return nil, err
 		}
-		pattern := titlePattern(title)
-		path, _ := s.getDisplayPath(ctx, activityID, kindID)
-		out = append(out, domain.RuleSuggestion{
-			SuggestionType:   domain.SuggestionTypeAppAndTitle,
-			AppPattern:       app,
-			TitlePattern:     &pattern,
-			ActivityID:       activityID,
-			KindID:           kindID,
-			DisplayPath:      path,
-			Confidence:       85,
-			ImpactCount:      impactCount,
-			ImpactDurationMS: impactDuration,
-			EvidenceCount:    evidence,
-		})
+		pattern := domain.BuildTitlePattern(rawTitle)
+		item.SuggestionType = domain.SuggestionTypeAppAndTitle
+		item.TitlePattern = &pattern
+		item.Confidence = 85
+		item.DisplayPath = buildPath(projectTitle, activityTitle)
+		out = append(out, item)
 	}
 	return out, rows.Err()
 }
 
-func titlePattern(title string) string {
-	t := strings.TrimSpace(title)
-	if t == "" {
-		return "*"
+func buildPath(projectTitle, activityTitle string) string {
+	parts := make([]string, 0, 2)
+	if strings.TrimSpace(projectTitle) != "" {
+		parts = append(parts, projectTitle)
 	}
-	if len(t) > 80 {
-		t = t[:80]
+	if strings.TrimSpace(activityTitle) != "" {
+		parts = append(parts, activityTitle)
 	}
-	return "*" + t + "*"
+	if len(parts) == 0 {
+		return "Unmapped"
+	}
+	return strings.Join(parts, " > ")
 }
 
-func (s *Store) getDisplayPath(ctx context.Context, activityID, kindID int64) (string, error) {
-	var path string
-	err := s.db.QueryRowContext(ctx, `
-SELECT COALESCE(c.name || ' > ' || p.name || ' > ' || ph.name || ' > ' || a.name || ' > ' || k.name, '')
-FROM kinds k
-JOIN activities a ON k.activity_id = a.activity_id
-JOIN phases ph ON a.phase_id = ph.phase_id
-JOIN projects p ON ph.project_id = p.project_id
-JOIN customers c ON p.customer_id = c.customer_id
-WHERE a.activity_id = ? AND k.kind_id = ?
-LIMIT 1
-`, activityID, kindID).Scan(&path)
-	if err != nil {
-		return "", err
+func (s *Store) ApplyEventMappings(ctx context.Context, updates []domain.EventMappingUpdate, manuallyMapped bool) (int64, error) {
+	if len(updates) == 0 {
+		return 0, nil
 	}
-	return path, nil
-}
-
-func (s *Store) AcceptSuggestion(ctx context.Context, in domain.ApplySuggestionInput) (domain.ApplySuggestionResult, error) {
-	title := "*"
-	if in.Suggestion.TitlePattern != nil && strings.TrimSpace(*in.Suggestion.TitlePattern) != "" {
-		title = *in.Suggestion.TitlePattern
-	}
-	activity := in.Suggestion.ActivityID
-	kind := in.Suggestion.KindID
-
-	_, err := s.AddRule(ctx, domain.RuleInput{
-		Priority:     100,
-		AppPattern:   in.Suggestion.AppPattern,
-		TitlePattern: title,
-		ActivityID:   &activity,
-		KindID:       &kind,
-	})
-	if err != nil {
-		return domain.ApplySuggestionResult{}, err
-	}
-
-	mapped := int64(0)
-	if in.ApplyNow {
-		mapped, err = s.applyRuleToUnmapped(ctx, in.Suggestion.AppPattern, in.Suggestion.TitlePattern, in.Suggestion.ActivityID, in.Suggestion.KindID, in.Date)
-		if err != nil {
-			return domain.ApplySuggestionResult{}, err
-		}
-	}
-
-	return domain.ApplySuggestionResult{RuleCreated: true, MappedEvents: mapped}, nil
-}
-
-func (s *Store) applyRuleToUnmapped(ctx context.Context, appPattern string, titlePattern *string, activityID, kindID int64, date *string) (int64, error) {
-	events, err := s.listUnmappedEvents(ctx, date)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
-	var mapped int64
-	for _, e := range events {
-		if !glob(appPattern, e.AppName) {
-			continue
-		}
-		if titlePattern != nil && !glob(*titlePattern, e.WindowTitle) {
-			continue
-		}
-		if _, err := s.db.ExecContext(ctx, `UPDATE events SET activity_id = ?, kind_id = ?, manually_mapped = true WHERE id = ?`, activityID, kindID, e.ID); err != nil {
-			return mapped, err
-		}
-		mapped++
+	defer func() { _ = tx.Rollback() }()
+
+	stmt, err := tx.PrepareContext(ctx, `
+UPDATE events
+SET project_id = ?, activity_id = ?, manually_mapped = ?
+WHERE id = ? AND project_id IS NULL AND activity_id IS NULL
+`)
+	if err != nil {
+		return 0, err
 	}
-	return mapped, nil
+	defer stmt.Close()
+
+	var affected int64
+	for _, update := range updates {
+		res, err := stmt.ExecContext(ctx, update.ProjectID, update.ActivityID, manuallyMapped, update.EventID)
+		if err != nil {
+			return affected, err
+		}
+		n, _ := res.RowsAffected()
+		affected += n
+	}
+	if err := tx.Commit(); err != nil {
+		return affected, err
+	}
+	return affected, nil
 }
 
-func (s *Store) listUnmappedEvents(ctx context.Context, date *string) ([]domain.Event, error) {
-	query := `SELECT id, timestamp_ms, app_name, window_title, duration_ms FROM events WHERE activity_id IS NULL AND manually_mapped = false`
-	args := []any{}
-	if date != nil && *date != "" {
-		query += ` AND DATE(TO_TIMESTAMP(timestamp_ms / 1000)) = ?`
-		args = append(args, *date)
-	}
-	query += ` ORDER BY timestamp_ms ASC`
-	rows, err := s.db.QueryContext(ctx, query, args...)
+func (s *Store) CurrentProjectID(ctx context.Context) (*int64, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx, `
+SELECT pa.project_id
+FROM project_assignments pa
+WHERE pa.ended_at IS NULL
+ORDER BY pa.started_at DESC
+LIMIT 1
+`).Scan(&id)
 	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
 		return nil, err
 	}
-	defer rows.Close()
-	out := []domain.Event{}
-	for rows.Next() {
-		var e domain.Event
-		if err := rows.Scan(&e.ID, &e.TimestampMS, &e.AppName, &e.WindowTitle, &e.DurationMS); err != nil {
-			return nil, err
-		}
-		out = append(out, e)
-	}
-	return out, rows.Err()
-}
-
-func glob(pattern, value string) bool {
-	pattern = strings.TrimSpace(pattern)
-	if pattern == "" {
-		pattern = "*"
-	}
-	ok, err := filepath.Match(pattern, value)
-	if err != nil {
-		return false
-	}
-	return ok
-}
-
-func (s *Store) ApplyRules(ctx context.Context, in domain.ApplyRulesInput) (domain.ApplyRulesResult, error) {
-	rules, err := s.ListRules(ctx)
-	if err != nil {
-		return domain.ApplyRulesResult{}, err
-	}
-	events, err := s.listUnmappedEvents(ctx, in.Date)
-	if err != nil {
-		return domain.ApplyRulesResult{}, err
-	}
-	res := domain.ApplyRulesResult{UnmappedEvents: int64(len(events))}
-
-	var prevActivity *int64
-	var prevKind *int64
-	for _, e := range events {
-		matched := false
-		for _, r := range rules {
-			if !glob(orDefault(r.AppPattern, "*"), e.AppName) {
-				continue
-			}
-			if !glob(orDefault(r.TitlePattern, "*"), e.WindowTitle) {
-				continue
-			}
-			if r.FollowPrevious {
-				if prevActivity == nil || prevKind == nil {
-					continue
-				}
-				if !in.DryRun {
-					if _, err := s.db.ExecContext(ctx, `UPDATE events SET activity_id = ?, kind_id = ? WHERE id = ?`, *prevActivity, *prevKind, e.ID); err != nil {
-						return res, err
-					}
-				}
-				res.MatchedEvents++
-				matched = true
-				break
-			}
-			if r.ActivityID == nil || r.KindID == nil {
-				continue
-			}
-			if !in.DryRun {
-				if _, err := s.db.ExecContext(ctx, `UPDATE events SET activity_id = ?, kind_id = ? WHERE id = ?`, *r.ActivityID, *r.KindID, e.ID); err != nil {
-					return res, err
-				}
-			}
-			a := *r.ActivityID
-			k := *r.KindID
-			prevActivity = &a
-			prevKind = &k
-			res.MatchedEvents++
-			matched = true
-			break
-		}
-		if !matched {
-			continue
-		}
-	}
-	return res, nil
-}
-
-func orDefault(v, d string) string {
-	if strings.TrimSpace(v) == "" {
-		return d
-	}
-	return v
+	return &id, nil
 }
 
 func (s *Store) ListReportEvents(ctx context.Context, rangeKey string) ([]domain.Event, error) {
@@ -497,12 +374,11 @@ SELECT
   e.duration_ms,
   e.app_name,
   e.window_title,
-  COALESCE(c.name || ' > ' || p.name, '') as project_name
+  e.project_id,
+  e.activity_id,
+  COALESCE(p.title, '') AS project_title
 FROM events e
-LEFT JOIN activities a ON a.activity_id = e.activity_id
-LEFT JOIN phases ph ON ph.phase_id = a.phase_id
-LEFT JOIN projects p ON p.project_id = ph.project_id
-LEFT JOIN customers c ON c.customer_id = p.customer_id
+LEFT JOIN projects p ON p.project_id = e.project_id
 ` + where + `
 ORDER BY e.timestamp_ms ASC
 `
@@ -512,13 +388,13 @@ ORDER BY e.timestamp_ms ASC
 	}
 	defer rows.Close()
 
-	var out []domain.Event
+	out := make([]domain.Event, 0)
 	for rows.Next() {
-		var e domain.Event
-		if err := rows.Scan(&e.ID, &e.TimestampMS, &e.DurationMS, &e.AppName, &e.WindowTitle, &e.ProjectName); err != nil {
+		var event domain.Event
+		if err := rows.Scan(&event.ID, &event.TimestampMS, &event.DurationMS, &event.AppName, &event.WindowTitle, &event.ProjectID, &event.ActivityID, &event.ProjectTitle); err != nil {
 			return nil, err
 		}
-		out = append(out, e)
+		out = append(out, event)
 	}
 	return out, rows.Err()
 }
@@ -540,10 +416,9 @@ func rangeFilter(rangeKey string) (string, []any) {
 
 func (s *Store) ListActiveProjects(ctx context.Context) ([]domain.Project, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT pa.project_id, c.name, p.name, CAST(pa.started_at AS VARCHAR)
+SELECT p.project_id, p.title, COALESCE(p.metadata, '')
 FROM project_assignments pa
 JOIN projects p ON p.project_id = pa.project_id
-JOIN customers c ON c.customer_id = p.customer_id
 WHERE pa.ended_at IS NULL
 ORDER BY pa.started_at DESC
 `)
@@ -551,36 +426,36 @@ ORDER BY pa.started_at DESC
 		return nil, err
 	}
 	defer rows.Close()
-	var out []domain.Project
+
+	out := make([]domain.Project, 0)
 	for rows.Next() {
-		var p domain.Project
-		if err := rows.Scan(&p.ProjectID, &p.Customer, &p.Name, &p.StartedAt); err != nil {
+		var project domain.Project
+		if err := rows.Scan(&project.ProjectID, &project.Title, &project.Metadata); err != nil {
 			return nil, err
 		}
-		p.Active = true
-		out = append(out, p)
+		out = append(out, project)
 	}
 	return out, rows.Err()
 }
 
 func (s *Store) ListAllProjects(ctx context.Context) ([]domain.Project, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT p.project_id, c.name, p.name
-FROM projects p
-JOIN customers c ON c.customer_id = p.customer_id
-ORDER BY c.name, p.name
+SELECT project_id, title, COALESCE(metadata, '')
+FROM projects
+ORDER BY title
 `)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []domain.Project
+
+	out := make([]domain.Project, 0)
 	for rows.Next() {
-		var p domain.Project
-		if err := rows.Scan(&p.ProjectID, &p.Customer, &p.Name); err != nil {
+		var project domain.Project
+		if err := rows.Scan(&project.ProjectID, &project.Title, &project.Metadata); err != nil {
 			return nil, err
 		}
-		out = append(out, p)
+		out = append(out, project)
 	}
 	return out, rows.Err()
 }
@@ -609,52 +484,52 @@ func (s *Store) EndAllProjects(ctx context.Context) error {
 
 func (s *Store) CurrentProject(ctx context.Context) (string, *int64, error) {
 	var id int64
-	var name string
+	var title string
 	err := s.db.QueryRowContext(ctx, `
-SELECT pa.project_id, c.name || ' > ' || p.name
+SELECT pa.project_id, p.title
 FROM project_assignments pa
 JOIN projects p ON p.project_id = pa.project_id
-JOIN customers c ON c.customer_id = p.customer_id
 WHERE pa.ended_at IS NULL
 ORDER BY pa.started_at DESC
 LIMIT 1
-`).Scan(&id, &name)
+`).Scan(&id, &title)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return "None", nil, nil
 		}
 		return "", nil, err
 	}
-	return name, &id, nil
+	return title, &id, nil
 }
 
 func (s *Store) ListUnmappedDates(ctx context.Context, minDurationMS int64) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT DISTINCT CAST(DATE(TO_TIMESTAMP(timestamp_ms / 1000)) AS VARCHAR)
 FROM events
-WHERE activity_id IS NULL AND manually_mapped = false AND duration_ms >= ?
+WHERE project_id IS NULL AND activity_id IS NULL AND manually_mapped = false AND duration_ms >= ?
 ORDER BY 1 DESC
 `, minDurationMS)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []string{}
+
+	out := make([]string, 0)
 	for rows.Next() {
-		var d string
-		if err := rows.Scan(&d); err != nil {
+		var value string
+		if err := rows.Scan(&value); err != nil {
 			return nil, err
 		}
-		out = append(out, d)
+		out = append(out, value)
 	}
 	return out, rows.Err()
 }
 
 func (s *Store) ListGroupedUnmappedEvents(ctx context.Context, date string, minDurationMS int64) ([]domain.GroupedEvent, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT app_name, window_title, COALESCE(SUM(duration_ms),0), COUNT(*)
+SELECT app_name, window_title, COALESCE(SUM(duration_ms), 0), COUNT(*)
 FROM events
-WHERE activity_id IS NULL AND manually_mapped = false
+WHERE project_id IS NULL AND activity_id IS NULL AND manually_mapped = false
   AND duration_ms >= ?
   AND DATE(TO_TIMESTAMP(timestamp_ms / 1000)) = ?
 GROUP BY app_name, window_title
@@ -664,25 +539,26 @@ ORDER BY 3 DESC
 		return nil, err
 	}
 	defer rows.Close()
-	out := []domain.GroupedEvent{}
+
+	out := make([]domain.GroupedEvent, 0)
 	for rows.Next() {
-		var g domain.GroupedEvent
-		if err := rows.Scan(&g.AppName, &g.WindowTitle, &g.TotalDurationMS, &g.EventCount); err != nil {
+		var event domain.GroupedEvent
+		if err := rows.Scan(&event.AppName, &event.WindowTitle, &event.TotalDurationMS, &event.EventCount); err != nil {
 			return nil, err
 		}
-		out = append(out, g)
+		out = append(out, event)
 	}
 	return out, rows.Err()
 }
 
-func (s *Store) MapEventsByGroup(ctx context.Context, date, appName, windowTitle string, activityID, kindID int64) (int64, error) {
+func (s *Store) MapEventsByGroup(ctx context.Context, date, appName, windowTitle string, projectID, activityID int64) (int64, error) {
 	res, err := s.db.ExecContext(ctx, `
 UPDATE events
-SET activity_id = ?, kind_id = ?, manually_mapped = true
-WHERE activity_id IS NULL AND manually_mapped = false
+SET project_id = ?, activity_id = ?, manually_mapped = true
+WHERE project_id IS NULL AND activity_id IS NULL AND manually_mapped = false
   AND DATE(TO_TIMESTAMP(timestamp_ms / 1000)) = ?
   AND app_name = ? AND window_title = ?
-`, activityID, kindID, date, appName, windowTitle)
+`, projectID, activityID, date, appName, windowTitle)
 	if err != nil {
 		return 0, err
 	}
@@ -694,7 +570,7 @@ func (s *Store) DiscardEventsByGroup(ctx context.Context, date, appName, windowT
 	res, err := s.db.ExecContext(ctx, `
 UPDATE events
 SET manually_mapped = true
-WHERE activity_id IS NULL AND manually_mapped = false
+WHERE project_id IS NULL AND activity_id IS NULL AND manually_mapped = false
   AND DATE(TO_TIMESTAMP(timestamp_ms / 1000)) = ?
   AND app_name = ? AND window_title = ?
 `, date, appName, windowTitle)
@@ -705,16 +581,16 @@ WHERE activity_id IS NULL AND manually_mapped = false
 	return n, nil
 }
 
-func nullIfEmpty(v string) any {
-	v = strings.TrimSpace(v)
-	if v == "" {
+func nullIfEmpty(value string) any {
+	value = strings.TrimSpace(value)
+	if value == "" {
 		return nil
 	}
-	return v
+	return value
 }
+
+func (s *Store) String() string { return fmt.Sprintf("duckdb-store(%p)", s.db) }
 
 var (
 	_ interface{ Close() error } = (*Store)(nil)
 )
-
-func (s *Store) String() string { return fmt.Sprintf("duckdb-store(%p)", s.db) }

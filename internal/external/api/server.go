@@ -402,15 +402,22 @@ func (s *Server) redirect(path string) http.HandlerFunc {
 
 func parseRuleInput(r *http.Request) (domain.RuleInput, error) {
 	priority := int(parseIntDefault(r.Form.Get("priority"), 100))
+	projectID, err := parseNullableInt64(r.Form.Get("project_id"))
+	if err != nil {
+		return domain.RuleInput{}, fmt.Errorf("invalid project_id")
+	}
 	activityID, err := parseNullableInt64(r.Form.Get("activity_id"))
 	if err != nil {
 		return domain.RuleInput{}, fmt.Errorf("invalid activity_id")
 	}
-	kindID, err := parseNullableInt64(r.Form.Get("kind_id"))
-	if err != nil {
-		return domain.RuleInput{}, fmt.Errorf("invalid kind_id")
-	}
-	return domain.RuleInput{Priority: priority, AppPattern: r.Form.Get("app_pattern"), TitlePattern: r.Form.Get("title_pattern"), ActivityID: activityID, KindID: kindID, FollowPrevious: r.Form.Get("follow_previous") != "", IsGlobal: r.Form.Get("is_global") != "", KindName: r.Form.Get("kind_name")}, nil
+	return domain.RuleInput{
+		Priority:       priority,
+		AppPattern:     r.Form.Get("app_pattern"),
+		TitlePattern:   r.Form.Get("title_pattern"),
+		ProjectID:      projectID,
+		ActivityID:     activityID,
+		FollowPrevious: r.Form.Get("follow_previous") != "",
+	}, nil
 }
 
 func suggestionQueryFromRequest(r *http.Request) domain.SuggestionQuery {
@@ -423,13 +430,13 @@ func suggestionQueryFromRequest(r *http.Request) domain.SuggestionQuery {
 }
 
 func parseSuggestionFromForm(r *http.Request) (domain.RuleSuggestion, error) {
+	projectID, err := strconv.ParseInt(strings.TrimSpace(r.Form.Get("project_id")), 10, 64)
+	if err != nil {
+		return domain.RuleSuggestion{}, fmt.Errorf("invalid project_id")
+	}
 	activityID, err := strconv.ParseInt(strings.TrimSpace(r.Form.Get("activity_id")), 10, 64)
 	if err != nil {
 		return domain.RuleSuggestion{}, fmt.Errorf("invalid activity_id")
-	}
-	kindID, err := strconv.ParseInt(strings.TrimSpace(r.Form.Get("kind_id")), 10, 64)
-	if err != nil {
-		return domain.RuleSuggestion{}, fmt.Errorf("invalid kind_id")
 	}
 	conf := int(parseIntDefault(r.Form.Get("confidence"), 0))
 	impactCount := int(parseIntDefault(r.Form.Get("impact_count"), 0))
@@ -441,7 +448,18 @@ func parseSuggestionFromForm(r *http.Request) (domain.RuleSuggestion, error) {
 	if title != "" {
 		titlePtr = &title
 	}
-	return domain.RuleSuggestion{SuggestionType: st, AppPattern: r.Form.Get("app_pattern"), TitlePattern: titlePtr, ActivityID: activityID, KindID: kindID, DisplayPath: r.Form.Get("display_path"), Confidence: conf, ImpactCount: impactCount, ImpactDurationMS: impactDur, EvidenceCount: evidence}, nil
+	return domain.RuleSuggestion{
+		SuggestionType:   st,
+		AppPattern:       r.Form.Get("app_pattern"),
+		TitlePattern:     titlePtr,
+		ProjectID:        projectID,
+		ActivityID:       activityID,
+		DisplayPath:      r.Form.Get("display_path"),
+		Confidence:       conf,
+		ImpactCount:      impactCount,
+		ImpactDurationMS: impactDur,
+		EvidenceCount:    evidence,
+	}, nil
 }
 
 func parseLines(v string) []string {

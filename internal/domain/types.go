@@ -1,12 +1,14 @@
 package domain
 
 type Event struct {
-	ID          int64  `json:"id"`
-	TimestampMS int64  `json:"timestamp_ms"`
-	DurationMS  int64  `json:"duration_ms"`
-	AppName     string `json:"app_name"`
-	WindowTitle string `json:"window_title"`
-	ProjectName string `json:"project_name,omitempty"`
+	ID           int64  `json:"id"`
+	TimestampMS  int64  `json:"timestamp_ms"`
+	DurationMS   int64  `json:"duration_ms"`
+	AppName      string `json:"app_name"`
+	WindowTitle  string `json:"window_title"`
+	ProjectID    *int64 `json:"project_id,omitempty"`
+	ActivityID   *int64 `json:"activity_id,omitempty"`
+	ProjectTitle string `json:"project_title,omitempty"`
 }
 
 type GroupedEvent struct {
@@ -16,16 +18,20 @@ type GroupedEvent struct {
 	EventCount      int64  `json:"event_count"`
 }
 
+type Activity struct {
+	ActivityID int64  `json:"activity_id"`
+	ProjectID  int64  `json:"project_id"`
+	Title      string `json:"title"`
+}
+
 type Rule struct {
 	ID             int64  `json:"id"`
 	Priority       int    `json:"priority"`
 	AppPattern     string `json:"app_pattern,omitempty"`
 	TitlePattern   string `json:"title_pattern,omitempty"`
+	ProjectID      *int64 `json:"project_id,omitempty"`
 	ActivityID     *int64 `json:"activity_id,omitempty"`
-	KindID         *int64 `json:"kind_id,omitempty"`
 	FollowPrevious bool   `json:"follow_previous"`
-	IsGlobal       bool   `json:"is_global"`
-	KindName       string `json:"kind_name,omitempty"`
 	DisplayTarget  string `json:"display_target,omitempty"`
 }
 
@@ -33,11 +39,9 @@ type RuleInput struct {
 	Priority       int
 	AppPattern     string
 	TitlePattern   string
+	ProjectID      *int64
 	ActivityID     *int64
-	KindID         *int64
 	FollowPrevious bool
-	IsGlobal       bool
-	KindName       string
 }
 
 type SuggestionType string
@@ -51,8 +55,8 @@ type RuleSuggestion struct {
 	SuggestionType   SuggestionType `json:"suggestion_type"`
 	AppPattern       string         `json:"app_pattern"`
 	TitlePattern     *string        `json:"title_pattern,omitempty"`
+	ProjectID        int64          `json:"project_id"`
 	ActivityID       int64          `json:"activity_id"`
-	KindID           int64          `json:"kind_id"`
 	DisplayPath      string         `json:"display_path"`
 	Confidence       int            `json:"confidence"`
 	ImpactCount      int            `json:"impact_count"`
@@ -101,6 +105,12 @@ type ApplyRulesResult struct {
 	MatchedEvents  int64 `json:"matched_events"`
 }
 
+type EventMappingUpdate struct {
+	EventID    int64
+	ProjectID  int64
+	ActivityID int64
+}
+
 type Settings struct {
 	WorkWifis             []string `json:"work_wifis"`
 	Enabled               bool     `json:"enabled"`
@@ -113,10 +123,8 @@ type Settings struct {
 
 type Project struct {
 	ProjectID int64  `json:"project_id"`
-	Customer  string `json:"customer"`
-	Name      string `json:"name"`
-	StartedAt string `json:"started_at,omitempty"`
-	Active    bool   `json:"active"`
+	Title     string `json:"title"`
+	Metadata  string `json:"metadata,omitempty"`
 }
 
 type SummaryRow struct {

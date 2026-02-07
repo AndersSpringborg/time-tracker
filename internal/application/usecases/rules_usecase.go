@@ -2,7 +2,8 @@ package usecases
 
 import (
 	"context"
-	"sort"
+	"fmt"
+	"strings"
 
 	"time-tracker/internal/application/ports"
 	"time-tracker/internal/domain"
@@ -21,8 +22,9 @@ func (u *RulesUsecase) ListRules(ctx context.Context) ([]domain.Rule, error) {
 }
 
 func (u *RulesUsecase) AddRule(ctx context.Context, in domain.RuleInput) (int64, error) {
-	if in.Priority == 0 {
-		in.Priority = 100
+	in = domain.NormalizeRuleInput(in)
+	if !in.FollowPrevious && (in.ProjectID == nil || in.ActivityID == nil) {
+		return 0, fmt.Errorf("project_id and activity_id are required unless follow_previous is enabled")
 	}
 	return u.repo.AddRule(ctx, in)
 }
@@ -35,24 +37,58 @@ func (u *RulesUsecase) AnalyzeSuggestions(ctx context.Context, q domain.Suggesti
 	if q.Limit <= 0 {
 		q.Limit = 50
 	}
-	items, err := u.repo.AnalyzeSuggestions(ctx, q)
+	if q.MinDurationMS <= 0 {
+		q.MinDurationMS = 2000
+	}
+
+	app, err := u.repo.ListAppSuggestions(ctx, q)
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].ImpactDurationMS == items[j].ImpactDurationMS {
-			return items[i].Confidence > items[j].Confidence
-		}
-		return items[i].ImpactDurationMS > items[j].ImpactDurationMS
-	})
-	if len(items) > q.Limit {
-		items = items[:q.Limit]
+	title, err := u.repo.ListTitleSuggestions(ctx, q)
+	if err != nil {
+		return nil, err
 	}
-	return items, nil
+	all := append(app, title...)
+	return domain.RankSuggestions(all, q.Limit), nil
 }
 
 func (u *RulesUsecase) AcceptSuggestion(ctx context.Context, in domain.ApplySuggestionInput) (domain.ApplySuggestionResult, error) {
-	return u.repo.AcceptSuggestion(ctx, in)
+	if in.Suggestion.ProjectID <= 0 || in.Suggestion.ActivityID <= 0 {
+		return domain.ApplySuggestionResult{}, fmt.Errorf("project_id and activity_id are required")
+	}
+	titlePattern := "*"
+	if in.Suggestion.TitlePattern != nil && strings.TrimSpace(*in.Suggestion.TitlePattern) != "" {
+		titlePattern = *in.Suggestion.TitlePattern
+	}
+	projectID := in.Suggestion.ProjectID
+	activityID := in.Suggestion.ActivityID
+	_, err := u.repo.AddRule(ctx, domain.NormalizeRuleInput(domain.RuleInput{
+		Priority:     100,
+		AppPattern:   in.Suggestion.AppPattern,
+		TitlePattern: titlePattern,
+		ProjectID:    &projectID,
+		ActivityID:   &activityID,
+	}))
+	if err != nil {
+		return domain.ApplySuggestionResult{}, err
+	}
+
+	result := domain.ApplySuggestionResult{RuleCreated: true}
+	if !in.ApplyNow {
+		return result, nil
+	}
+	events, err := u.repo.ListUnmappedEvents(ctx, in.Date, 0)
+	if err != nil {
+		return result, err
+	}
+	updates := domain.MatchSuggestionToEvents(events, in.Suggestion)
+	count, err := u.repo.ApplyEventMappings(ctx, updates, true)
+	if err != nil {
+		return result, err
+	}
+	result.MappedEvents = count
+	return result, nil
 }
 
 func (u *RulesUsecase) AutoApplySuggestions(ctx context.Context, in domain.AutoApplySuggestionsInput) (domain.AutoApplySuggestionsResult, error) {
@@ -62,36 +98,51 @@ func (u *RulesUsecase) AutoApplySuggestions(ctx context.Context, in domain.AutoA
 	if in.MinConfidence <= 0 {
 		in.MinConfidence = 85
 	}
-	suggestions, err := u.repo.AnalyzeSuggestions(ctx, domain.SuggestionQuery{
-		Date:          in.Date,
-		MinDurationMS: in.MinDurationMS,
-		Limit:         in.Limit,
-	})
+	q := domain.SuggestionQuery{Date: in.Date, MinDurationMS: in.MinDurationMS, Limit: in.Limit}
+	suggestions, err := u.AnalyzeSuggestions(ctx, q)
 	if err != nil {
 		return domain.AutoApplySuggestionsResult{}, err
 	}
+	suggestions = domain.FilterSuggestionsMinConfidence(suggestions, in.MinConfidence)
 
-	res := domain.AutoApplySuggestionsResult{Analyzed: len(suggestions)}
-	for _, s := range suggestions {
-		if s.Confidence < in.MinConfidence {
-			continue
-		}
-		applyRes, err := u.repo.AcceptSuggestion(ctx, domain.ApplySuggestionInput{
-			Suggestion: s,
+	out := domain.AutoApplySuggestionsResult{Analyzed: len(suggestions)}
+	for _, suggestion := range suggestions {
+		res, err := u.AcceptSuggestion(ctx, domain.ApplySuggestionInput{
+			Suggestion: suggestion,
 			ApplyNow:   in.ApplyNow,
 			Date:       in.Date,
 		})
 		if err != nil {
-			return res, err
+			return out, err
 		}
-		if applyRes.RuleCreated {
-			res.Accepted++
+		if res.RuleCreated {
+			out.Accepted++
 		}
-		res.MappedEvents += applyRes.MappedEvents
+		out.MappedEvents += res.MappedEvents
 	}
-	return res, nil
+	return out, nil
 }
 
 func (u *RulesUsecase) ApplyRules(ctx context.Context, in domain.ApplyRulesInput) (domain.ApplyRulesResult, error) {
-	return u.repo.ApplyRules(ctx, in)
+	rules, err := u.repo.ListRules(ctx)
+	if err != nil {
+		return domain.ApplyRulesResult{}, err
+	}
+	events, err := u.repo.ListUnmappedEvents(ctx, in.Date, 0)
+	if err != nil {
+		return domain.ApplyRulesResult{}, err
+	}
+	currentProjectID, err := u.repo.CurrentProjectID(ctx)
+	if err != nil {
+		return domain.ApplyRulesResult{}, err
+	}
+	updates := domain.MatchEventToRules(events, rules, currentProjectID)
+	res := domain.ApplyRulesResult{UnmappedEvents: int64(len(events)), MatchedEvents: int64(len(updates))}
+	if in.DryRun || len(updates) == 0 {
+		return res, nil
+	}
+	if _, err := u.repo.ApplyEventMappings(ctx, updates, false); err != nil {
+		return res, err
+	}
+	return res, nil
 }

@@ -19,8 +19,8 @@ func (u *ReviewUsecase) Groups(ctx context.Context, date string, minDurationMS i
 	return u.repo.ListGroupedUnmappedEvents(ctx, date, minDurationMS)
 }
 
-func (u *ReviewUsecase) MapGroup(ctx context.Context, date, app, title string, activityID, kindID int64) (int64, error) {
-	return u.repo.MapEventsByGroup(ctx, date, app, title, activityID, kindID)
+func (u *ReviewUsecase) MapGroup(ctx context.Context, date, app, title string, projectID, activityID int64) (int64, error) {
+	return u.repo.MapEventsByGroup(ctx, date, app, title, projectID, activityID)
 }
 
 func (u *ReviewUsecase) DiscardGroup(ctx context.Context, date, app, title string) (int64, error) {

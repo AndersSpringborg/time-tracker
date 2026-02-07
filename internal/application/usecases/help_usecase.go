@@ -40,8 +40,8 @@ func NewHelpUsecase() *HelpUsecase {
 			Command:     "rules",
 			Description: "Manage mapping rules and auto-categorization suggestions",
 			Usage:       "tt rules <list|add|delete|suggest|accept|auto-apply|apply-rules>",
-			Flags:       []string{"--format text|json|yaml", "--date YYYY-MM-DD", "--min-confidence N", "--dry-run"},
-			SideEffects: []string{"reads database", "writes mapping_rules", "updates events mappings"},
+			Flags:       []string{"--format text|json|yaml", "--date YYYY-MM-DD", "--project-id N", "--activity-id N", "--min-confidence N", "--dry-run"},
+			SideEffects: []string{"reads database", "writes mapping_rules", "updates event mappings"},
 			Examples: []string{
 				"tt rules suggest --format json",
 				"tt rules auto-apply --min-confidence 90 --apply-now",
@@ -52,8 +52,8 @@ func NewHelpUsecase() *HelpUsecase {
 			Command:     "review",
 			Description: "Review unmapped events by date/group and apply mappings",
 			Usage:       "tt review <dates|groups|map-group|discard-group>",
-			Flags:       []string{"--date YYYY-MM-DD", "--min-duration-ms N", "--format text|json|yaml"},
-			SideEffects: []string{"reads database", "updates events mappings"},
+			Flags:       []string{"--date YYYY-MM-DD", "--project-id N", "--activity-id N", "--min-duration-ms N", "--format text|json|yaml"},
+			SideEffects: []string{"reads database", "updates event mappings"},
 			Examples:    []string{"tt review dates", "tt review groups --date 2026-02-06"},
 		},
 	}

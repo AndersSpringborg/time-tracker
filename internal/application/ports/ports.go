@@ -10,9 +10,11 @@ type RulesRepository interface {
 	ListRules(ctx context.Context) ([]domain.Rule, error)
 	AddRule(ctx context.Context, in domain.RuleInput) (int64, error)
 	DeleteRule(ctx context.Context, id int64) error
-	AnalyzeSuggestions(ctx context.Context, q domain.SuggestionQuery) ([]domain.RuleSuggestion, error)
-	AcceptSuggestion(ctx context.Context, in domain.ApplySuggestionInput) (domain.ApplySuggestionResult, error)
-	ApplyRules(ctx context.Context, in domain.ApplyRulesInput) (domain.ApplyRulesResult, error)
+	ListUnmappedEvents(ctx context.Context, date *string, minDurationMS int64) ([]domain.Event, error)
+	ListAppSuggestions(ctx context.Context, q domain.SuggestionQuery) ([]domain.RuleSuggestion, error)
+	ListTitleSuggestions(ctx context.Context, q domain.SuggestionQuery) ([]domain.RuleSuggestion, error)
+	ApplyEventMappings(ctx context.Context, updates []domain.EventMappingUpdate, manuallyMapped bool) (int64, error)
+	CurrentProjectID(ctx context.Context) (*int64, error)
 }
 
 type ReportsRepository interface {
@@ -44,6 +46,6 @@ type LifecyclePort interface {
 type ReviewRepository interface {
 	ListUnmappedDates(ctx context.Context, minDurationMS int64) ([]string, error)
 	ListGroupedUnmappedEvents(ctx context.Context, date string, minDurationMS int64) ([]domain.GroupedEvent, error)
-	MapEventsByGroup(ctx context.Context, date, appName, windowTitle string, activityID, kindID int64) (int64, error)
+	MapEventsByGroup(ctx context.Context, date, appName, windowTitle string, projectID, activityID int64) (int64, error)
 	DiscardEventsByGroup(ctx context.Context, date, appName, windowTitle string) (int64, error)
 }

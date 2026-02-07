@@ -83,18 +83,57 @@ ALTER TABLE mapping_rules ADD COLUMN IF NOT EXISTS is_global BOOLEAN DEFAULT fal
 ALTER TABLE mapping_rules ADD COLUMN IF NOT EXISTS kind_name VARCHAR;
 `},
 	{8, "fix_kinds_composite_primary_key", `
-CREATE TABLE IF NOT EXISTS kinds_new (
-    activity_id INTEGER NOT NULL REFERENCES activities(activity_id),
-    kind_id INTEGER NOT NULL,
-    name VARCHAR NOT NULL,
-    billable BOOLEAN NOT NULL DEFAULT true,
-    PRIMARY KEY (activity_id, kind_id)
-);
-INSERT INTO kinds_new SELECT activity_id, kind_id, name, billable FROM kinds ON CONFLICT DO NOTHING;
-DROP TABLE IF EXISTS kinds;
-ALTER TABLE kinds_new RENAME TO kinds;
+SELECT 1;
 `},
 	{9, "add_follow_previous_rules", `ALTER TABLE mapping_rules ADD COLUMN IF NOT EXISTS follow_previous BOOLEAN DEFAULT false;`},
+	{10, "simplify_project_activity_model", `
+ALTER TABLE events ADD COLUMN IF NOT EXISTS project_id INTEGER;
+UPDATE events SET project_id = NULL, activity_id = NULL, manually_mapped = false;
+
+DROP TABLE IF EXISTS project_assignments CASCADE;
+DROP TABLE IF EXISTS mapping_rules CASCADE;
+DROP TABLE IF EXISTS kinds CASCADE;
+DROP TABLE IF EXISTS kinds_new CASCADE;
+DROP TABLE IF EXISTS activities CASCADE;
+DROP TABLE IF EXISTS phases CASCADE;
+DROP TABLE IF EXISTS projects CASCADE;
+DROP TABLE IF EXISTS customers CASCADE;
+
+CREATE SEQUENCE IF NOT EXISTS projects_seq;
+CREATE TABLE IF NOT EXISTS projects (
+    project_id INTEGER PRIMARY KEY DEFAULT nextval('projects_seq'),
+    title VARCHAR NOT NULL,
+    metadata VARCHAR NOT NULL DEFAULT ''
+);
+
+CREATE SEQUENCE IF NOT EXISTS activities_seq;
+CREATE TABLE IF NOT EXISTS activities (
+    activity_id INTEGER PRIMARY KEY DEFAULT nextval('activities_seq'),
+    project_id INTEGER NOT NULL REFERENCES projects(project_id),
+    title VARCHAR NOT NULL
+);
+
+CREATE SEQUENCE IF NOT EXISTS mapping_rules_seq;
+CREATE TABLE IF NOT EXISTS mapping_rules (
+    id INTEGER PRIMARY KEY DEFAULT nextval('mapping_rules_seq'),
+    priority INTEGER NOT NULL DEFAULT 0,
+    app_pattern VARCHAR,
+    title_pattern VARCHAR,
+    project_id INTEGER REFERENCES projects(project_id),
+    activity_id INTEGER REFERENCES activities(activity_id),
+    follow_previous BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMP DEFAULT current_timestamp
+);
+
+CREATE SEQUENCE IF NOT EXISTS project_assignments_seq;
+CREATE TABLE IF NOT EXISTS project_assignments (
+    id INTEGER PRIMARY KEY DEFAULT nextval('project_assignments_seq'),
+    project_id INTEGER NOT NULL REFERENCES projects(project_id),
+    started_at TIMESTAMP DEFAULT current_timestamp,
+    ended_at TIMESTAMP,
+    UNIQUE(project_id, started_at)
+);
+`},
 }
 
 func migrate(db *sql.DB) error {

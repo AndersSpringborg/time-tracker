@@ -77,10 +77,10 @@ func (u *ReportsUsecase) Report(ctx context.Context, rangeKey string) (domain.Re
 		out.TotalMS += e.DurationMS
 	}
 	out.ByProject = summarize(items, mask, func(e domain.Event) string {
-		if strings.TrimSpace(e.ProjectName) == "" {
+		if strings.TrimSpace(e.ProjectTitle) == "" {
 			return "Unmapped"
 		}
-		return e.ProjectName
+		return e.ProjectTitle
 	})
 	out.ByApp = summarize(items, mask, func(e domain.Event) string { return e.AppName })
 	return out, nil
