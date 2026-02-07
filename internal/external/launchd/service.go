@@ -64,7 +64,18 @@ func (s *Service) Install(context.Context) error {
 	if err := s.waitUntilLoaded(2 * time.Second); err != nil {
 		return err
 	}
-	return s.kickstartWithRetry(10, 100*time.Millisecond)
+	if err := s.kickstartWithRetry(10, 100*time.Millisecond); err != nil {
+		// On some systems launchctl can report "Could not find service" (often exit
+		// status 113) immediately after bootstrap even though the agent is loaded.
+		// Treat that specific condition as non-fatal for install/update.
+		if isKickstartServiceNotFoundError(err) {
+			if st := s.Status(context.Background()); st.Loaded {
+				return nil
+			}
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *Service) Uninstall(context.Context) error {
@@ -184,7 +195,7 @@ func (s *Service) bootout() error {
 	cmd := exec.Command("launchctl", "bootout", serviceTarget)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		msg := strings.TrimSpace(string(out))
-		if strings.Contains(msg, "No such process") || strings.Contains(msg, "service not found") {
+		if isLaunchctlServiceNotFoundMessage(msg) {
 			return nil
 		}
 		return fmt.Errorf("launchctl bootout failed: %w: %s", err, msg)
@@ -215,7 +226,7 @@ func (s *Service) kickstartWithRetry(attempts int, delay time.Duration) error {
 		if lastErr == nil {
 			return nil
 		}
-		if !strings.Contains(lastErr.Error(), "Could not find service") {
+		if !isKickstartServiceNotFoundError(lastErr) {
 			return lastErr
 		}
 		time.Sleep(delay)
@@ -231,12 +242,26 @@ func (s *Service) kill() error {
 	cmd := exec.Command("launchctl", "kill", "TERM", serviceTarget)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		msg := strings.TrimSpace(string(out))
-		if strings.Contains(msg, "No such process") || strings.Contains(msg, "service not found") {
+		if isLaunchctlServiceNotFoundMessage(msg) {
 			return nil
 		}
 		return fmt.Errorf("launchctl kill failed: %w: %s", err, msg)
 	}
 	return nil
+}
+
+func isKickstartServiceNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return isLaunchctlServiceNotFoundMessage(err.Error())
+}
+
+func isLaunchctlServiceNotFoundMessage(msg string) bool {
+	msg = strings.ToLower(strings.TrimSpace(msg))
+	return strings.Contains(msg, "could not find service") ||
+		strings.Contains(msg, "service not found") ||
+		strings.Contains(msg, "no such process")
 }
 
 func launchdServiceTarget() (string, error) {
