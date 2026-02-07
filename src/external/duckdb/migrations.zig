@@ -19,123 +19,52 @@ pub const migrations = [_]Migration{
     .{
         .version = 1,
         .name = "create_events_table",
-        .up =
-        \\CREATE SEQUENCE IF NOT EXISTS events_seq;
-        \\CREATE TABLE IF NOT EXISTS events (
-        \\    id INTEGER PRIMARY KEY DEFAULT nextval('events_seq'),
-        \\    timestamp_ms BIGINT NOT NULL,
-        \\    app_name VARCHAR NOT NULL,
-        \\    window_title VARCHAR NOT NULL,
-        \\    duration_ms BIGINT NOT NULL,
-        \\    created_at TIMESTAMP DEFAULT current_timestamp
-        \\)
-        ,
+        .up = @embedFile("sql/001_create_events_table.sql"),
     },
     .{
         .version = 2,
         .name = "add_wifi_ssid",
-        .up = "ALTER TABLE events ADD COLUMN IF NOT EXISTS wifi_ssid VARCHAR DEFAULT ''",
+        .up = @embedFile("sql/002_add_wifi_ssid.sql"),
     },
     .{
         .version = 3,
         .name = "create_hierarchy_tables",
-        .up =
-        \\CREATE TABLE IF NOT EXISTS customers (
-        \\    customer_id INTEGER PRIMARY KEY,
-        \\    name VARCHAR NOT NULL
-        \\);
-        \\CREATE TABLE IF NOT EXISTS projects (
-        \\    project_id INTEGER PRIMARY KEY,
-        \\    customer_id INTEGER NOT NULL REFERENCES customers(customer_id),
-        \\    name VARCHAR NOT NULL
-        \\);
-        \\CREATE TABLE IF NOT EXISTS phases (
-        \\    phase_id INTEGER PRIMARY KEY,
-        \\    project_id INTEGER NOT NULL REFERENCES projects(project_id),
-        \\    name VARCHAR NOT NULL
-        \\);
-        \\CREATE TABLE IF NOT EXISTS activities (
-        \\    activity_id INTEGER PRIMARY KEY,
-        \\    phase_id INTEGER NOT NULL REFERENCES phases(phase_id),
-        \\    name VARCHAR NOT NULL
-        \\);
-        \\CREATE TABLE IF NOT EXISTS kinds (
-        \\    kind_id INTEGER PRIMARY KEY,
-        \\    activity_id INTEGER NOT NULL REFERENCES activities(activity_id),
-        \\    name VARCHAR NOT NULL,
-        \\    billable BOOLEAN NOT NULL DEFAULT true
-        \\)
-        ,
+        .up = @embedFile("sql/003_create_hierarchy_tables.sql"),
     },
     .{
         .version = 4,
         .name = "create_mapping_rules",
-        .up =
-        \\CREATE SEQUENCE IF NOT EXISTS mapping_rules_seq;
-        \\CREATE TABLE IF NOT EXISTS mapping_rules (
-        \\    id INTEGER PRIMARY KEY DEFAULT nextval('mapping_rules_seq'),
-        \\    priority INTEGER NOT NULL DEFAULT 0,
-        \\    app_pattern VARCHAR,
-        \\    title_pattern VARCHAR,
-        \\    activity_id INTEGER,
-        \\    kind_id INTEGER,
-        \\    created_at TIMESTAMP DEFAULT current_timestamp
-        \\)
-        ,
+        .up = @embedFile("sql/004_create_mapping_rules.sql"),
     },
     .{
         .version = 5,
         .name = "add_event_mapping_columns",
-        .up =
-        \\ALTER TABLE events ADD COLUMN IF NOT EXISTS activity_id INTEGER;
-        \\ALTER TABLE events ADD COLUMN IF NOT EXISTS kind_id INTEGER;
-        \\ALTER TABLE events ADD COLUMN IF NOT EXISTS manually_mapped BOOLEAN DEFAULT false
-        ,
+        .up = @embedFile("sql/005_add_event_mapping_columns.sql"),
     },
     .{
         .version = 6,
         .name = "create_project_assignments",
-        .up =
-        \\CREATE SEQUENCE IF NOT EXISTS project_assignments_seq;
-        \\CREATE TABLE IF NOT EXISTS project_assignments (
-        \\    id INTEGER PRIMARY KEY DEFAULT nextval('project_assignments_seq'),
-        \\    project_id INTEGER NOT NULL REFERENCES projects(project_id),
-        \\    started_at TIMESTAMP DEFAULT current_timestamp,
-        \\    ended_at TIMESTAMP,
-        \\    UNIQUE(project_id, started_at)
-        \\)
-        ,
+        .up = @embedFile("sql/006_create_project_assignments.sql"),
     },
     .{
         .version = 7,
         .name = "add_global_rules_support",
-        .up =
-        \\ALTER TABLE mapping_rules ADD COLUMN IF NOT EXISTS is_global BOOLEAN DEFAULT false;
-        \\ALTER TABLE mapping_rules ADD COLUMN IF NOT EXISTS kind_name VARCHAR
-        ,
+        .up = @embedFile("sql/007_add_global_rules_support.sql"),
     },
     .{
         .version = 8,
         .name = "fix_kinds_composite_primary_key",
-        .up =
-        \\CREATE TABLE IF NOT EXISTS kinds_new (
-        \\    activity_id INTEGER NOT NULL REFERENCES activities(activity_id),
-        \\    kind_id INTEGER NOT NULL,
-        \\    name VARCHAR NOT NULL,
-        \\    billable BOOLEAN NOT NULL DEFAULT true,
-        \\    PRIMARY KEY (activity_id, kind_id)
-        \\);
-        \\INSERT INTO kinds_new SELECT activity_id, kind_id, name, billable FROM kinds ON CONFLICT DO NOTHING;
-        \\DROP TABLE kinds;
-        \\ALTER TABLE kinds_new RENAME TO kinds
-        ,
+        .up = @embedFile("sql/008_fix_kinds_composite_primary_key.sql"),
     },
     .{
         .version = 9,
         .name = "add_follow_previous_rules",
-        .up =
-        \\ALTER TABLE mapping_rules ADD COLUMN IF NOT EXISTS follow_previous BOOLEAN DEFAULT false
-        ,
+        .up = @embedFile("sql/009_add_follow_previous_rules.sql"),
+    },
+    .{
+        .version = 10,
+        .name = "simplify_project_activity_model",
+        .up = @embedFile("sql/010_simplify_project_activity_model.sql"),
     },
 };
 
@@ -186,7 +115,7 @@ pub const Migrator = struct {
 
     fn applyMigration(self: *Migrator, migration: Migration) MigrationError!void {
         // Run the migration SQL
-        self.execQuery(migration.up.ptr) catch {
+        self.execQuery(migration.up) catch {
             std.debug.print("Migration {d} ({s}) failed\n", .{ migration.version, migration.name });
             return MigrationError.QueryFailed;
         };
@@ -215,9 +144,12 @@ pub const Migrator = struct {
         c.duckdb_destroy_result(&result);
     }
 
-    fn execQuery(self: *Migrator, sql: [*c]const u8) MigrationError!void {
+    fn execQuery(self: *Migrator, sql: []const u8) MigrationError!void {
+        const sql_z = std.heap.page_allocator.dupeZ(u8, sql) catch return MigrationError.QueryFailed;
+        defer std.heap.page_allocator.free(sql_z);
+
         var result: c.duckdb_result = undefined;
-        if (c.duckdb_query(self.conn, sql, &result) == c.DuckDBError) {
+        if (c.duckdb_query(self.conn, sql_z.ptr, &result) == c.DuckDBError) {
             c.duckdb_destroy_result(&result);
             return MigrationError.QueryFailed;
         }

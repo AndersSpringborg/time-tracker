@@ -104,23 +104,22 @@ test "Migrator.getCurrentVersion returns highest applied version after run" {
     try migrator.run();
 
     const version = try migrator.getCurrentVersion();
-    // Should be 9 after running all migrations
-    try std.testing.expectEqual(@as(u32, 9), version);
+    // Should be 10 after running all migrations
+    try std.testing.expectEqual(@as(u32, 10), version);
 }
 
-// Test 7: hierarchy tables are created
-test "Migrator.run creates hierarchy tables" {
+// Test 7: simplified project/activity tables are created
+test "Migrator.run creates simplified project tables" {
     const conn = try openInMemoryDb();
     var migrator = try Migrator.init(conn);
 
     try migrator.run();
 
-    // Migration 3 creates hierarchy tables
-    try std.testing.expect(tableExists(conn, "customers"));
     try std.testing.expect(tableExists(conn, "projects"));
-    try std.testing.expect(tableExists(conn, "phases"));
     try std.testing.expect(tableExists(conn, "activities"));
-    try std.testing.expect(tableExists(conn, "kinds"));
+    try std.testing.expect(!tableExists(conn, "customers"));
+    try std.testing.expect(!tableExists(conn, "phases"));
+    try std.testing.expect(!tableExists(conn, "kinds"));
 }
 
 // Test 8: mapping_rules table is created
@@ -169,4 +168,14 @@ test "Migrator.run adds follow_previous to mapping_rules" {
     try migrator.run();
 
     try std.testing.expect(columnExists(conn, "mapping_rules", "follow_previous"));
+}
+
+// Test 12: project_id column is added to events
+test "Migrator.run adds project_id to events" {
+    const conn = try openInMemoryDb();
+    var migrator = try Migrator.init(conn);
+
+    try migrator.run();
+
+    try std.testing.expect(columnExists(conn, "events", "project_id"));
 }

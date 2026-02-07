@@ -36,10 +36,15 @@
             .url = "git+https://github.com/rockorager/libvaxis.git#8a9c2d5e1b3778f1ea43c9bd5d325cfa72016584",
             .hash = "vaxis-0.5.1-BWNV_Bw_CQAIVNh1ekGVzbip25CYBQ_J3kgABnYGFnI4",
         },
+        .flatbufferz = .{
+            .url = "git+https://github.com/travisstaloch/flatbufferz#315ed9575b97c99b45235243145e4b45c184c12a",
+            .hash = "flatbufferz-0.0.1-jV8N7owbBQCWrSfiCRd_jRyoagWiDgsa3lWKzmcwG69T",
+        },
     },
     .paths = .{
         "build.zig",
         "build.zig.zon",
+        "migrations",
         "src",
         // For example...
         //"LICENSE",
