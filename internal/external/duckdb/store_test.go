@@ -94,3 +94,127 @@ func TestApplyEventMappingsUpdatesEvents(t *testing.T) {
 		t.Fatalf("unexpected event mapping project=%d activity=%d manual=%v", projectID, activityID, manual)
 	}
 }
+
+func TestApplyRulesetChangesAddsUpdatesAndDeletes(t *testing.T) {
+	s := openTestStore(t)
+	defer s.Close()
+	seedProjectActivity(t, s)
+	ctx := context.Background()
+
+	if _, err := s.db.ExecContext(ctx, `
+INSERT INTO mapping_rules (
+	rule_key, source, priority, app_pattern, title_pattern, project_id, activity_id, follow_previous,
+	action_type, action_project_title, action_activity_title, pattern_format
+) VALUES ('rule.original', 'user', 100, '(?i)^Code$', '(?i)^.*$', 10, 100, false, 'assign_explicit', NULL, NULL, 'regex')
+`); err != nil {
+		t.Fatalf("insert original rule: %v", err)
+	}
+	var existingID int64
+	if err := s.db.QueryRowContext(ctx, `SELECT id FROM mapping_rules WHERE rule_key = 'rule.original'`).Scan(&existingID); err != nil {
+		t.Fatalf("query original rule id: %v", err)
+	}
+
+	p10 := int64(10)
+	a100 := int64(100)
+	result, err := s.ApplyRulesetChanges(ctx, domain.RulesetChanges{
+		Adds: []domain.RuleInput{
+			{
+				RuleKey:      "rule.new",
+				Source:       domain.RuleSourceUser,
+				Priority:     200,
+				AppPattern:   "(?i)^Arc$",
+				TitlePattern: "(?i)^.*zoom.*$",
+				ProjectID:    &p10,
+				ActivityID:   &a100,
+				ActionType:   domain.RuleActionAssignExplicit,
+			},
+		},
+		Updates: []domain.RuleUpdate{
+			{
+				ID: existingID,
+				Rule: domain.RuleInput{
+					RuleKey:            "rule.original",
+					Source:             domain.RuleSourceUser,
+					Priority:           300,
+					AppPattern:         "(?i)^Firefox$",
+					TitlePattern:       "(?i)^.*teams.*$",
+					ActionType:         domain.RuleActionAssignActivityCurrent,
+					ActionActivityName: "meeting",
+				},
+			},
+		},
+		Deletes: []int64{},
+	})
+	if err != nil {
+		t.Fatalf("apply ruleset changes: %v", err)
+	}
+	if result.Added != 1 || result.Updated != 1 || result.Deleted != 0 {
+		t.Fatalf("unexpected apply result: %+v", result)
+	}
+
+	rules, err := s.ListRules(ctx)
+	if err != nil {
+		t.Fatalf("list rules failed: %v", err)
+	}
+	if len(rules) != 2 {
+		t.Fatalf("expected 2 rules, got %d", len(rules))
+	}
+	if rules[0].ActionType == "" {
+		t.Fatalf("expected hydrated action type")
+	}
+}
+
+func TestFindProjectAndActivityByTitle(t *testing.T) {
+	s := openTestStore(t)
+	defer s.Close()
+	seedProjectActivity(t, s)
+	ctx := context.Background()
+
+	projectID, err := s.FindProjectIDByTitle(ctx, "WEB-APP")
+	if err != nil {
+		t.Fatalf("find project by title failed: %v", err)
+	}
+	if projectID == nil || *projectID != 10 {
+		t.Fatalf("expected project id 10, got %+v", projectID)
+	}
+
+	activityID, err := s.FindActivityIDByTitle(ctx, 10, "MEETING")
+	if err != nil {
+		t.Fatalf("find activity by title failed: %v", err)
+	}
+	if activityID == nil || *activityID != 101 {
+		t.Fatalf("expected activity id 101, got %+v", activityID)
+	}
+}
+
+func TestConvertLegacyGlobRules(t *testing.T) {
+	s := openTestStore(t)
+	defer s.Close()
+	ctx := context.Background()
+
+	if _, err := s.db.ExecContext(ctx, `
+INSERT INTO mapping_rules (
+	id, priority, app_pattern, title_pattern, pattern_format, action_type, source
+) VALUES (1, 10, '*Chrome*', '*project-a*', 'glob', 'assign_explicit', 'user')
+`); err != nil {
+		t.Fatalf("insert legacy rule: %v", err)
+	}
+
+	if err := s.convertLegacyGlobRules(ctx); err != nil {
+		t.Fatalf("convert legacy rules: %v", err)
+	}
+
+	var appPattern, titlePattern, patternFormat string
+	if err := s.db.QueryRowContext(ctx, `SELECT app_pattern, title_pattern, pattern_format FROM mapping_rules WHERE id = 1`).Scan(&appPattern, &titlePattern, &patternFormat); err != nil {
+		t.Fatalf("query converted rule: %v", err)
+	}
+	if appPattern != "(?i)^.*Chrome.*$" {
+		t.Fatalf("unexpected converted app pattern: %s", appPattern)
+	}
+	if titlePattern != "(?i)^.*project-a.*$" {
+		t.Fatalf("unexpected converted title pattern: %s", titlePattern)
+	}
+	if patternFormat != "regex" {
+		t.Fatalf("expected pattern_format regex, got %s", patternFormat)
+	}
+}

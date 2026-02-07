@@ -9,12 +9,18 @@ import (
 type RulesRepository interface {
 	ListRules(ctx context.Context) ([]domain.Rule, error)
 	AddRule(ctx context.Context, in domain.RuleInput) (int64, error)
+	UpdateRule(ctx context.Context, id int64, in domain.RuleInput) error
 	DeleteRule(ctx context.Context, id int64) error
+	ApplyRulesetChanges(ctx context.Context, in domain.RulesetChanges) (domain.RulesetApplyResult, error)
 	ListUnmappedEvents(ctx context.Context, date *string, minDurationMS int64) ([]domain.Event, error)
+	ListUnmappedDates(ctx context.Context, minDurationMS int64) ([]string, error)
+	ListGroupedUnmappedEvents(ctx context.Context, date string, minDurationMS int64) ([]domain.GroupedEvent, error)
 	ListAppSuggestions(ctx context.Context, q domain.SuggestionQuery) ([]domain.RuleSuggestion, error)
 	ListTitleSuggestions(ctx context.Context, q domain.SuggestionQuery) ([]domain.RuleSuggestion, error)
 	ApplyEventMappings(ctx context.Context, updates []domain.EventMappingUpdate, manuallyMapped bool) (int64, error)
 	CurrentProjectID(ctx context.Context) (*int64, error)
+	FindProjectIDByTitle(ctx context.Context, title string) (*int64, error)
+	FindActivityIDByTitle(ctx context.Context, projectID int64, title string) (*int64, error)
 }
 
 type ReportsRepository interface {

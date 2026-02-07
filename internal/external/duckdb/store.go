@@ -3,6 +3,7 @@ package duckdb
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -14,12 +15,53 @@ type Store struct {
 	db *sql.DB
 }
 
+type ruleRow struct {
+	ID                 int64
+	RuleKey            sql.NullString
+	Source             string
+	Priority           int
+	AppPattern         sql.NullString
+	TitlePattern       sql.NullString
+	ProjectID          sql.NullInt64
+	ActivityID         sql.NullInt64
+	FollowPrevious     bool
+	ActionType         string
+	ActionProjectTitle sql.NullString
+	ActionActivityName sql.NullString
+	ProjectTitle       sql.NullString
+	ActivityTitle      sql.NullString
+}
+
+func (r ruleRow) toDomainRule() domain.Rule {
+	rule := domain.Rule{
+		ID:                 r.ID,
+		RuleKey:            nullStringValue(r.RuleKey),
+		Source:             domain.RuleSource(strings.TrimSpace(r.Source)),
+		Priority:           r.Priority,
+		AppPattern:         nullStringValue(r.AppPattern),
+		TitlePattern:       nullStringValue(r.TitlePattern),
+		ProjectID:          nullInt64Ptr(r.ProjectID),
+		ActivityID:         nullInt64Ptr(r.ActivityID),
+		FollowPrevious:     r.FollowPrevious,
+		ActionType:         domain.RuleAction(strings.TrimSpace(r.ActionType)),
+		ActionProjectTitle: nullStringValue(r.ActionProjectTitle),
+		ActionActivityName: nullStringValue(r.ActionActivityName),
+	}
+	rule.DisplayTarget = buildDisplayTarget(rule, nullStringValue(r.ProjectTitle), nullStringValue(r.ActivityTitle))
+	return rule
+}
+
 func Open(path string) (*Store, error) {
 	d, err := openDB(path)
 	if err != nil {
 		return nil, err
 	}
-	return &Store{db: d}, nil
+	s := &Store{db: d}
+	if err := s.convertLegacyGlobRules(context.Background()); err != nil {
+		_ = d.Close()
+		return nil, err
+	}
+	return s, nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -28,12 +70,17 @@ func (s *Store) ListRules(ctx context.Context) ([]domain.Rule, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT
   mr.id,
+  COALESCE(mr.rule_key, ''),
+  COALESCE(mr.source, 'user'),
   mr.priority,
   COALESCE(mr.app_pattern, ''),
   COALESCE(mr.title_pattern, ''),
   mr.project_id,
   mr.activity_id,
   COALESCE(mr.follow_previous, false),
+  COALESCE(mr.action_type, 'assign_explicit'),
+  COALESCE(mr.action_project_title, ''),
+  COALESCE(mr.action_activity_title, ''),
   COALESCE(p.title, ''),
   COALESCE(a.title, '')
 FROM mapping_rules mr
@@ -48,31 +95,43 @@ ORDER BY mr.priority DESC, mr.id DESC
 
 	out := make([]domain.Rule, 0)
 	for rows.Next() {
-		var rule domain.Rule
-		var projectTitle, activityTitle string
+		var row ruleRow
 		if err := rows.Scan(
-			&rule.ID,
-			&rule.Priority,
-			&rule.AppPattern,
-			&rule.TitlePattern,
-			&rule.ProjectID,
-			&rule.ActivityID,
-			&rule.FollowPrevious,
-			&projectTitle,
-			&activityTitle,
+			&row.ID,
+			&row.RuleKey,
+			&row.Source,
+			&row.Priority,
+			&row.AppPattern,
+			&row.TitlePattern,
+			&row.ProjectID,
+			&row.ActivityID,
+			&row.FollowPrevious,
+			&row.ActionType,
+			&row.ActionProjectTitle,
+			&row.ActionActivityName,
+			&row.ProjectTitle,
+			&row.ActivityTitle,
 		); err != nil {
 			return nil, err
 		}
-		rule.DisplayTarget = buildDisplayTarget(rule, projectTitle, activityTitle)
-		out = append(out, rule)
+		out = append(out, row.toDomainRule())
 	}
 	return out, rows.Err()
 }
 
 func buildDisplayTarget(rule domain.Rule, projectTitle, activityTitle string) string {
-	if rule.FollowPrevious {
-		return "Follow current project"
+	switch rule.EffectiveAction() {
+	case domain.RuleActionFollowCurrentContext:
+		return "Follow current project/activity"
+	case domain.RuleActionAssignActivityCurrent:
+		if strings.TrimSpace(rule.ActionActivityName) == "" {
+			return "Current project > (activity unresolved)"
+		}
+		return fmt.Sprintf("Current project > %s", rule.ActionActivityName)
+	case domain.RuleActionAssignProjectAndActivityByT:
+		return fmt.Sprintf("%s > %s", rule.ActionProjectTitle, rule.ActionActivityName)
 	}
+
 	parts := make([]string, 0, 2)
 	if strings.TrimSpace(projectTitle) != "" {
 		parts = append(parts, projectTitle)
@@ -87,11 +146,14 @@ func buildDisplayTarget(rule domain.Rule, projectTitle, activityTitle string) st
 }
 
 func (s *Store) AddRule(ctx context.Context, in domain.RuleInput) (int64, error) {
+	in = domain.NormalizeRuleInput(in)
 	res, err := s.db.ExecContext(ctx, `
 INSERT INTO mapping_rules (
-  priority, app_pattern, title_pattern, project_id, activity_id, follow_previous
-) VALUES (?, ?, ?, ?, ?, ?)
-`, in.Priority, nullIfEmpty(in.AppPattern), nullIfEmpty(in.TitlePattern), in.ProjectID, in.ActivityID, in.FollowPrevious)
+  rule_key, source, priority, app_pattern, title_pattern, project_id, activity_id, follow_previous,
+  action_type, action_project_title, action_activity_title, pattern_format
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'regex')
+`, nullIfEmpty(in.RuleKey), string(orDefaultSource(in.Source)), in.Priority, nullIfEmpty(in.AppPattern), nullIfEmpty(in.TitlePattern),
+		in.ProjectID, in.ActivityID, in.FollowPrevious, string(in.ActionType), nullIfEmpty(in.ActionProjectTitle), nullIfEmpty(in.ActionActivityName))
 	if err != nil {
 		return 0, err
 	}
@@ -99,9 +161,84 @@ INSERT INTO mapping_rules (
 	return id, nil
 }
 
+func (s *Store) UpdateRule(ctx context.Context, id int64, in domain.RuleInput) error {
+	in = domain.NormalizeRuleInput(in)
+	_, err := s.db.ExecContext(ctx, `
+UPDATE mapping_rules
+SET rule_key = ?, source = ?, priority = ?, app_pattern = ?, title_pattern = ?,
+    project_id = ?, activity_id = ?, follow_previous = ?, action_type = ?,
+    action_project_title = ?, action_activity_title = ?, pattern_format = 'regex'
+WHERE id = ?
+`, nullIfEmpty(in.RuleKey), string(orDefaultSource(in.Source)), in.Priority, nullIfEmpty(in.AppPattern), nullIfEmpty(in.TitlePattern),
+		in.ProjectID, in.ActivityID, in.FollowPrevious, string(in.ActionType), nullIfEmpty(in.ActionProjectTitle), nullIfEmpty(in.ActionActivityName), id)
+	return err
+}
+
 func (s *Store) DeleteRule(ctx context.Context, id int64) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM mapping_rules WHERE id = ?`, id)
 	return err
+}
+
+func (s *Store) ApplyRulesetChanges(ctx context.Context, in domain.RulesetChanges) (domain.RulesetApplyResult, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return domain.RulesetApplyResult{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	deleted := 0
+	for _, id := range in.Deletes {
+		res, err := tx.ExecContext(ctx, `DELETE FROM mapping_rules WHERE id = ?`, id)
+		if err != nil {
+			return domain.RulesetApplyResult{}, err
+		}
+		affected, _ := res.RowsAffected()
+		deleted += int(affected)
+	}
+
+	updated := 0
+	for _, item := range in.Updates {
+		inRule := domain.NormalizeRuleInput(item.Rule)
+		res, err := tx.ExecContext(ctx, `
+UPDATE mapping_rules
+SET rule_key = ?, source = ?, priority = ?, app_pattern = ?, title_pattern = ?,
+    project_id = ?, activity_id = ?, follow_previous = ?, action_type = ?,
+    action_project_title = ?, action_activity_title = ?, pattern_format = 'regex'
+WHERE id = ?
+`, nullIfEmpty(inRule.RuleKey), string(orDefaultSource(inRule.Source)), inRule.Priority, nullIfEmpty(inRule.AppPattern), nullIfEmpty(inRule.TitlePattern),
+			inRule.ProjectID, inRule.ActivityID, inRule.FollowPrevious, string(inRule.ActionType), nullIfEmpty(inRule.ActionProjectTitle), nullIfEmpty(inRule.ActionActivityName), item.ID)
+		if err != nil {
+			return domain.RulesetApplyResult{}, err
+		}
+		affected, _ := res.RowsAffected()
+		updated += int(affected)
+	}
+
+	added := 0
+	for _, item := range in.Adds {
+		inRule := domain.NormalizeRuleInput(item)
+		res, err := tx.ExecContext(ctx, `
+INSERT INTO mapping_rules (
+  rule_key, source, priority, app_pattern, title_pattern, project_id, activity_id, follow_previous,
+  action_type, action_project_title, action_activity_title, pattern_format
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'regex')
+`, nullIfEmpty(inRule.RuleKey), string(orDefaultSource(inRule.Source)), inRule.Priority, nullIfEmpty(inRule.AppPattern), nullIfEmpty(inRule.TitlePattern),
+			inRule.ProjectID, inRule.ActivityID, inRule.FollowPrevious, string(inRule.ActionType), nullIfEmpty(inRule.ActionProjectTitle), nullIfEmpty(inRule.ActionActivityName))
+		if err != nil {
+			return domain.RulesetApplyResult{}, err
+		}
+		affected, _ := res.RowsAffected()
+		added += int(affected)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return domain.RulesetApplyResult{}, err
+	}
+	return domain.RulesetApplyResult{
+		Added:   added,
+		Updated: updated,
+		Deleted: deleted,
+	}, nil
 }
 
 func (s *Store) ListUnmappedEvents(ctx context.Context, date *string, minDurationMS int64) ([]domain.Event, error) {
@@ -365,6 +502,42 @@ LIMIT 1
 	return &id, nil
 }
 
+func (s *Store) FindProjectIDByTitle(ctx context.Context, title string) (*int64, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx, `
+SELECT project_id
+FROM projects
+WHERE LOWER(title) = LOWER(?)
+ORDER BY project_id ASC
+LIMIT 1
+`, strings.TrimSpace(title)).Scan(&id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &id, nil
+}
+
+func (s *Store) FindActivityIDByTitle(ctx context.Context, projectID int64, title string) (*int64, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx, `
+SELECT activity_id
+FROM activities
+WHERE project_id = ? AND LOWER(title) = LOWER(?)
+ORDER BY activity_id ASC
+LIMIT 1
+`, projectID, strings.TrimSpace(title)).Scan(&id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &id, nil
+}
+
 func (s *Store) ListReportEvents(ctx context.Context, rangeKey string) ([]domain.Event, error) {
 	where, args := rangeFilter(rangeKey)
 	query := `
@@ -581,12 +754,85 @@ WHERE project_id IS NULL AND activity_id IS NULL AND manually_mapped = false
 	return n, nil
 }
 
+func (s *Store) convertLegacyGlobRules(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, COALESCE(app_pattern, ''), COALESCE(title_pattern, '')
+FROM mapping_rules
+WHERE COALESCE(pattern_format, 'glob') <> 'regex'
+`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	type legacyRule struct {
+		id    int64
+		app   string
+		title string
+	}
+	legacy := make([]legacyRule, 0)
+	for rows.Next() {
+		var item legacyRule
+		if err := rows.Scan(&item.id, &item.app, &item.title); err != nil {
+			return err
+		}
+		legacy = append(legacy, item)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(legacy) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, item := range legacy {
+		_, err := tx.ExecContext(ctx, `
+UPDATE mapping_rules
+SET app_pattern = ?, title_pattern = ?, pattern_format = 'regex'
+WHERE id = ?
+`, domain.GlobToRegexPattern(item.app), domain.GlobToRegexPattern(item.title), item.id)
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
 func nullIfEmpty(value string) any {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return nil
 	}
 	return value
+}
+
+func nullStringValue(value sql.NullString) string {
+	if !value.Valid {
+		return ""
+	}
+	return strings.TrimSpace(value.String)
+}
+
+func nullInt64Ptr(value sql.NullInt64) *int64 {
+	if !value.Valid {
+		return nil
+	}
+	copyValue := value.Int64
+	return &copyValue
+}
+
+func orDefaultSource(source domain.RuleSource) domain.RuleSource {
+	if source == "" {
+		return domain.RuleSourceUser
+	}
+	return source
 }
 
 func (s *Store) String() string { return fmt.Sprintf("duckdb-store(%p)", s.db) }

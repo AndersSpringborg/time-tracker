@@ -2,6 +2,8 @@ package usecases
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"time-tracker/internal/domain"
@@ -10,13 +12,19 @@ import (
 type fakeRulesRepo struct {
 	rules            []domain.Rule
 	added            []domain.RuleInput
+	updated          []domain.RuleUpdate
 	deleted          []int64
+	appliedChanges   domain.RulesetChanges
 	appSuggestions   []domain.RuleSuggestion
 	titleSuggestions []domain.RuleSuggestion
 	unmapped         []domain.Event
+	unmappedDates    []string
+	grouped          []domain.GroupedEvent
 	applied          []domain.EventMappingUpdate
 	appliedManual    bool
 	currentProjectID *int64
+	projectByTitle   map[string]*int64
+	activityByKey    map[string]*int64
 }
 
 func (f *fakeRulesRepo) ListRules(context.Context) ([]domain.Rule, error) { return f.rules, nil }
@@ -24,12 +32,30 @@ func (f *fakeRulesRepo) AddRule(_ context.Context, in domain.RuleInput) (int64, 
 	f.added = append(f.added, in)
 	return int64(len(f.added)), nil
 }
+func (f *fakeRulesRepo) UpdateRule(_ context.Context, id int64, in domain.RuleInput) error {
+	f.updated = append(f.updated, domain.RuleUpdate{ID: id, Rule: in})
+	return nil
+}
 func (f *fakeRulesRepo) DeleteRule(_ context.Context, id int64) error {
 	f.deleted = append(f.deleted, id)
 	return nil
 }
+func (f *fakeRulesRepo) ApplyRulesetChanges(_ context.Context, in domain.RulesetChanges) (domain.RulesetApplyResult, error) {
+	f.appliedChanges = in
+	return domain.RulesetApplyResult{
+		Added:   len(in.Adds),
+		Updated: len(in.Updates),
+		Deleted: len(in.Deletes),
+	}, nil
+}
 func (f *fakeRulesRepo) ListUnmappedEvents(context.Context, *string, int64) ([]domain.Event, error) {
 	return f.unmapped, nil
+}
+func (f *fakeRulesRepo) ListUnmappedDates(context.Context, int64) ([]string, error) {
+	return f.unmappedDates, nil
+}
+func (f *fakeRulesRepo) ListGroupedUnmappedEvents(context.Context, string, int64) ([]domain.GroupedEvent, error) {
+	return f.grouped, nil
 }
 func (f *fakeRulesRepo) ListAppSuggestions(context.Context, domain.SuggestionQuery) ([]domain.RuleSuggestion, error) {
 	return f.appSuggestions, nil
@@ -45,6 +71,12 @@ func (f *fakeRulesRepo) ApplyEventMappings(_ context.Context, updates []domain.E
 func (f *fakeRulesRepo) CurrentProjectID(context.Context) (*int64, error) {
 	return f.currentProjectID, nil
 }
+func (f *fakeRulesRepo) FindProjectIDByTitle(_ context.Context, title string) (*int64, error) {
+	return f.projectByTitle[strings.ToLower(strings.TrimSpace(title))], nil
+}
+func (f *fakeRulesRepo) FindActivityIDByTitle(_ context.Context, projectID int64, title string) (*int64, error) {
+	return f.activityByKey[fmt.Sprintf("%d::%s", projectID, strings.ToLower(strings.TrimSpace(title)))], nil
+}
 
 func TestRulesUsecaseAddRuleNormalizesDefaults(t *testing.T) {
 	repo := &fakeRulesRepo{}
@@ -56,8 +88,144 @@ func TestRulesUsecaseAddRuleNormalizesDefaults(t *testing.T) {
 	if len(repo.added) != 1 {
 		t.Fatalf("expected one add call")
 	}
-	if repo.added[0].Priority != 100 || repo.added[0].AppPattern != "*" || repo.added[0].TitlePattern != "*" {
+	if repo.added[0].Priority != 100 || repo.added[0].AppPattern != "(?i)^.*$" || repo.added[0].TitlePattern != "(?i)^.*$" {
 		t.Fatalf("expected normalized defaults")
+	}
+	if repo.added[0].ActionType != domain.RuleActionFollowCurrentContext {
+		t.Fatalf("expected follow current action")
+	}
+}
+
+func TestRulesUsecaseDraftPreviewSaveAndDiscard(t *testing.T) {
+	projectID := int64(10)
+	activityID := int64(100)
+	repo := &fakeRulesRepo{
+		rules: []domain.Rule{
+			{
+				ID:           1,
+				Priority:     100,
+				AppPattern:   "(?i)^Code$",
+				TitlePattern: "(?i)^.*$",
+				ProjectID:    &projectID,
+				ActivityID:   &activityID,
+				ActionType:   domain.RuleActionAssignExplicit,
+			},
+		},
+	}
+	uc := NewRulesUsecase(repo)
+
+	if err := uc.AddRuleToDraft(context.Background(), domain.RuleInput{
+		Priority:     200,
+		AppPattern:   "(?i)^Arc$",
+		TitlePattern: "(?i)^.*zoom.*$",
+		ProjectID:    &projectID,
+		ActivityID:   &activityID,
+	}); err != nil {
+		t.Fatalf("add draft rule failed: %v", err)
+	}
+	if err := uc.DeleteRuleFromDraft(context.Background(), 1); err != nil {
+		t.Fatalf("delete draft rule failed: %v", err)
+	}
+
+	preview, err := uc.DraftPreview(context.Background())
+	if err != nil {
+		t.Fatalf("draft preview failed: %v", err)
+	}
+	if !preview.HasChanges {
+		t.Fatalf("expected pending changes")
+	}
+	if len(preview.Rows) != 2 {
+		t.Fatalf("expected 2 preview rows, got %d", len(preview.Rows))
+	}
+
+	res, err := uc.SaveDraft(context.Background())
+	if err != nil {
+		t.Fatalf("save draft failed: %v", err)
+	}
+	if res.Added != 1 || res.Deleted != 1 {
+		t.Fatalf("unexpected save result %+v", res)
+	}
+	if len(repo.appliedChanges.Adds) != 1 || len(repo.appliedChanges.Deletes) != 1 {
+		t.Fatalf("expected 1 add and 1 delete change")
+	}
+
+	if err := uc.AddRuleToDraft(context.Background(), domain.RuleInput{
+		Priority:     100,
+		AppPattern:   "(?i)^Firefox$",
+		TitlePattern: "(?i)^.*$",
+		ProjectID:    &projectID,
+		ActivityID:   &activityID,
+	}); err != nil {
+		t.Fatalf("second add draft rule failed: %v", err)
+	}
+	uc.DiscardDraft()
+
+	preview, err = uc.DraftPreview(context.Background())
+	if err != nil {
+		t.Fatalf("preview after discard failed: %v", err)
+	}
+	if preview.HasChanges {
+		t.Fatalf("expected no changes after discard")
+	}
+}
+
+func TestRulesUsecaseReAddDefaultRulesSkipsMissingProject(t *testing.T) {
+	repo := &fakeRulesRepo{
+		projectByTitle: map[string]*int64{},
+		activityByKey:  map[string]*int64{},
+	}
+	uc := NewRulesUsecase(repo)
+
+	warnings, err := uc.ReAddDefaultRulesToDraft(context.Background())
+	if err != nil {
+		t.Fatalf("re-add defaults failed: %v", err)
+	}
+	if len(warnings) == 0 {
+		t.Fatalf("expected warning for missing project a/development")
+	}
+
+	preview, err := uc.DraftPreview(context.Background())
+	if err != nil {
+		t.Fatalf("preview failed: %v", err)
+	}
+	// one default skipped, two should remain.
+	added := 0
+	for _, row := range preview.Rows {
+		if row.Change == domain.RuleDraftAdded {
+			added++
+		}
+	}
+	if added != 2 {
+		t.Fatalf("expected 2 added default rows, got %d", added)
+	}
+}
+
+func TestRulesUsecaseAddRegexRuleFromGroups(t *testing.T) {
+	projectID := int64(10)
+	activityID := int64(100)
+	repo := &fakeRulesRepo{}
+	uc := NewRulesUsecase(repo)
+	err := uc.AddRegexRuleFromGroupsToDraft(context.Background(), []domain.GroupedEvent{
+		{AppName: "Firefox", WindowTitle: "Project Name A"},
+		{AppName: "Arc", WindowTitle: "Teams"},
+	}, domain.RuleInput{
+		Priority:   200,
+		ProjectID:  &projectID,
+		ActivityID: &activityID,
+	})
+	if err != nil {
+		t.Fatalf("add regex draft rule failed: %v", err)
+	}
+
+	preview, err := uc.DraftPreview(context.Background())
+	if err != nil {
+		t.Fatalf("preview failed: %v", err)
+	}
+	if len(preview.Rows) != 1 {
+		t.Fatalf("expected one preview row, got %d", len(preview.Rows))
+	}
+	if !strings.Contains(preview.Rows[0].Rule.AppPattern, "Firefox") || !strings.Contains(preview.Rows[0].Rule.AppPattern, "Arc") {
+		t.Fatalf("expected app regex to include selected apps")
 	}
 }
 
@@ -91,7 +259,7 @@ func TestRulesUsecaseApplyRulesUsesDomainEngine(t *testing.T) {
 	repo := &fakeRulesRepo{
 		currentProjectID: &cur,
 		rules: []domain.Rule{
-			{Priority: 100, AppPattern: "Code", TitlePattern: "*", ProjectID: &p10, ActivityID: &a100},
+			{Priority: 100, AppPattern: "(?i)^Code$", TitlePattern: "(?i)^.*$", ProjectID: &p10, ActivityID: &a100, ActionType: domain.RuleActionAssignExplicit},
 		},
 		unmapped: []domain.Event{{ID: 1, TimestampMS: 1, AppName: "Code", WindowTitle: "main.go"}},
 	}

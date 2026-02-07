@@ -13,10 +13,20 @@ import (
 
 type fakeRulesRepo struct{}
 
-func (f *fakeRulesRepo) ListRules(context.Context) ([]domain.Rule, error)         { return nil, nil }
-func (f *fakeRulesRepo) AddRule(context.Context, domain.RuleInput) (int64, error) { return 1, nil }
-func (f *fakeRulesRepo) DeleteRule(context.Context, int64) error                  { return nil }
+func (f *fakeRulesRepo) ListRules(context.Context) ([]domain.Rule, error)          { return nil, nil }
+func (f *fakeRulesRepo) AddRule(context.Context, domain.RuleInput) (int64, error)  { return 1, nil }
+func (f *fakeRulesRepo) UpdateRule(context.Context, int64, domain.RuleInput) error { return nil }
+func (f *fakeRulesRepo) DeleteRule(context.Context, int64) error                   { return nil }
+func (f *fakeRulesRepo) ApplyRulesetChanges(context.Context, domain.RulesetChanges) (domain.RulesetApplyResult, error) {
+	return domain.RulesetApplyResult{}, nil
+}
 func (f *fakeRulesRepo) ListUnmappedEvents(context.Context, *string, int64) ([]domain.Event, error) {
+	return nil, nil
+}
+func (f *fakeRulesRepo) ListUnmappedDates(context.Context, int64) ([]string, error) {
+	return nil, nil
+}
+func (f *fakeRulesRepo) ListGroupedUnmappedEvents(context.Context, string, int64) ([]domain.GroupedEvent, error) {
 	return nil, nil
 }
 func (f *fakeRulesRepo) ListAppSuggestions(context.Context, domain.SuggestionQuery) ([]domain.RuleSuggestion, error) {
@@ -41,6 +51,12 @@ func (f *fakeRulesRepo) ApplyEventMappings(context.Context, []domain.EventMappin
 	return 0, nil
 }
 func (f *fakeRulesRepo) CurrentProjectID(context.Context) (*int64, error) { return nil, nil }
+func (f *fakeRulesRepo) FindProjectIDByTitle(context.Context, string) (*int64, error) {
+	return nil, nil
+}
+func (f *fakeRulesRepo) FindActivityIDByTitle(context.Context, int64, string) (*int64, error) {
+	return nil, nil
+}
 
 func TestSuggestionsPartialRendersRows(t *testing.T) {
 	app := &usecases.App{
