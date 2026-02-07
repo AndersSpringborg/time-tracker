@@ -405,7 +405,33 @@ pub fn build(b: *std.Build) void {
         duckdb_lib_path,
         true,
     );
-    // NOTE: rule_repository_test.zig and hierarchy_repository_test.zig still
-    // target pre-v10 hierarchy schema (kinds/customers/phases relationships).
-    // Keep them out of the strict default suite until they are migrated.
+    add_zig_test(
+        b,
+        test_step,
+        b.path("src/external/duckdb/rule_repository_test.zig"),
+        target,
+        optimize,
+        &.{
+            .{ .name = "domain_rule", .module = domain_rule_module },
+            .{ .name = "duckdb_rule_repository", .module = duckdb_rule_repository },
+            .{ .name = "migrations", .module = migrations_module },
+        },
+        duckdb_include_path,
+        duckdb_lib_path,
+        true,
+    );
+    add_zig_test(
+        b,
+        test_step,
+        b.path("src/external/duckdb/hierarchy_repository_test.zig"),
+        target,
+        optimize,
+        &.{
+            .{ .name = "duckdb_hierarchy_repository", .module = duckdb_hierarchy_repository },
+            .{ .name = "migrations", .module = migrations_module },
+        },
+        duckdb_include_path,
+        duckdb_lib_path,
+        true,
+    );
 }
