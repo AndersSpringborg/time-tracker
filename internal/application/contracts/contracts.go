@@ -106,6 +106,7 @@ type ReportsDashboardResponse struct {
 
 type ReportsBuildRequest struct {
 	RangeKey string
+	Date     *string
 }
 type ReportsBuildResponse struct {
 	Report domain.Report

@@ -30,7 +30,7 @@ func (u *ReportsUsecase) Dashboard(ctx context.Context, _ contracts.ReportsDashb
 	if err != nil {
 		return contracts.ReportsDashboardResponse{}, err
 	}
-	items, err := u.reportsRepo.ListReportEvents(ctx, "today")
+	items, err := u.reportsRepo.ListReportEvents(ctx, "today", nil)
 	if err != nil {
 		return contracts.ReportsDashboardResponse{}, err
 	}
@@ -60,13 +60,15 @@ func (u *ReportsUsecase) Report(ctx context.Context, req contracts.ReportsBuildR
 	if err != nil {
 		return contracts.ReportsBuildResponse{}, err
 	}
-	items, err := u.reportsRepo.ListReportEvents(ctx, req.RangeKey)
+	rangeKey := NormalizeRange(req.RangeKey)
+	reportDate := NormalizeReportDate(valueOrEmpty(req.Date))
+	items, err := u.reportsRepo.ListReportEvents(ctx, rangeKey, reportDate)
 	if err != nil {
 		return contracts.ReportsBuildResponse{}, err
 	}
 	mask := domain.BuildNoiseMask(items, cfg.NoiseAppPatterns, cfg.NoiseBucketMinutes, cfg.NoiseSwitchMinutes)
 
-	out := domain.Report{Range: req.RangeKey}
+	out := domain.Report{Range: rangeKey}
 	for i, e := range items {
 		if e.DurationMS <= 0 {
 			continue
@@ -121,6 +123,28 @@ func NormalizeRange(v string) string {
 	}
 }
 
+func NormalizeReportDate(raw string) *string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parsed, err := time.ParseInLocation("2006-01-02", raw, time.Local)
+	if err != nil {
+		return nil
+	}
+	normalized := parsed.Format("2006-01-02")
+	return &normalized
+}
+
+func PreviousDate(raw string) string {
+	normalized := NormalizeReportDate(raw)
+	base := time.Now()
+	if normalized != nil {
+		base, _ = time.ParseInLocation("2006-01-02", *normalized, time.Local)
+	}
+	return base.AddDate(0, 0, -1).Format("2006-01-02")
+}
+
 func RangeStart(rangeKey string, now time.Time) *int64 {
 	switch rangeKey {
 	case "week":
@@ -133,4 +157,11 @@ func RangeStart(rangeKey string, now time.Time) *int64 {
 		from := time.Date(y, m, d, 0, 0, 0, 0, now.Location()).UnixMilli()
 		return &from
 	}
+}
+
+func valueOrEmpty(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
 }

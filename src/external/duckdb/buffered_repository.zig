@@ -73,6 +73,7 @@ pub const BufferedRepository = struct {
 
     const Self = @This();
     const DEFAULT_FLUSH_DELAY_MS: u64 = 5000; // 5 seconds
+    pub const MIN_BUFFER_CAPACITY: usize = 64; // keep small steady-state reservation
     const MAX_BUFFER_SIZE: usize = 1000; // Force flush if buffer gets too large
 
     pub fn init(allocator: std.mem.Allocator, db_path: [:0]const u8) Self {
@@ -110,6 +111,8 @@ pub const BufferedRepository = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
+        self.ensureMinCapacityLocked();
+
         const buffered = BufferedEvent.fromEvent(event, duration_ms);
         self.buffer.append(self.allocator, buffered) catch {
             std.debug.print("BufferedRepository: Failed to buffer event\n", .{});
@@ -134,6 +137,7 @@ pub const BufferedRepository = struct {
     /// Flush buffer to database (must hold lock)
     fn flushToDbLocked(self: *Self) void {
         if (self.buffer.items.len == 0) {
+            self.ensureMinCapacityLocked();
             return;
         }
 
@@ -144,6 +148,9 @@ pub const BufferedRepository = struct {
         };
         defer repo.deinit();
 
+        const buffered_count = self.buffer.items.len;
+        const previous_capacity = self.buffer.capacity;
+
         // Flush all buffered events
         var flushed: usize = 0;
         for (self.buffer.items) |*buffered| {
@@ -152,12 +159,15 @@ pub const BufferedRepository = struct {
             flushed += 1;
         }
 
-        if (flushed > 0) {
-            std.debug.print("BufferedRepository: Flushed {d} events to database\n", .{flushed});
-        }
+        // Clear buffered items and return capacity to a small steady-state baseline.
+        self.buffer.clearAndFree(self.allocator);
+        self.ensureMinCapacityLocked();
+        self.last_event_time = 0;
 
-        // Clear buffer
-        self.buffer.clearRetainingCapacity();
+        std.debug.print(
+            "BufferedRepository: Flushed {d}/{d} events to database (capacity {d} -> {d})\n",
+            .{ flushed, buffered_count, previous_capacity, self.buffer.capacity },
+        );
     }
 
     /// Background thread that checks for flush conditions
@@ -191,5 +201,24 @@ pub const BufferedRepository = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
         return self.buffer.items.len;
+    }
+
+    /// Get the current buffer capacity (for testing/debugging).
+    pub fn bufferedCapacity(self: *Self) usize {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.buffer.capacity;
+    }
+
+    fn ensureMinCapacityLocked(self: *Self) void {
+        if (self.buffer.capacity >= MIN_BUFFER_CAPACITY) {
+            return;
+        }
+        self.buffer.ensureTotalCapacityPrecise(self.allocator, MIN_BUFFER_CAPACITY) catch {
+            std.debug.print(
+                "BufferedRepository: Failed to reserve minimum capacity ({d})\n",
+                .{MIN_BUFFER_CAPACITY},
+            );
+        };
     }
 };

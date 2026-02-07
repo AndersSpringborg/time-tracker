@@ -1,6 +1,7 @@
 package launchd
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -88,6 +89,32 @@ func TestDeployWorkerBinaryReplacesPlaceholder(t *testing.T) {
 	}
 	if len(got) != len(desired) || got[0] != desired[0] {
 		t.Fatalf("placeholder should be replaced with desired payload")
+	}
+}
+
+func TestIsLaunchctlServiceNotFoundMessage(t *testing.T) {
+	cases := []string{
+		"Could not find service \"com.time-tracker.worker\" in domain for user gui: 501",
+		"service not found",
+		"No such process",
+	}
+	for _, input := range cases {
+		if !isLaunchctlServiceNotFoundMessage(input) {
+			t.Fatalf("expected not-found match for %q", input)
+		}
+	}
+
+	if isLaunchctlServiceNotFoundMessage("permission denied") {
+		t.Fatalf("did not expect permission error to match not-found")
+	}
+}
+
+func TestIsKickstartServiceNotFoundError(t *testing.T) {
+	if !isKickstartServiceNotFoundError(errors.New("launchctl kickstart failed: exit status 113: Could not find service")) {
+		t.Fatalf("expected kickstart not-found to match")
+	}
+	if isKickstartServiceNotFoundError(nil) {
+		t.Fatalf("nil error should not match")
 	}
 }
 

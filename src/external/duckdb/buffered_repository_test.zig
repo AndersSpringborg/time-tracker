@@ -1,5 +1,6 @@
 const std = @import("std");
 const BufferedEvent = @import("buffered_repository.zig").BufferedEvent;
+const BufferedRepository = @import("buffered_repository.zig").BufferedRepository;
 const Event = @import("domain_event").Event;
 
 test "BufferedEvent.fromEvent copies data correctly" {
@@ -68,4 +69,46 @@ test "BufferedEvent truncates long strings" {
 
     // Should be truncated to 256
     try std.testing.expectEqual(@as(usize, 256), buffered.app_name_len);
+}
+
+fn testEvent(timestamp_ms: i64) Event {
+    return Event{
+        .timestamp_ms = timestamp_ms,
+        .app_name = "TestApp",
+        .window_title = "Window",
+        .wifi_ssid = "Wifi",
+    };
+}
+
+test "BufferedRepository keeps small baseline capacity after successful flush" {
+    var repo = BufferedRepository.init(std.testing.allocator, ":memory:");
+    defer repo.deinit();
+
+    const total = BufferedRepository.MIN_BUFFER_CAPACITY + 80;
+    for (0..total) |i| {
+        const ts: i64 = @intCast(i + 1);
+        repo.save(testEvent(ts), 1000);
+    }
+
+    try std.testing.expectEqual(total, repo.bufferedCount());
+    const grown_capacity = repo.bufferedCapacity();
+    try std.testing.expect(grown_capacity > BufferedRepository.MIN_BUFFER_CAPACITY);
+
+    repo.flushToDb();
+
+    try std.testing.expectEqual(@as(usize, 0), repo.bufferedCount());
+    try std.testing.expectEqual(BufferedRepository.MIN_BUFFER_CAPACITY, repo.bufferedCapacity());
+}
+
+test "BufferedRepository preserves buffered events on flush failure" {
+    var repo = BufferedRepository.init(std.testing.allocator, "/definitely-missing-dir/time-tracker/memory-test.db");
+    defer repo.deinit();
+
+    repo.save(testEvent(1), 1000);
+    const before_capacity = repo.bufferedCapacity();
+
+    repo.flushToDb();
+
+    try std.testing.expectEqual(@as(usize, 1), repo.bufferedCount());
+    try std.testing.expectEqual(before_capacity, repo.bufferedCapacity());
 }

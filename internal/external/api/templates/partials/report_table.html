@@ -1,5 +1,10 @@
 {{define "partials/report_table"}}
 <div class="stack">
+  {{if .ReportDateActive}}
+  <p class="muted">Showing date: {{.ReportDate}}</p>
+  {{else}}
+  <p class="muted">Showing range: {{.Report.Range}}</p>
+  {{end}}
   <p>Total tracked: <strong>{{formatDuration .Report.TotalMS}}</strong></p>
   <p class="muted">Excluded noisy events: {{.Report.ExcludedEvents}}</p>
 </div>

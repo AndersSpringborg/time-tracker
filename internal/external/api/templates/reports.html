@@ -1,15 +1,24 @@
 {{define "reports"}}
 <section class="card">
   <h2>Reports</h2>
-  <form class="inline-form" hx-get="/partials/reports" hx-target="#reports-table" hx-swap="innerHTML">
+  <div class="inline-form">
+    <a href="/reports?range={{.Range}}&date={{.PrevReportDate}}">Previous day</a>
+    <form class="inline-form" action="/reports" method="get">
+      <input type="hidden" name="range" value="{{.Range}}">
+      <label for="report-date">Date</label>
+      <input type="date" id="report-date" name="date" value="{{.ReportDate}}">
+      <button type="submit">View day</button>
+    </form>
+  </div>
+  <form class="inline-form" action="/reports" method="get">
     <label for="range">Range</label>
     <select name="range" id="range">
       <option value="today" {{if eq .Range "today"}}selected{{end}}>Today</option>
       <option value="week" {{if eq .Range "week"}}selected{{end}}>Last 7 Days</option>
       <option value="all" {{if eq .Range "all"}}selected{{end}}>All time</option>
     </select>
-    <button type="submit">Refresh</button>
+    <button type="submit">Refresh range</button>
   </form>
-  <div id="reports-table" hx-get="/partials/reports?range={{.Range}}" hx-trigger="load" hx-swap="innerHTML">Loading...</div>
+  <div id="reports-table" hx-get="/partials/reports?range={{.Range}}{{if .ReportDateActive}}&date={{.ReportDate}}{{end}}" hx-trigger="load" hx-swap="innerHTML">Loading...</div>
 </section>
 {{end}}

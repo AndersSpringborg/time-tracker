@@ -62,6 +62,44 @@ func (f *fakeRulesRepo) FindActivityIDByTitle(context.Context, int64, string) (*
 	return nil, nil
 }
 
+type fakeReportsRepoForAPI struct{}
+
+func (f *fakeReportsRepoForAPI) ListReportEvents(context.Context, string, *string) ([]domain.Event, error) {
+	return []domain.Event{
+		{
+			ID:           1,
+			TimestampMS:  1,
+			DurationMS:   60_000,
+			AppName:      "Code",
+			ProjectTitle: "project a",
+		},
+	}, nil
+}
+
+type fakeProjectsRepoForAPI struct{}
+
+func (fakeProjectsRepoForAPI) ListActiveProjects(context.Context) ([]domain.Project, error) {
+	return nil, nil
+}
+func (fakeProjectsRepoForAPI) ListAllProjects(context.Context) ([]domain.Project, error) {
+	return nil, nil
+}
+func (fakeProjectsRepoForAPI) ActivateProject(context.Context, int64) error { return nil }
+func (fakeProjectsRepoForAPI) EndProject(context.Context, int64) error      { return nil }
+func (fakeProjectsRepoForAPI) EndAllProjects(context.Context) error         { return nil }
+func (fakeProjectsRepoForAPI) CurrentProject(context.Context) (string, *int64, error) {
+	return "", nil, nil
+}
+
+type fakeSettingsRepoForAPI struct{}
+
+func (fakeSettingsRepoForAPI) Load(context.Context) (domain.Settings, string, error) {
+	return domain.Settings{}, "", nil
+}
+func (fakeSettingsRepoForAPI) Save(context.Context, domain.Settings) (string, error) {
+	return "", nil
+}
+
 func TestSuggestionsPartialRendersRows(t *testing.T) {
 	app := &usecases.App{
 		Rules: usecases.NewRulesUsecase(&fakeRulesRepo{}),
@@ -105,6 +143,78 @@ func TestRulesPartialRendersDraftActions(t *testing.T) {
 	}
 	if !strings.Contains(body, "Draft Preview") {
 		t.Fatalf("expected draft preview heading")
+	}
+}
+
+func TestReportsPageRendersDayNavigationControls(t *testing.T) {
+	app := &usecases.App{
+		Reports: usecases.NewReportsUsecase(&fakeReportsRepoForAPI{}, fakeProjectsRepoForAPI{}, fakeSettingsRepoForAPI{}),
+	}
+	s, err := New(app)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/reports", nil)
+	rr := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "Previous day") {
+		t.Fatalf("expected previous day control")
+	}
+	if !strings.Contains(body, `type="date"`) {
+		t.Fatalf("expected date input")
+	}
+	if !strings.Contains(body, "Refresh range") {
+		t.Fatalf("expected range refresh button")
+	}
+}
+
+func TestReportsPartialShowsDateContext(t *testing.T) {
+	app := &usecases.App{
+		Reports: usecases.NewReportsUsecase(&fakeReportsRepoForAPI{}, fakeProjectsRepoForAPI{}, fakeSettingsRepoForAPI{}),
+	}
+	s, err := New(app)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/partials/reports?range=all&date=2026-02-07", nil)
+	rr := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "Showing date: 2026-02-07") {
+		t.Fatalf("expected selected date context, got %s", body)
+	}
+}
+
+func TestReportsPartialShowsRangeContextWithoutDate(t *testing.T) {
+	app := &usecases.App{
+		Reports: usecases.NewReportsUsecase(&fakeReportsRepoForAPI{}, fakeProjectsRepoForAPI{}, fakeSettingsRepoForAPI{}),
+	}
+	s, err := New(app)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/partials/reports?range=week", nil)
+	rr := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "Showing range: week") {
+		t.Fatalf("expected range context, got %s", body)
 	}
 }
 
