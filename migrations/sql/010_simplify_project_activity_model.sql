@@ -34,6 +34,14 @@ WHERE a.project_id IS NULL
   AND a.phase_id = p.phase_id;
 UPDATE activities SET title = COALESCE(title, name, '');
 
+CREATE SEQUENCE IF NOT EXISTS kinds_seq;
+CREATE TABLE IF NOT EXISTS kinds (
+    kind_id INTEGER PRIMARY KEY DEFAULT nextval('kinds_seq'),
+    activity_id INTEGER NOT NULL REFERENCES activities(activity_id),
+    name VARCHAR NOT NULL,
+    billable BOOLEAN NOT NULL DEFAULT true
+);
+
 INSERT INTO customers (customer_id, name)
 SELECT 0, 'Legacy'
 WHERE NOT EXISTS (SELECT 1 FROM customers WHERE customer_id = 0);
@@ -51,7 +59,10 @@ CREATE TABLE IF NOT EXISTS mapping_rules (
     app_pattern VARCHAR,
     title_pattern VARCHAR,
     project_id INTEGER REFERENCES projects(project_id),
-    activity_id INTEGER REFERENCES activities(activity_id),
+    activity_id INTEGER,
+    kind_id INTEGER,
+    is_global BOOLEAN NOT NULL DEFAULT false,
+    kind_name VARCHAR,
     follow_previous BOOLEAN NOT NULL DEFAULT false,
     created_at TIMESTAMP DEFAULT current_timestamp
 );
