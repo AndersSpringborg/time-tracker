@@ -38,6 +38,9 @@ type pageData struct {
 	BodyHTML          template.HTML
 	Flash             string
 	Range             string
+	ReportDate        string
+	ReportDateActive  bool
+	PrevReportDate    string
 	Config            domain.Settings
 	NoisePatternsText string
 	WorkWifisText     string
@@ -218,17 +221,51 @@ func (s *Server) handleDashboardPartial(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleReports(w http.ResponseWriter, r *http.Request) {
 	rangeKey := usecases.NormalizeRange(r.URL.Query().Get("range"))
-	s.render(w, "layout", pageData{Title: "Reports", Page: "reports", Body: "reports", Range: rangeKey})
+	requestDate := usecases.NormalizeReportDate(r.URL.Query().Get("date"))
+	dateActive := requestDate != nil
+	if !dateActive && strings.TrimSpace(r.URL.Query().Get("range")) == "" {
+		today := time.Now().Format("2006-01-02")
+		requestDate = &today
+		dateActive = true
+	}
+
+	reportDate := time.Now().Format("2006-01-02")
+	if requestDate != nil {
+		reportDate = *requestDate
+	}
+
+	s.render(w, "layout", pageData{
+		Title:            "Reports",
+		Page:             "reports",
+		Body:             "reports",
+		Range:            rangeKey,
+		ReportDate:       reportDate,
+		ReportDateActive: dateActive,
+		PrevReportDate:   usecases.PreviousDate(reportDate),
+	})
 }
 
 func (s *Server) handleReportsPartial(w http.ResponseWriter, r *http.Request) {
 	rangeKey := usecases.NormalizeRange(r.URL.Query().Get("range"))
-	res, err := s.app.Reports.Report(r.Context(), contracts.ReportsBuildRequest{RangeKey: rangeKey})
+	requestDate := usecases.NormalizeReportDate(r.URL.Query().Get("date"))
+	res, err := s.app.Reports.Report(r.Context(), contracts.ReportsBuildRequest{RangeKey: rangeKey, Date: requestDate})
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	s.render(w, "partials/report_table", pageData{Report: res.Report})
+
+	reportDate := time.Now().Format("2006-01-02")
+	if requestDate != nil {
+		reportDate = *requestDate
+	}
+
+	s.render(w, "partials/report_table", pageData{
+		Report:           res.Report,
+		Range:            rangeKey,
+		ReportDate:       reportDate,
+		ReportDateActive: requestDate != nil,
+		PrevReportDate:   usecases.PreviousDate(reportDate),
+	})
 }
 
 func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {

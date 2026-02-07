@@ -25,7 +25,7 @@ type RulesRepository interface {
 }
 
 type ReportsRepository interface {
-	ListReportEvents(ctx context.Context, rangeKey string) ([]domain.Event, error)
+	ListReportEvents(ctx context.Context, rangeKey string, date *string) ([]domain.Event, error)
 }
 
 type ProjectsRepository interface {

@@ -3,6 +3,7 @@ package duckdb
 import (
 	"context"
 	"testing"
+	"time"
 
 	"time-tracker/internal/domain"
 )
@@ -261,6 +262,53 @@ func TestSyncImportedActivitiesReconcilesRows(t *testing.T) {
 	}
 	if second.Updated != 1 || second.Deleted != 1 {
 		t.Fatalf("unexpected second sync result: %+v", second)
+	}
+}
+
+func TestListReportEventsFiltersByDate(t *testing.T) {
+	s := openTestStore(t)
+	defer s.Close()
+	ctx := context.Background()
+
+	ts1 := time.Date(2026, time.February, 6, 12, 0, 0, 0, time.Local).UnixMilli()
+	ts2 := time.Date(2026, time.February, 7, 12, 0, 0, 0, time.Local).UnixMilli()
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO events (id, timestamp_ms, app_name, window_title, duration_ms, manually_mapped) VALUES (1, ?, 'Code', 'a', 60000, false)`, ts1); err != nil {
+		t.Fatalf("insert first event: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO events (id, timestamp_ms, app_name, window_title, duration_ms, manually_mapped) VALUES (2, ?, 'Code', 'b', 60000, false)`, ts2); err != nil {
+		t.Fatalf("insert second event: %v", err)
+	}
+
+	date := "2026-02-06"
+	events, err := s.ListReportEvents(ctx, "all", &date)
+	if err != nil {
+		t.Fatalf("list report events by date: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event for date filter, got %d", len(events))
+	}
+	if events[0].ID != 1 {
+		t.Fatalf("expected event id 1, got %d", events[0].ID)
+	}
+}
+
+func TestListReportEventsDateTakesPrecedenceOverRange(t *testing.T) {
+	s := openTestStore(t)
+	defer s.Close()
+	ctx := context.Background()
+
+	ts1 := time.Date(2026, time.February, 6, 12, 0, 0, 0, time.Local).UnixMilli()
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO events (id, timestamp_ms, app_name, window_title, duration_ms, manually_mapped) VALUES (10, ?, 'Code', 'a', 60000, false)`, ts1); err != nil {
+		t.Fatalf("insert event: %v", err)
+	}
+
+	date := "2026-02-06"
+	events, err := s.ListReportEvents(ctx, "today", &date)
+	if err != nil {
+		t.Fatalf("list report events with range+date: %v", err)
+	}
+	if len(events) != 1 || events[0].ID != 10 {
+		t.Fatalf("expected date to take precedence over range, got %+v", events)
 	}
 }
 

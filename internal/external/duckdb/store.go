@@ -538,8 +538,8 @@ LIMIT 1
 	return &id, nil
 }
 
-func (s *Store) ListReportEvents(ctx context.Context, rangeKey string) ([]domain.Event, error) {
-	where, args := rangeFilter(rangeKey)
+func (s *Store) ListReportEvents(ctx context.Context, rangeKey string, date *string) ([]domain.Event, error) {
+	where, args := rangeFilter(rangeKey, date)
 	query := `
 SELECT
   e.id,
@@ -572,7 +572,11 @@ ORDER BY e.timestamp_ms ASC
 	return out, rows.Err()
 }
 
-func rangeFilter(rangeKey string) (string, []any) {
+func rangeFilter(rangeKey string, date *string) (string, []any) {
+	if date != nil && strings.TrimSpace(*date) != "" {
+		return `WHERE DATE(TO_TIMESTAMP(e.timestamp_ms / 1000)) = ?`, []any{strings.TrimSpace(*date)}
+	}
+
 	now := time.Now()
 	switch rangeKey {
 	case "week":
