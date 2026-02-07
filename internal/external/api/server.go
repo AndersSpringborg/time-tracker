@@ -21,7 +21,7 @@ import (
 	apidto "time-tracker/internal/external/api/dto"
 )
 
-//go:embed templates/*.html templates/partials/*.html static/*
+//go:embed templates/*.html templates/partials/*.html static/* content/*.md
 var assets embed.FS
 
 type Server struct {
@@ -81,6 +81,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
 
 	mux.HandleFunc("/", s.redirect("/dashboard"))
+	mux.HandleFunc("/docs", s.handleDocs)
 	mux.HandleFunc("/dashboard", s.handleDashboard)
 	mux.HandleFunc("/partials/dashboard", s.handleDashboardPartial)
 	mux.HandleFunc("/reports", s.handleReports)
@@ -674,12 +675,14 @@ func (s *Server) render(w http.ResponseWriter, name string, data any) {
 			http.Error(w, "invalid layout data", 500)
 			return
 		}
-		var body bytes.Buffer
-		if err := s.templates.ExecuteTemplate(&body, pd.Body, pd); err != nil {
-			http.Error(w, err.Error(), 500)
-			return
+		if pd.BodyHTML == "" {
+			var body bytes.Buffer
+			if err := s.templates.ExecuteTemplate(&body, pd.Body, pd); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			pd.BodyHTML = template.HTML(body.String())
 		}
-		pd.BodyHTML = template.HTML(body.String())
 		if err := s.templates.ExecuteTemplate(w, name, pd); err != nil {
 			http.Error(w, err.Error(), 500)
 		}

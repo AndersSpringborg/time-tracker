@@ -5,6 +5,7 @@ go 1.25
 require (
 	github.com/duckdb/duckdb-go/v2 v2.5.5
 	github.com/google/flatbuffers v25.12.19+incompatible
+	github.com/yuin/goldmark v1.7.13
 	gopkg.in/yaml.v3 v3.0.1
 )
 

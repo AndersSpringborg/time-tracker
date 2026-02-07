@@ -129,6 +129,30 @@ func TestIntegrationsHubRendersTidsregCard(t *testing.T) {
 	}
 }
 
+func TestDocsPageRendersMarkdownAndActiveNav(t *testing.T) {
+	s, err := New(&usecases.App{})
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/docs", nil)
+	rr := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "Getting Started") {
+		t.Fatalf("expected getting started heading in body")
+	}
+	if !strings.Contains(body, "href=\"/docs\" class=\"active\"") {
+		t.Fatalf("expected docs nav link to be active")
+	}
+	if !strings.Contains(body, "language-mermaid") {
+		t.Fatalf("expected mermaid code block in rendered markdown")
+	}
+}
+
 func TestTidsregIntegrationPageRendersLoginForm(t *testing.T) {
 	s, err := New(&usecases.App{})
 	if err != nil {
