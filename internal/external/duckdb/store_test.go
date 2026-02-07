@@ -187,6 +187,81 @@ func TestFindProjectAndActivityByTitle(t *testing.T) {
 	}
 }
 
+func TestUpsertImportedProjectCreatesAndUpdates(t *testing.T) {
+	s := openTestStore(t)
+	defer s.Close()
+	ctx := context.Background()
+
+	first, err := s.UpsertImportedProject(ctx, domain.ImportedProjectUpsert{
+		Source:             "tidsreg",
+		ExternalCustomerID: 1,
+		ExternalProjectID:  10,
+		ExternalPhaseID:    100,
+		Title:              "A > B > C",
+		Metadata:           "meta1",
+	})
+	if err != nil {
+		t.Fatalf("upsert create failed: %v", err)
+	}
+	if !first.Created || first.ProjectID <= 0 {
+		t.Fatalf("expected created project, got %+v", first)
+	}
+
+	second, err := s.UpsertImportedProject(ctx, domain.ImportedProjectUpsert{
+		Source:             "tidsreg",
+		ExternalCustomerID: 1,
+		ExternalProjectID:  10,
+		ExternalPhaseID:    100,
+		Title:              "A > B > C updated",
+		Metadata:           "meta2",
+	})
+	if err != nil {
+		t.Fatalf("upsert update failed: %v", err)
+	}
+	if second.Created || !second.Updated || second.ProjectID != first.ProjectID {
+		t.Fatalf("expected update on same project, got %+v", second)
+	}
+}
+
+func TestSyncImportedActivitiesReconcilesRows(t *testing.T) {
+	s := openTestStore(t)
+	defer s.Close()
+	ctx := context.Background()
+
+	project, err := s.UpsertImportedProject(ctx, domain.ImportedProjectUpsert{
+		Source:             "tidsreg",
+		ExternalCustomerID: 7,
+		ExternalProjectID:  8,
+		ExternalPhaseID:    9,
+		Title:              "Cust > Proj > Phase",
+		Metadata:           "meta",
+	})
+	if err != nil {
+		t.Fatalf("upsert project failed: %v", err)
+	}
+
+	first, err := s.SyncImportedActivities(ctx, project.ProjectID, []domain.ImportedActivityUpsert{
+		{Source: "tidsreg", ExternalActivityID: 1000, Title: "Coding"},
+		{Source: "tidsreg", ExternalActivityID: 1001, Title: "Meeting"},
+	})
+	if err != nil {
+		t.Fatalf("sync first failed: %v", err)
+	}
+	if first.Created != 2 || first.Updated != 0 || first.Deleted != 0 {
+		t.Fatalf("unexpected first sync result: %+v", first)
+	}
+
+	second, err := s.SyncImportedActivities(ctx, project.ProjectID, []domain.ImportedActivityUpsert{
+		{Source: "tidsreg", ExternalActivityID: 1000, Title: "Coding Updated"},
+	})
+	if err != nil {
+		t.Fatalf("sync second failed: %v", err)
+	}
+	if second.Updated != 1 || second.Deleted != 1 {
+		t.Fatalf("unexpected second sync result: %+v", second)
+	}
+}
+
 func TestConvertLegacyGlobRules(t *testing.T) {
 	s := openTestStore(t)
 	defer s.Close()

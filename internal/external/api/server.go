@@ -19,8 +19,9 @@ import (
 var assets embed.FS
 
 type Server struct {
-	app       *usecases.App
-	templates *template.Template
+	app            *usecases.App
+	templates      *template.Template
+	tidsregSession *tidsregSessionStore
 }
 
 type pageData struct {
@@ -45,6 +46,12 @@ type pageData struct {
 	DraftMinDuration  int64
 	DraftGroups       []domain.GroupedEvent
 	RuleSummary       string
+	TidsregCustomers  []domain.TidsregCustomer
+	TidsregPreview    domain.TidsregImportPreview
+	TidsregResult     domain.TidsregImportResult
+	TidsregSummary    string
+	TidsregError      string
+	TidsregMode       string
 }
 
 func New(app *usecases.App) (*Server, error) {
@@ -53,7 +60,7 @@ func New(app *usecases.App) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{app: app, templates: tpl}, nil
+	return &Server{app: app, templates: tpl, tidsregSession: newTidsregSessionStore()}, nil
 }
 
 func (s *Server) Routes() http.Handler {
@@ -84,6 +91,12 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/projects/activate", s.handleProjectActivate)
 	mux.HandleFunc("/projects/clear", s.handleProjectClear)
 	mux.HandleFunc("/projects/", s.handleProjectEnd)
+	mux.HandleFunc("/integrations/tidsreg", s.handleTidsregPage)
+	mux.HandleFunc("/partials/tidsreg/login", s.handleTidsregLoginPartial)
+	mux.HandleFunc("/integrations/tidsreg/session", s.handleTidsregSession)
+	mux.HandleFunc("/integrations/tidsreg/session/clear", s.handleTidsregSessionClear)
+	mux.HandleFunc("/integrations/tidsreg/preview", s.handleTidsregPreview)
+	mux.HandleFunc("/integrations/tidsreg/import", s.handleTidsregImport)
 	mux.HandleFunc("/settings", s.handleSettings)
 	mux.HandleFunc("/collector/start", s.handleCollectorStart)
 	mux.HandleFunc("/collector/stop", s.handleCollectorStop)

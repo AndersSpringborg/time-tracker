@@ -1,0 +1,20 @@
+{{define "partials/tidsreg_login"}}
+<div class="stack">
+  {{if .TidsregError}}<p class="flash">{{.TidsregError}}</p>{{end}}
+  <form class="grid-form" hx-post="/integrations/tidsreg/session" hx-target="#tidsreg-flow" hx-swap="innerHTML">
+    <label>Username
+      <input type="text" name="username" autocomplete="username" required>
+    </label>
+    <label>Password
+      <input type="password" name="password" autocomplete="current-password" required>
+    </label>
+    <label>Mode
+      <select name="mode">
+        <option value="0" {{if eq .TidsregMode "0"}}selected{{end}}>Time (0)</option>
+        <option value="2" {{if eq .TidsregMode "2"}}selected{{end}}>Voucher (2)</option>
+      </select>
+    </label>
+    <button type="submit">Load Customers</button>
+  </form>
+</div>
+{{end}}
