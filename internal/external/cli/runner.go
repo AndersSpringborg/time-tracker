@@ -73,9 +73,10 @@ func (r *Runner) Run(ctx context.Context, args []string, stdout, stderr io.Write
 		fmt.Fprintf(stdout, "loaded=%v state=%s pid=%s\n", st.Loaded, st.State, st.PID)
 		if st.Loaded && st.PID == "" {
 			r.printAccessibilityHint(stdout)
-			if workerLogHasAccessibilityError() {
-				fmt.Fprintln(stdout, "worker log indicates missing Accessibility permission")
-			}
+		}
+		if workerLogHasAccessibilityError() {
+			fmt.Fprintln(stdout, "warning: recent worker logs indicate Accessibility permission is still denied")
+			fmt.Fprintln(stdout, "recovery: remove and re-add the worker entry in Accessibility after your latest install, then run `./tracker start`")
 		}
 		if st.Raw != "" {
 			fmt.Fprintln(stdout, st.Raw)
@@ -89,8 +90,9 @@ func (r *Runner) Run(ctx context.Context, args []string, stdout, stderr io.Write
 		st := r.App.Lifecycle.Status(ctx)
 		fmt.Fprintf(stdout, "collector: loaded=%v state=%s pid=%s\n", st.Loaded, st.State, st.PID)
 		r.printAccessibilityHint(stdout)
-		if st.Loaded && st.PID == "" && workerLogHasAccessibilityError() {
-			fmt.Fprintln(stdout, "collector stderr: /tmp/time-tracker-worker.err.log (Accessibility permission missing)")
+		if workerLogHasAccessibilityError() {
+			fmt.Fprintln(stdout, "collector stderr: /tmp/time-tracker-worker.err.log (Accessibility permission still denied)")
+			fmt.Fprintln(stdout, "collector recovery: remove/re-add worker in Accessibility and restart collector")
 		}
 		return 0
 	case "serve":

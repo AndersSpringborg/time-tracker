@@ -70,7 +70,7 @@ func TestRunnerStatusPrintsAccessibilityHintWhenNoPID(t *testing.T) {
 	if !strings.Contains(got, "accessibility-worker: /Users/test/.local/bin/tt-worker") {
 		t.Fatalf("expected accessibility worker hint, got: %s", got)
 	}
-	if !strings.Contains(got, "worker log indicates missing Accessibility permission") {
+	if !strings.Contains(got, "recent worker logs indicate Accessibility permission is still denied") {
 		t.Fatalf("expected accessibility log hint, got: %s", got)
 	}
 }

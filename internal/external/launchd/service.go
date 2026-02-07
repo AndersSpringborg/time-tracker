@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"strconv"
@@ -34,7 +35,7 @@ func (s *Service) Install(context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(workerPath, bin, 0o755); err != nil {
+	if err := deployWorkerBinary(workerPath, bin); err != nil {
 		return err
 	}
 
@@ -266,6 +267,20 @@ func rejectSudoInstallForEUID(euid int) error {
 		return errors.New("do not run with sudo: install/start/stop/uninstall use per-user LaunchAgent; run `./tracker install` as your normal user")
 	}
 	return nil
+}
+
+func deployWorkerBinary(path string, desired []byte) error {
+	current, err := os.ReadFile(path)
+	if err == nil {
+		// Keep existing worker to preserve TCC Accessibility trust bound to this binary.
+		if len(current) > 1024 {
+			return nil
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+
+	return os.WriteFile(path, desired, 0o755)
 }
 
 func (s *Service) waitUntilLoaded(timeout time.Duration) error {

@@ -30,7 +30,7 @@ var workWifiPatterns: [String] = []
 
 @_cdecl("check_accessibility")
 public func check_accessibility() -> Bool {
-    return AXIsProcessTrusted()
+    return isAccessibilityTrusted()
 }
 
 @_cdecl("get_wifi_ssid")
@@ -144,7 +144,7 @@ public func start_listening(callback: EventCallback) {
     // Set up the menu bar item
     setupMenuBar()
 
-    if AXIsProcessTrusted() {
+    if isAccessibilityTrusted() {
         beginTracking()
     } else {
         reportAccessibilityDenied()
@@ -194,13 +194,23 @@ func startPermissionPoll() {
     }
 
     permissionPollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { timer in
-        if AXIsProcessTrusted() {
+        if isAccessibilityTrusted() {
             timer.invalidate()
             permissionPollTimer = nil
             NSLog("[TimeTracker] Accessibility granted, enabling tracking")
             beginTracking()
         }
     }
+}
+
+func isAccessibilityTrusted() -> Bool {
+    let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: false] as CFDictionary
+    let trustedWithOptions = AXIsProcessTrustedWithOptions(options)
+    let trustedBasic = AXIsProcessTrusted()
+    if trustedBasic != trustedWithOptions {
+        NSLog("[TimeTracker] Accessibility trust mismatch basic=%@ options=%@", trustedBasic.description, trustedWithOptions.description)
+    }
+    return trustedWithOptions || trustedBasic
 }
 
 // --- MENU BAR ---
