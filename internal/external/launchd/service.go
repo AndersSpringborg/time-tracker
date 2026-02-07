@@ -3,12 +3,13 @@ package launchd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"os/user"
 	"strconv"
 	"strings"
+	"time"
 
 	"time-tracker/internal/domain"
 	"time-tracker/internal/external/configfs"
@@ -22,6 +23,9 @@ type Service struct{}
 func New() *Service { return &Service{} }
 
 func (s *Service) Install(context.Context) error {
+	if err := rejectSudoInstall(); err != nil {
+		return err
+	}
 	workerPath, err := workerembed.WorkerPath()
 	if err != nil {
 		return err
@@ -56,10 +60,16 @@ func (s *Service) Install(context.Context) error {
 	if err := s.bootstrap(plistPath); err != nil {
 		return err
 	}
-	return s.kickstart()
+	if err := s.waitUntilLoaded(2 * time.Second); err != nil {
+		return err
+	}
+	return s.kickstartWithRetry(10, 100*time.Millisecond)
 }
 
 func (s *Service) Uninstall(context.Context) error {
+	if err := rejectSudoInstall(); err != nil {
+		return err
+	}
 	_ = s.bootout()
 	if p, err := workerembed.LaunchAgentPath(); err == nil {
 		_ = os.Remove(p)
@@ -70,12 +80,27 @@ func (s *Service) Uninstall(context.Context) error {
 	return nil
 }
 
-func (s *Service) Start(context.Context) error { return s.kickstart() }
-func (s *Service) Stop(context.Context) error  { return s.kill() }
+func (s *Service) Start(context.Context) error {
+	if err := rejectSudoInstall(); err != nil {
+		return err
+	}
+	return s.kickstart()
+}
+func (s *Service) Stop(context.Context) error {
+	if err := rejectSudoInstall(); err != nil {
+		return err
+	}
+	return s.kill()
+}
 
 func (s *Service) Status(context.Context) domain.LifecycleStatus {
 	st := domain.LifecycleStatus{State: "not_loaded"}
-	target := fmt.Sprintf("gui/%s/%s", uid(), label)
+	serviceTarget, err := launchdServiceTarget()
+	if err != nil {
+		st.Raw = err.Error()
+		return st
+	}
+	target := serviceTarget
 	cmd := exec.Command("launchctl", "print", target)
 	var out bytes.Buffer
 	var stderr bytes.Buffer
@@ -110,11 +135,21 @@ func (s *Service) Status(context.Context) domain.LifecycleStatus {
 }
 
 func (s *Service) bootstrap(plistPath string) error {
-	cmd := exec.Command("launchctl", "bootstrap", "gui/"+uid(), plistPath)
+	domainTarget, err := launchdDomainTarget()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command("launchctl", "bootstrap", domainTarget, plistPath)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		msg := strings.TrimSpace(string(out))
 		if strings.Contains(msg, "already loaded") {
 			return nil
+		}
+		// launchd can return I/O error while the agent remains loaded.
+		if strings.Contains(msg, "Input/output error") {
+			if st := s.Status(context.Background()); st.Loaded {
+				return nil
+			}
 		}
 		return fmt.Errorf("launchctl bootstrap failed: %w: %s", err, msg)
 	}
@@ -122,7 +157,11 @@ func (s *Service) bootstrap(plistPath string) error {
 }
 
 func (s *Service) bootout() error {
-	cmd := exec.Command("launchctl", "bootout", "gui/"+uid()+"/"+label)
+	serviceTarget, err := launchdServiceTarget()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command("launchctl", "bootout", serviceTarget)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		msg := strings.TrimSpace(string(out))
 		if strings.Contains(msg, "No such process") || strings.Contains(msg, "service not found") {
@@ -134,15 +173,42 @@ func (s *Service) bootout() error {
 }
 
 func (s *Service) kickstart() error {
-	cmd := exec.Command("launchctl", "kickstart", "-k", "gui/"+uid()+"/"+label)
+	serviceTarget, err := launchdServiceTarget()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command("launchctl", "kickstart", "-k", serviceTarget)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("launchctl kickstart failed: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
 
+func (s *Service) kickstartWithRetry(attempts int, delay time.Duration) error {
+	if attempts < 1 {
+		attempts = 1
+	}
+
+	var lastErr error
+	for range attempts {
+		lastErr = s.kickstart()
+		if lastErr == nil {
+			return nil
+		}
+		if !strings.Contains(lastErr.Error(), "Could not find service") {
+			return lastErr
+		}
+		time.Sleep(delay)
+	}
+	return lastErr
+}
+
 func (s *Service) kill() error {
-	cmd := exec.Command("launchctl", "kill", "TERM", "gui/"+uid()+"/"+label)
+	serviceTarget, err := launchdServiceTarget()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command("launchctl", "kill", "TERM", serviceTarget)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		msg := strings.TrimSpace(string(out))
 		if strings.Contains(msg, "No such process") || strings.Contains(msg, "service not found") {
@@ -153,15 +219,51 @@ func (s *Service) kill() error {
 	return nil
 }
 
-func uid() string {
-	if n := os.Getuid(); n > 0 {
-		return strconv.Itoa(n)
+func launchdServiceTarget() (string, error) {
+	domainTarget, err := launchdDomainTarget()
+	if err != nil {
+		return "", err
 	}
-	u, err := user.Current()
-	if err == nil && u.Uid != "" {
-		return u.Uid
+	return domainTarget + "/" + label, nil
+}
+
+func launchdDomainTarget() (string, error) {
+	return launchdDomainTargetForUID(os.Getuid())
+}
+
+func rejectSudoInstall() error {
+	return rejectSudoInstallForEUID(os.Geteuid())
+}
+
+func launchdDomainTargetForUID(uid int) (string, error) {
+	if uid > 0 {
+		return "gui/" + strconv.Itoa(uid), nil
 	}
-	return "501"
+	return "", errors.New("launchd user domain unavailable: run tracker as your logged-in user (not root)")
+}
+
+func rejectSudoInstallForEUID(euid int) error {
+	if euid == 0 {
+		return errors.New("do not run with sudo: install/start/stop/uninstall use per-user LaunchAgent; run `./tracker install` as your normal user")
+	}
+	return nil
+}
+
+func (s *Service) waitUntilLoaded(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		st := s.Status(context.Background())
+		if st.Loaded {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			if st.Raw != "" {
+				return fmt.Errorf("launchd agent was not loaded after bootstrap: %s", st.Raw)
+			}
+			return errors.New("launchd agent was not loaded after bootstrap")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func renderPlist(workerPath string) (string, error) {
