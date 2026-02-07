@@ -1,8 +1,20 @@
 package worker
 
-import _ "embed"
+import "embed"
 
-// Replace this placeholder with a real worker binary via `make sync-worker` before release.
+// EmbeddedBinary is populated when assets/tt-worker exists.
+// In source checkouts, only assets/.keep may be present and this stays empty.
 //
-//go:embed assets/tt-worker
+//go:embed assets/*
+var embeddedAssets embed.FS
+
 var EmbeddedBinary []byte
+
+func init() {
+	b, err := embeddedAssets.ReadFile("assets/tt-worker")
+	if err == nil {
+		EmbeddedBinary = b
+		return
+	}
+	EmbeddedBinary = nil
+}
