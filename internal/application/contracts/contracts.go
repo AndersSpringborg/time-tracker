@@ -76,6 +76,7 @@ type RulesAnalyzeSuggestionsRequest struct {
 }
 type RulesAnalyzeSuggestionsResponse struct {
 	Suggestions []domain.RuleSuggestion
+	Stats       domain.SuggestionStats
 }
 
 type RulesAcceptSuggestionRequest struct {
@@ -85,11 +86,31 @@ type RulesAcceptSuggestionResponse struct {
 	Result domain.ApplySuggestionResult
 }
 
+type RulesRejectSuggestionRequest struct {
+	Input domain.RuleSuggestion
+}
+type RulesRejectSuggestionResponse struct{}
+
 type RulesAutoApplySuggestionsRequest struct {
 	Input domain.AutoApplySuggestionsInput
 }
 type RulesAutoApplySuggestionsResponse struct {
 	Result domain.AutoApplySuggestionsResult
+}
+
+type RulesBootstrapGroupsRequest struct {
+	Query domain.SuggestionQuery
+}
+type RulesBootstrapGroupsResponse struct {
+	Groups []domain.GroupedEvent
+	Stats  domain.SuggestionStats
+}
+
+type RulesBootstrapLabelRequest struct {
+	Input domain.BootstrapLabelInput
+}
+type RulesBootstrapLabelResponse struct {
+	Result domain.BootstrapLabelResult
 }
 
 type RulesApplyRequest struct {

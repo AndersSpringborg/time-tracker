@@ -2,9 +2,11 @@ package domain
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 const matchAnyRegex = "(?i)^.*$"
@@ -332,6 +334,7 @@ func GlobToRegexPattern(pattern string) string {
 func RankSuggestions(items []RuleSuggestion, limit int) []RuleSuggestion {
 	filtered := make([]RuleSuggestion, 0, len(items))
 	for _, item := range items {
+		item = enrichSuggestion(item)
 		if item.SuggestionType == SuggestionTypeAppOnly && item.Confidence < 60 {
 			continue
 		}
@@ -339,21 +342,81 @@ func RankSuggestions(items []RuleSuggestion, limit int) []RuleSuggestion {
 	}
 
 	sort.Slice(filtered, func(i, j int) bool {
-		if filtered[i].ImpactDurationMS == filtered[j].ImpactDurationMS {
-			if filtered[i].Confidence == filtered[j].Confidence {
-				if filtered[i].ImpactCount == filtered[j].ImpactCount {
-					return filtered[i].AppPattern < filtered[j].AppPattern
+		if filtered[i].Score == filtered[j].Score {
+			if filtered[i].ImpactDurationMS == filtered[j].ImpactDurationMS {
+				if filtered[i].Confidence == filtered[j].Confidence {
+					if filtered[i].ImpactCount == filtered[j].ImpactCount {
+						return filtered[i].AppPattern < filtered[j].AppPattern
+					}
+					return filtered[i].ImpactCount > filtered[j].ImpactCount
 				}
-				return filtered[i].ImpactCount > filtered[j].ImpactCount
+				return filtered[i].Confidence > filtered[j].Confidence
 			}
-			return filtered[i].Confidence > filtered[j].Confidence
+			return filtered[i].ImpactDurationMS > filtered[j].ImpactDurationMS
 		}
-		return filtered[i].ImpactDurationMS > filtered[j].ImpactDurationMS
+		return filtered[i].Score > filtered[j].Score
 	})
 	if limit <= 0 || len(filtered) <= limit {
 		return filtered
 	}
 	return filtered[:limit]
+}
+
+func enrichSuggestion(item RuleSuggestion) RuleSuggestion {
+	score := calculateSuggestionScore(item)
+	item.Score = score
+	if item.Confidence <= 0 {
+		item.Confidence = int(math.Round(score))
+	}
+	if item.ConfidenceReason == "" {
+		item.ConfidenceReason = buildConfidenceReason(item, score)
+	}
+	return item
+}
+
+func calculateSuggestionScore(item RuleSuggestion) float64 {
+	confidenceFactor := clamp(float64(item.Confidence)/100.0, 0, 1)
+	evidenceFactor := clamp(float64(item.EvidenceCount)/8.0, 0, 1)
+	impactFactor := clamp(float64(item.ImpactDurationMS)/float64(2*time.Hour/time.Millisecond), 0, 1)
+	recencyFactor := 0.35
+	if item.LastSeenMS > 0 {
+		ageDays := time.Since(time.UnixMilli(item.LastSeenMS)).Hours() / 24
+		if ageDays < 0 {
+			ageDays = 0
+		}
+		recencyFactor = math.Exp(-ageDays / 14.0)
+	}
+	ambiguityPenalty := clamp(item.Ambiguity, 0, 1)
+
+	base := (0.35 * confidenceFactor) + (0.20 * evidenceFactor) + (0.30 * impactFactor) + (0.15 * recencyFactor)
+	score := 100.0 * base * (1.0 - (0.50 * ambiguityPenalty))
+	return clamp(score, 0, 100)
+}
+
+func buildConfidenceReason(item RuleSuggestion, score float64) string {
+	if item.EvidenceCount < 2 {
+		return "low evidence, validate before auto-apply"
+	}
+	if item.Ambiguity >= 0.40 {
+		return "ambiguous target history, prefer manual check"
+	}
+	if score >= 85 {
+		return "strong evidence and impact"
+	}
+	if score >= 70 {
+		return "good evidence, review before bulk apply"
+	}
+	return "limited confidence, review manually"
+}
+
+func clamp(v, min, max float64) float64 {
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
 }
 
 func FilterSuggestionsMinConfidence(items []RuleSuggestion, minConfidence int) []RuleSuggestion {
@@ -367,6 +430,19 @@ func FilterSuggestionsMinConfidence(items []RuleSuggestion, minConfidence int) [
 		}
 	}
 	return out
+}
+
+func BuildSuggestionColdStartMessage(stats SuggestionStats) string {
+	if !stats.IsColdStart {
+		return ""
+	}
+	if stats.Activities == 0 {
+		return "No activities found. Import or create activities first, then map a few groups to bootstrap suggestions."
+	}
+	if stats.MappedEvents == 0 {
+		return "No mapped history found. Map a few high-impact groups first to train suggestions."
+	}
+	return "Suggestions are in cold-start mode. Add more mapped history for higher confidence."
 }
 
 func BuildTitlePattern(title string) string {

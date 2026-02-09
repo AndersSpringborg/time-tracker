@@ -97,6 +97,70 @@ func TestApplyEventMappingsUpdatesEvents(t *testing.T) {
 	}
 }
 
+func TestListAppSuggestionsSuppressesRejectedFeedback(t *testing.T) {
+	s := openTestStore(t)
+	defer s.Close()
+	seedProjectActivity(t, s)
+	ctx := context.Background()
+
+	for i := 0; i < 5; i++ {
+		if _, err := s.db.ExecContext(ctx, `INSERT INTO events (timestamp_ms, app_name, window_title, duration_ms, project_id, activity_id, manually_mapped) VALUES (?, 'Code', 'main.go', 60000, 10, 100, true)`, int64(i+1)); err != nil {
+			t.Fatalf("insert mapped event: %v", err)
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO events (timestamp_ms, app_name, window_title, duration_ms, manually_mapped) VALUES (100, 'Code', 'new file', 45000, false)`); err != nil {
+		t.Fatalf("insert unmapped event: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `
+INSERT INTO suggestion_feedback (
+  suggestion_type, app_pattern, title_pattern, project_id, activity_id, score, confidence, action, applied_now
+) VALUES ('app_only', 'Code', NULL, 10, 100, 70, 80, 'rejected', false)
+`); err != nil {
+		t.Fatalf("insert suggestion feedback: %v", err)
+	}
+
+	suggestions, err := s.ListAppSuggestions(ctx, domain.SuggestionQuery{Limit: 10, MinDurationMS: 1000})
+	if err != nil {
+		t.Fatalf("list app suggestions: %v", err)
+	}
+	if len(suggestions) != 0 {
+		t.Fatalf("expected suppressed suggestions, got %d", len(suggestions))
+	}
+}
+
+func TestListBootstrapGroupsReturnsHighestImpactFirst(t *testing.T) {
+	s := openTestStore(t)
+	defer s.Close()
+	ctx := context.Background()
+
+	date := "2026-02-06"
+	t1 := time.Date(2026, time.February, 6, 10, 0, 0, 0, time.UTC).UnixMilli()
+	t2 := time.Date(2026, time.February, 6, 11, 0, 0, 0, time.UTC).UnixMilli()
+	if _, err := s.db.ExecContext(ctx, `
+INSERT INTO events (timestamp_ms, app_name, window_title, duration_ms, manually_mapped)
+VALUES
+  (?, 'Arc', 'Standup', 120000, false),
+  (?, 'Code', 'main.go', 60000, false)
+`, t1, t2); err != nil {
+		t.Fatalf("insert events: %v", err)
+	}
+
+	groups, err := s.ListBootstrapGroups(ctx, domain.SuggestionQuery{
+		Date:          &date,
+		MinDurationMS: 1000,
+		Limit:         10,
+	})
+	if err != nil {
+		t.Fatalf("list bootstrap groups: %v", err)
+	}
+	if len(groups) < 2 {
+		t.Fatalf("expected at least 2 groups, got %d", len(groups))
+	}
+	if groups[0].AppName != "Arc" {
+		t.Fatalf("expected Arc first by impact, got %s", groups[0].AppName)
+	}
+}
+
 func TestApplyRulesetChangesAddsUpdatesAndDeletes(t *testing.T) {
 	s := openTestStore(t)
 	defer s.Close()

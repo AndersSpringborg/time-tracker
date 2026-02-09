@@ -23,6 +23,12 @@ type fakeRulesRepo struct {
 	grouped          []domain.GroupedEvent
 	applied          []domain.EventMappingUpdate
 	appliedManual    bool
+	groupMapped      int64
+	lastGroupLabel   string
+	feedback         []domain.SuggestionFeedback
+	runs             []domain.SuggestionRun
+	mappedEvents     int64
+	activitiesCount  int64
 	currentProjectID *int64
 	projectByTitle   map[string]*int64
 	activityByKey    map[string]*int64
@@ -58,6 +64,9 @@ func (f *fakeRulesRepo) ListUnmappedDates(context.Context, int64) ([]string, err
 func (f *fakeRulesRepo) ListGroupedUnmappedEvents(context.Context, string, int64) ([]domain.GroupedEvent, error) {
 	return f.grouped, nil
 }
+func (f *fakeRulesRepo) ListBootstrapGroups(context.Context, domain.SuggestionQuery) ([]domain.GroupedEvent, error) {
+	return f.grouped, nil
+}
 func (f *fakeRulesRepo) ListAppSuggestions(context.Context, domain.SuggestionQuery) ([]domain.RuleSuggestion, error) {
 	return f.appSuggestions, nil
 }
@@ -68,6 +77,25 @@ func (f *fakeRulesRepo) ApplyEventMappings(_ context.Context, updates []domain.E
 	f.applied = append(f.applied, updates...)
 	f.appliedManual = manuallyMapped
 	return int64(len(updates)), nil
+}
+func (f *fakeRulesRepo) MapEventsByGroupWithLabel(_ context.Context, _, _, _ string, _, _ int64, labelSource string) (int64, error) {
+	f.groupMapped++
+	f.lastGroupLabel = labelSource
+	return 1, nil
+}
+func (f *fakeRulesRepo) RecordSuggestionFeedback(_ context.Context, in domain.SuggestionFeedback) error {
+	f.feedback = append(f.feedback, in)
+	return nil
+}
+func (f *fakeRulesRepo) RecordSuggestionRun(_ context.Context, in domain.SuggestionRun) error {
+	f.runs = append(f.runs, in)
+	return nil
+}
+func (f *fakeRulesRepo) CountMappedEvents(context.Context) (int64, error) {
+	return f.mappedEvents, nil
+}
+func (f *fakeRulesRepo) CountActivities(context.Context) (int64, error) {
+	return f.activitiesCount, nil
 }
 func (f *fakeRulesRepo) CurrentProjectID(context.Context) (*int64, error) {
 	return f.currentProjectID, nil
@@ -335,5 +363,83 @@ func TestRulesUsecaseApplyRulesUsesDomainEngine(t *testing.T) {
 	}
 	if repo.applied[0].ProjectID != 10 || repo.applied[0].ActivityID != 100 {
 		t.Fatalf("unexpected mapping target")
+	}
+}
+
+func TestRulesUsecaseAnalyzeSuggestionsReturnsColdStartStats(t *testing.T) {
+	repo := &fakeRulesRepo{
+		mappedEvents:    0,
+		activitiesCount: 0,
+	}
+	uc := NewRulesUsecase(repo)
+
+	res, err := uc.AnalyzeSuggestions(context.Background(), contracts.RulesAnalyzeSuggestionsRequest{
+		Query: domain.SuggestionQuery{Limit: 10},
+	})
+	if err != nil {
+		t.Fatalf("analyze suggestions failed: %v", err)
+	}
+	if !res.Stats.IsColdStart {
+		t.Fatalf("expected cold start stats")
+	}
+	if res.Stats.Message == "" {
+		t.Fatalf("expected cold start message")
+	}
+}
+
+func TestRulesUsecaseLabelBootstrapGroupCreatesRuleAndMaps(t *testing.T) {
+	repo := &fakeRulesRepo{}
+	uc := NewRulesUsecase(repo)
+
+	res, err := uc.LabelBootstrapGroup(context.Background(), contracts.RulesBootstrapLabelRequest{
+		Input: domain.BootstrapLabelInput{
+			Date:        "2026-02-06",
+			AppName:     "Arc",
+			WindowTitle: "Daily Standup",
+			ProjectID:   10,
+			ActivityID:  100,
+			CreateRule:  true,
+			ApplyNow:    true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("label bootstrap group failed: %v", err)
+	}
+	if !res.Result.RuleCreated {
+		t.Fatalf("expected rule to be created")
+	}
+	if res.Result.MappedEvents != 1 {
+		t.Fatalf("expected mapped events to be 1, got %d", res.Result.MappedEvents)
+	}
+	if len(repo.added) != 1 {
+		t.Fatalf("expected one added rule, got %d", len(repo.added))
+	}
+	if repo.lastGroupLabel != "bootstrap" {
+		t.Fatalf("expected bootstrap label source, got %q", repo.lastGroupLabel)
+	}
+}
+
+func TestRulesUsecaseRejectSuggestionRecordsFeedback(t *testing.T) {
+	repo := &fakeRulesRepo{}
+	uc := NewRulesUsecase(repo)
+
+	title := "(?i)^.*standup.*$"
+	_, err := uc.RejectSuggestion(context.Background(), contracts.RulesRejectSuggestionRequest{
+		Input: domain.RuleSuggestion{
+			SuggestionType: domain.SuggestionTypeAppAndTitle,
+			AppPattern:     "Slack",
+			TitlePattern:   &title,
+			ProjectID:      10,
+			ActivityID:     100,
+		},
+	})
+	if err != nil {
+		t.Fatalf("reject suggestion failed: %v", err)
+	}
+	if len(repo.feedback) != 1 {
+		t.Fatalf("expected 1 feedback row, got %d", len(repo.feedback))
+	}
+	if repo.feedback[0].Action != domain.SuggestionFeedbackRejected {
+		t.Fatalf("expected rejected action")
 	}
 }

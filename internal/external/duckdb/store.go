@@ -275,15 +275,10 @@ WHERE project_id IS NULL AND activity_id IS NULL AND manually_mapped = false
 }
 
 func (s *Store) ListAppSuggestions(ctx context.Context, q domain.SuggestionQuery) ([]domain.RuleSuggestion, error) {
-	where := "WHERE project_id IS NULL AND activity_id IS NULL AND manually_mapped = false"
-	args := make([]any, 0, 3)
-	if q.MinDurationMS > 0 {
-		where += " AND duration_ms >= ?"
-		args = append(args, q.MinDurationMS)
-	}
-	if q.Date != nil && strings.TrimSpace(*q.Date) != "" {
-		where += " AND DATE(TO_TIMESTAMP(timestamp_ms / 1000)) = ?"
-		args = append(args, *q.Date)
+	where, args := buildSuggestionWhereClause(q)
+	minEvidence := q.MinEvidence
+	if minEvidence <= 0 {
+		minEvidence = 2
 	}
 	limit := q.Limit
 	if limit <= 0 {
@@ -292,19 +287,19 @@ func (s *Store) ListAppSuggestions(ctx context.Context, q domain.SuggestionQuery
 
 	rows, err := s.db.QueryContext(ctx, `
 WITH mapped AS (
-  SELECT app_name, project_id, activity_id, COUNT(*) AS cnt
+  SELECT app_name, project_id, activity_id, COUNT(*) AS cnt, MAX(timestamp_ms) AS last_seen_ms
   FROM events
   WHERE project_id IS NOT NULL AND activity_id IS NOT NULL
   GROUP BY app_name, project_id, activity_id
 ), app_totals AS (
-  SELECT app_name, SUM(cnt) AS total_cnt
+  SELECT app_name, SUM(cnt) AS total_cnt, COUNT(*) AS target_count, MAX(last_seen_ms) AS last_seen_ms
   FROM mapped
   GROUP BY app_name
 ), top_map AS (
-  SELECT m.*, ROW_NUMBER() OVER (PARTITION BY m.app_name ORDER BY m.cnt DESC) AS rn
+  SELECT m.*, ROW_NUMBER() OVER (PARTITION BY m.app_name ORDER BY m.cnt DESC, m.last_seen_ms DESC) AS rn
   FROM mapped m
 ), unmapped AS (
-  SELECT app_name, COUNT(*) AS impact_count, COALESCE(SUM(duration_ms), 0) AS impact_duration_ms
+  SELECT app_name, COUNT(*) AS impact_count, COALESCE(SUM(duration_ms), 0) AS impact_duration_ms, MAX(timestamp_ms) AS last_seen_ms
   FROM events
   `+where+`
   GROUP BY app_name
@@ -318,16 +313,21 @@ SELECT
   u.impact_duration_ms,
   tm.cnt,
   COALESCE(p.title, ''),
-  COALESCE(a.title, '')
+  COALESCE(a.title, ''),
+  u.last_seen_ms,
+  CASE
+    WHEN app_tot.target_count <= 1 THEN 0
+    ELSE CAST(app_tot.target_count - 1 AS DOUBLE) / CAST(app_tot.target_count AS DOUBLE)
+  END AS ambiguity
 FROM top_map tm
 JOIN app_totals app_tot ON app_tot.app_name = tm.app_name
 JOIN unmapped u ON u.app_name = tm.app_name
 LEFT JOIN projects p ON p.project_id = tm.project_id
 LEFT JOIN activities a ON a.activity_id = tm.activity_id
-WHERE tm.rn = 1 AND u.impact_count > 0
+WHERE tm.rn = 1 AND u.impact_count > 0 AND tm.cnt >= ?
 ORDER BY u.impact_duration_ms DESC
 LIMIT ?
-`, append(args, limit)...)
+`, append(args, minEvidence, limit)...)
 	if err != nil {
 		return nil, err
 	}
@@ -347,26 +347,33 @@ LIMIT ?
 			&item.EvidenceCount,
 			&projectTitle,
 			&activityTitle,
+			&item.LastSeenMS,
+			&item.Ambiguity,
 		); err != nil {
 			return nil, err
 		}
 		item.SuggestionType = domain.SuggestionTypeAppOnly
 		item.DisplayPath = buildPath(projectTitle, activityTitle)
+		suppressed, err := s.isSuggestionSuppressed(ctx, item)
+		if err != nil {
+			return nil, err
+		}
+		if suppressed {
+			continue
+		}
+		if q.IncludeContext {
+			item.ContextHints = s.loadSuggestionContextHints(ctx, item, nil)
+		}
 		out = append(out, item)
 	}
 	return out, rows.Err()
 }
 
 func (s *Store) ListTitleSuggestions(ctx context.Context, q domain.SuggestionQuery) ([]domain.RuleSuggestion, error) {
-	where := "WHERE project_id IS NULL AND activity_id IS NULL AND manually_mapped = false"
-	args := make([]any, 0, 3)
-	if q.MinDurationMS > 0 {
-		where += " AND duration_ms >= ?"
-		args = append(args, q.MinDurationMS)
-	}
-	if q.Date != nil && strings.TrimSpace(*q.Date) != "" {
-		where += " AND DATE(TO_TIMESTAMP(timestamp_ms / 1000)) = ?"
-		args = append(args, *q.Date)
+	where, args := buildSuggestionWhereClause(q)
+	minEvidence := q.MinEvidence
+	if minEvidence <= 0 {
+		minEvidence = 2
 	}
 	limit := q.Limit
 	if limit <= 0 {
@@ -375,34 +382,48 @@ func (s *Store) ListTitleSuggestions(ctx context.Context, q domain.SuggestionQue
 
 	rows, err := s.db.QueryContext(ctx, `
 WITH mapped_title AS (
-  SELECT app_name, window_title, project_id, activity_id, COUNT(*) AS cnt
+  SELECT app_name, window_title, project_id, activity_id, COUNT(*) AS cnt, MAX(timestamp_ms) AS last_seen_ms
   FROM events
   WHERE project_id IS NOT NULL AND activity_id IS NOT NULL AND window_title <> ''
   GROUP BY app_name, window_title, project_id, activity_id
+), title_totals AS (
+  SELECT app_name, window_title, SUM(cnt) AS total_cnt, COUNT(*) AS target_count
+  FROM mapped_title
+  GROUP BY app_name, window_title
+), top_map AS (
+  SELECT m.*, ROW_NUMBER() OVER (PARTITION BY m.app_name, m.window_title ORDER BY m.cnt DESC, m.last_seen_ms DESC) AS rn
+  FROM mapped_title m
 ), unmapped_title AS (
-  SELECT app_name, window_title, COUNT(*) AS impact_count, COALESCE(SUM(duration_ms), 0) AS impact_duration_ms
+  SELECT app_name, window_title, COUNT(*) AS impact_count, COALESCE(SUM(duration_ms), 0) AS impact_duration_ms, MAX(timestamp_ms) AS last_seen_ms
   FROM events
   `+where+`
   GROUP BY app_name, window_title
 )
 SELECT
-  m.app_name,
-  m.window_title,
-  m.project_id,
-  m.activity_id,
-  m.cnt,
+  tm.app_name,
+  tm.window_title,
+  tm.project_id,
+  tm.activity_id,
+  tm.cnt,
+  CAST(tm.cnt * 100.0 / NULLIF(tt.total_cnt, 0) AS INTEGER) AS confidence,
   u.impact_count,
   u.impact_duration_ms,
   COALESCE(p.title, ''),
-  COALESCE(a.title, '')
-FROM mapped_title m
-JOIN unmapped_title u ON u.app_name = m.app_name AND u.window_title = m.window_title
-LEFT JOIN projects p ON p.project_id = m.project_id
-LEFT JOIN activities a ON a.activity_id = m.activity_id
-WHERE m.cnt >= 2 AND u.impact_count > 0
+  COALESCE(a.title, ''),
+  u.last_seen_ms,
+  CASE
+    WHEN tt.target_count <= 1 THEN 0
+    ELSE CAST(tt.target_count - 1 AS DOUBLE) / CAST(tt.target_count AS DOUBLE)
+  END AS ambiguity
+FROM top_map tm
+JOIN title_totals tt ON tt.app_name = tm.app_name AND tt.window_title = tm.window_title
+JOIN unmapped_title u ON u.app_name = tm.app_name AND u.window_title = tm.window_title
+LEFT JOIN projects p ON p.project_id = tm.project_id
+LEFT JOIN activities a ON a.activity_id = tm.activity_id
+WHERE tm.rn = 1 AND tm.cnt >= ? AND u.impact_count > 0
 ORDER BY u.impact_duration_ms DESC
 LIMIT ?
-`, append(args, limit)...)
+`, append(args, minEvidence, limit)...)
 	if err != nil {
 		return nil, err
 	}
@@ -419,21 +440,118 @@ LIMIT ?
 			&item.ProjectID,
 			&item.ActivityID,
 			&item.EvidenceCount,
+			&item.Confidence,
 			&item.ImpactCount,
 			&item.ImpactDurationMS,
 			&projectTitle,
 			&activityTitle,
+			&item.LastSeenMS,
+			&item.Ambiguity,
 		); err != nil {
 			return nil, err
 		}
 		pattern := domain.BuildTitlePattern(rawTitle)
 		item.SuggestionType = domain.SuggestionTypeAppAndTitle
 		item.TitlePattern = &pattern
-		item.Confidence = 85
 		item.DisplayPath = buildPath(projectTitle, activityTitle)
+		suppressed, err := s.isSuggestionSuppressed(ctx, item)
+		if err != nil {
+			return nil, err
+		}
+		if suppressed {
+			continue
+		}
+		if q.IncludeContext {
+			item.ContextHints = s.loadSuggestionContextHints(ctx, item, &rawTitle)
+		}
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+func buildSuggestionWhereClause(q domain.SuggestionQuery) (string, []any) {
+	where := "WHERE project_id IS NULL AND activity_id IS NULL AND manually_mapped = false"
+	args := make([]any, 0, 4+len(q.ExcludeApps))
+	if q.MinDurationMS > 0 {
+		where += " AND duration_ms >= ?"
+		args = append(args, q.MinDurationMS)
+	}
+	if q.Date != nil && strings.TrimSpace(*q.Date) != "" {
+		where += " AND DATE(TO_TIMESTAMP(timestamp_ms / 1000)) = ?"
+		args = append(args, *q.Date)
+	}
+	excluded := make([]string, 0, len(q.ExcludeApps))
+	for _, app := range q.ExcludeApps {
+		if strings.TrimSpace(app) == "" {
+			continue
+		}
+		excluded = append(excluded, strings.ToLower(strings.TrimSpace(app)))
+	}
+	if len(excluded) > 0 {
+		placeholders := make([]string, 0, len(excluded))
+		for _, app := range excluded {
+			placeholders = append(placeholders, "?")
+			args = append(args, app)
+		}
+		where += " AND LOWER(app_name) NOT IN (" + strings.Join(placeholders, ",") + ")"
+	}
+	return where, args
+}
+
+func (s *Store) isSuggestionSuppressed(ctx context.Context, item domain.RuleSuggestion) (bool, error) {
+	titlePattern := ""
+	if item.TitlePattern != nil {
+		titlePattern = strings.TrimSpace(*item.TitlePattern)
+	}
+	var count int64
+	err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM suggestion_feedback
+WHERE action = 'rejected'
+  AND suggestion_type = ?
+  AND app_pattern = ?
+  AND COALESCE(title_pattern, '') = ?
+  AND created_at >= (current_timestamp - INTERVAL '7 days')
+`, string(item.SuggestionType), strings.TrimSpace(item.AppPattern), titlePattern).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func (s *Store) loadSuggestionContextHints(ctx context.Context, item domain.RuleSuggestion, rawTitle *string) []string {
+	hints := make([]string, 0, 2)
+	wifiSQL := `
+SELECT wifi_ssid, COUNT(*) AS cnt
+FROM events
+WHERE project_id = ? AND activity_id = ? AND app_name = ? AND COALESCE(wifi_ssid, '') <> ''
+`
+	hourSQL := `
+SELECT CAST(EXTRACT(HOUR FROM TO_TIMESTAMP(timestamp_ms / 1000)) AS INTEGER) AS hour_bucket, COUNT(*) AS cnt
+FROM events
+WHERE project_id = ? AND activity_id = ? AND app_name = ?
+`
+	args := []any{item.ProjectID, item.ActivityID, item.AppPattern}
+	if rawTitle != nil {
+		wifiSQL += ` AND window_title = ?`
+		hourSQL += ` AND window_title = ?`
+		args = append(args, *rawTitle)
+	}
+	wifiSQL += ` GROUP BY wifi_ssid ORDER BY cnt DESC LIMIT 1`
+	hourSQL += ` GROUP BY hour_bucket ORDER BY cnt DESC LIMIT 1`
+
+	var wifi string
+	var wifiCount int64
+	if err := s.db.QueryRowContext(ctx, wifiSQL, args...).Scan(&wifi, &wifiCount); err == nil {
+		hints = append(hints, fmt.Sprintf("wifi=%s (%d)", wifi, wifiCount))
+	}
+
+	var hour int64
+	var hourCount int64
+	if err := s.db.QueryRowContext(ctx, hourSQL, args...).Scan(&hour, &hourCount); err == nil {
+		hints = append(hints, fmt.Sprintf("peak hour=%02d:00 (%d)", hour, hourCount))
+	}
+	return hints
 }
 
 func buildPath(projectTitle, activityTitle string) string {
@@ -462,7 +580,8 @@ func (s *Store) ApplyEventMappings(ctx context.Context, updates []domain.EventMa
 
 	stmt, err := tx.PrepareContext(ctx, `
 UPDATE events
-SET project_id = ?, activity_id = ?, manually_mapped = ?
+SET project_id = ?, activity_id = ?, manually_mapped = ?,
+    label_source = CASE WHEN ? THEN 'suggestion_apply' ELSE 'rules_apply' END
 WHERE id = ? AND project_id IS NULL AND activity_id IS NULL
 `)
 	if err != nil {
@@ -472,7 +591,7 @@ WHERE id = ? AND project_id IS NULL AND activity_id IS NULL
 
 	var affected int64
 	for _, update := range updates {
-		res, err := stmt.ExecContext(ctx, update.ProjectID, update.ActivityID, manuallyMapped, update.EventID)
+		res, err := stmt.ExecContext(ctx, update.ProjectID, update.ActivityID, manuallyMapped, manuallyMapped, update.EventID)
 		if err != nil {
 			return affected, err
 		}
@@ -483,6 +602,39 @@ WHERE id = ? AND project_id IS NULL AND activity_id IS NULL
 		return affected, err
 	}
 	return affected, nil
+}
+
+func (s *Store) ListBootstrapGroups(ctx context.Context, q domain.SuggestionQuery) ([]domain.GroupedEvent, error) {
+	where, args := buildSuggestionWhereClause(q)
+	limit := q.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+
+	query := `
+SELECT app_name, window_title, COALESCE(SUM(duration_ms), 0) AS total_duration_ms, COUNT(*) AS event_count
+FROM events
+` + where + `
+GROUP BY app_name, window_title
+ORDER BY total_duration_ms DESC, event_count DESC
+LIMIT ?
+`
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]domain.GroupedEvent, 0)
+	for rows.Next() {
+		var event domain.GroupedEvent
+		if err := rows.Scan(&event.AppName, &event.WindowTitle, &event.TotalDurationMS, &event.EventCount); err != nil {
+			return nil, err
+		}
+		out = append(out, event)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) CurrentProjectID(ctx context.Context) (*int64, error) {
@@ -730,13 +882,20 @@ ORDER BY 3 DESC
 }
 
 func (s *Store) MapEventsByGroup(ctx context.Context, date, appName, windowTitle string, projectID, activityID int64) (int64, error) {
+	return s.MapEventsByGroupWithLabel(ctx, date, appName, windowTitle, projectID, activityID, "manual_review")
+}
+
+func (s *Store) MapEventsByGroupWithLabel(ctx context.Context, date, appName, windowTitle string, projectID, activityID int64, labelSource string) (int64, error) {
+	if strings.TrimSpace(labelSource) == "" {
+		labelSource = "manual_review"
+	}
 	res, err := s.db.ExecContext(ctx, `
 UPDATE events
-SET project_id = ?, activity_id = ?, manually_mapped = true
+SET project_id = ?, activity_id = ?, manually_mapped = true, label_source = ?
 WHERE project_id IS NULL AND activity_id IS NULL AND manually_mapped = false
   AND DATE(TO_TIMESTAMP(timestamp_ms / 1000)) = ?
   AND app_name = ? AND window_title = ?
-`, projectID, activityID, date, appName, windowTitle)
+`, projectID, activityID, labelSource, date, appName, windowTitle)
 	if err != nil {
 		return 0, err
 	}
@@ -747,7 +906,7 @@ WHERE project_id IS NULL AND activity_id IS NULL AND manually_mapped = false
 func (s *Store) DiscardEventsByGroup(ctx context.Context, date, appName, windowTitle string) (int64, error) {
 	res, err := s.db.ExecContext(ctx, `
 UPDATE events
-SET manually_mapped = true
+SET manually_mapped = true, label_source = 'manual_review'
 WHERE project_id IS NULL AND activity_id IS NULL AND manually_mapped = false
   AND DATE(TO_TIMESTAMP(timestamp_ms / 1000)) = ?
   AND app_name = ? AND window_title = ?
@@ -757,6 +916,48 @@ WHERE project_id IS NULL AND activity_id IS NULL AND manually_mapped = false
 	}
 	n, _ := res.RowsAffected()
 	return n, nil
+}
+
+func (s *Store) RecordSuggestionFeedback(ctx context.Context, in domain.SuggestionFeedback) error {
+	titlePattern := ""
+	if in.TitlePattern != nil {
+		titlePattern = strings.TrimSpace(*in.TitlePattern)
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO suggestion_feedback (
+  suggestion_type, app_pattern, title_pattern, project_id, activity_id, score, confidence, action, applied_now, date_scope
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`, string(in.SuggestionType), strings.TrimSpace(in.AppPattern), nullIfEmpty(titlePattern), in.ProjectID, in.ActivityID, in.Score, in.Confidence, string(in.Action), in.AppliedNow, in.DateScope)
+	return err
+}
+
+func (s *Store) RecordSuggestionRun(ctx context.Context, in domain.SuggestionRun) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO suggestion_runs (
+  date_scope, min_duration_ms, suggestion_limit, min_evidence, min_confidence, include_context, apply_now, analyzed_count, accepted_count, mapped_events
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`, in.DateScope, in.MinDurationMS, in.Limit, in.MinEvidence, in.MinConfidence, in.IncludeContext, in.ApplyNow, in.Analyzed, in.Accepted, in.MappedEvents)
+	return err
+}
+
+func (s *Store) CountMappedEvents(ctx context.Context) (int64, error) {
+	var count int64
+	if err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM events
+WHERE project_id IS NOT NULL AND activity_id IS NOT NULL
+`).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (s *Store) CountActivities(ctx context.Context) (int64, error) {
+	var count int64
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM activities`).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func (s *Store) UpsertImportedProject(ctx context.Context, in domain.ImportedProjectUpsert) (domain.ImportedProjectUpsertResult, error) {

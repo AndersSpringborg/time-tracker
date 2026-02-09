@@ -33,6 +33,9 @@ func (f *fakeRulesRepo) ListUnmappedDates(context.Context, int64) ([]string, err
 func (f *fakeRulesRepo) ListGroupedUnmappedEvents(context.Context, string, int64) ([]domain.GroupedEvent, error) {
 	return nil, nil
 }
+func (f *fakeRulesRepo) ListBootstrapGroups(context.Context, domain.SuggestionQuery) ([]domain.GroupedEvent, error) {
+	return []domain.GroupedEvent{{AppName: "Slack", WindowTitle: "Daily standup", EventCount: 3, TotalDurationMS: 180000}}, nil
+}
 func (f *fakeRulesRepo) ListAppSuggestions(context.Context, domain.SuggestionQuery) ([]domain.RuleSuggestion, error) {
 	return nil, nil
 }
@@ -54,7 +57,16 @@ func (f *fakeRulesRepo) ListTitleSuggestions(context.Context, domain.SuggestionQ
 func (f *fakeRulesRepo) ApplyEventMappings(context.Context, []domain.EventMappingUpdate, bool) (int64, error) {
 	return 0, nil
 }
-func (f *fakeRulesRepo) CurrentProjectID(context.Context) (*int64, error) { return nil, nil }
+func (f *fakeRulesRepo) MapEventsByGroupWithLabel(context.Context, string, string, string, int64, int64, string) (int64, error) {
+	return 1, nil
+}
+func (f *fakeRulesRepo) RecordSuggestionFeedback(context.Context, domain.SuggestionFeedback) error {
+	return nil
+}
+func (f *fakeRulesRepo) RecordSuggestionRun(context.Context, domain.SuggestionRun) error { return nil }
+func (f *fakeRulesRepo) CountMappedEvents(context.Context) (int64, error)                { return 10, nil }
+func (f *fakeRulesRepo) CountActivities(context.Context) (int64, error)                  { return 3, nil }
+func (f *fakeRulesRepo) CurrentProjectID(context.Context) (*int64, error)                { return nil, nil }
 func (f *fakeRulesRepo) FindProjectIDByTitle(context.Context, string) (*int64, error) {
 	return nil, nil
 }
@@ -120,6 +132,29 @@ func TestSuggestionsPartialRendersRows(t *testing.T) {
 	}
 	if !strings.Contains(body, "Accept") {
 		t.Fatalf("expected Accept button in body")
+	}
+}
+
+func TestSuggestionsBootstrapPartialRendersRows(t *testing.T) {
+	app := &usecases.App{
+		Rules: usecases.NewRulesUsecase(&fakeRulesRepo{}),
+	}
+	s, err := New(app)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/partials/suggestions/bootstrap?date=2026-02-06&bootstrap_limit=10", nil)
+	rr := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "Slack") {
+		t.Fatalf("expected bootstrap app in body, got %s", body)
+	}
+	if !strings.Contains(body, "Label") {
+		t.Fatalf("expected label action in bootstrap table")
 	}
 }
 

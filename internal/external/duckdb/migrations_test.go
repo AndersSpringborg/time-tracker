@@ -189,8 +189,8 @@ func TestOpenMigratesLegacyVersion9DatabaseFromDisk(t *testing.T) {
 	if err := store.db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&version); err != nil {
 		t.Fatalf("query schema_migrations failed: %v", err)
 	}
-	if version != 13 {
-		t.Fatalf("expected schema version 13, got %d", version)
+	if version != 16 {
+		t.Fatalf("expected schema version 16, got %d", version)
 	}
 }
 
@@ -204,6 +204,7 @@ func TestMigrateHandlesVersion12WithoutKindsTable(t *testing.T) {
 	setup := []string{
 		`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name VARCHAR NOT NULL, applied_at TIMESTAMP DEFAULT current_timestamp);`,
 		`INSERT INTO schema_migrations (version, name) VALUES (12, 'add_tidsreg_import_columns');`,
+		`CREATE TABLE events (id INTEGER PRIMARY KEY, timestamp_ms BIGINT, app_name VARCHAR, window_title VARCHAR, duration_ms BIGINT, project_id INTEGER, activity_id INTEGER, manually_mapped BOOLEAN);`,
 		`CREATE TABLE customers (customer_id INTEGER PRIMARY KEY, name VARCHAR);`,
 		`CREATE TABLE projects (project_id INTEGER PRIMARY KEY, customer_id INTEGER, name VARCHAR, title VARCHAR, metadata VARCHAR, source VARCHAR, external_customer_id BIGINT, external_project_id BIGINT, external_phase_id BIGINT);`,
 		`CREATE UNIQUE INDEX projects_source_external_idx ON projects (source, external_customer_id, external_project_id, external_phase_id);`,
@@ -229,8 +230,8 @@ func TestMigrateHandlesVersion12WithoutKindsTable(t *testing.T) {
 	if err := db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&version); err != nil {
 		t.Fatalf("query schema_migrations failed: %v", err)
 	}
-	if version != 13 {
-		t.Fatalf("expected schema version 13, got %d", version)
+	if version != 16 {
+		t.Fatalf("expected schema version 16, got %d", version)
 	}
 
 	var phasesCount int
