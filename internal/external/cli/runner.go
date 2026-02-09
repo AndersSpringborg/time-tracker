@@ -202,7 +202,7 @@ func (r *Runner) runSchema(args []string, stdout, stderr io.Writer) int {
 
 func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: tt rules <list|add|delete|suggest|accept|auto-apply|apply-rules>")
+		fmt.Fprintln(stderr, "usage: tt rules <list|add|delete|suggest|accept|reject|auto-apply|bootstrap|label-group|apply-rules>")
 		return 2
 	}
 	sub := args[0]
@@ -287,6 +287,9 @@ func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.
 		date := fs.String("date", "", "date filter YYYY-MM-DD")
 		minDur := fs.Int64("min-duration-ms", 2000, "minimum event duration")
 		limit := fs.Int("limit", 50, "max suggestions")
+		minEvidence := fs.Int("min-evidence", 2, "minimum mapped evidence")
+		includeContext := fs.Bool("include-context", true, "include context hints")
+		excludeApps := fs.String("exclude-apps", "", "comma-separated app names to exclude")
 		if err := fs.Parse(args[1:]); err != nil {
 			return 2
 		}
@@ -295,11 +298,21 @@ func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.
 			datePtr = date
 		}
 		suggestionsRes, err := r.App.Rules.AnalyzeSuggestions(ctx, contracts.RulesAnalyzeSuggestionsRequest{
-			Query: domain.SuggestionQuery{Date: datePtr, MinDurationMS: *minDur, Limit: *limit},
+			Query: domain.SuggestionQuery{
+				Date:           datePtr,
+				MinDurationMS:  *minDur,
+				Limit:          *limit,
+				MinEvidence:    *minEvidence,
+				IncludeContext: *includeContext,
+				ExcludeApps:    splitCSVNormalized(*excludeApps),
+			},
 		})
 		if err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
+		}
+		if suggestionsRes.Stats.IsColdStart {
+			fmt.Fprintf(stdout, "cold_start: %s\n", suggestionsRes.Stats.Message)
 		}
 		items := suggestionsRes.Suggestions
 		if *format == "text" {
@@ -308,14 +321,36 @@ func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.
 				if s.TitlePattern != nil {
 					title = *s.TitlePattern
 				}
-				fmt.Fprintf(stdout, "%s app=%q title=%q conf=%d%% impact=%d/%s target=%s\n", s.SuggestionType, s.AppPattern, title, s.Confidence, s.ImpactCount, domain.FormatDuration(s.ImpactDurationMS), s.DisplayPath)
+				contextSummary := ""
+				if len(s.ContextHints) > 0 {
+					contextSummary = " context=" + strings.Join(s.ContextHints, ",")
+				}
+				fmt.Fprintf(
+					stdout,
+					"%s app=%q title=%q conf=%d%% score=%.1f ambiguity=%.2f impact=%d/%s evidence=%d target=%s reason=%q%s\n",
+					s.SuggestionType,
+					s.AppPattern,
+					title,
+					s.Confidence,
+					s.Score,
+					s.Ambiguity,
+					s.ImpactCount,
+					domain.FormatDuration(s.ImpactDurationMS),
+					s.EvidenceCount,
+					s.DisplayPath,
+					s.ConfidenceReason,
+					contextSummary,
+				)
 			}
 			if len(items) == 0 {
 				fmt.Fprintln(stdout, "No suggestions")
 			}
 			return 0
 		}
-		return emit(stdout, *format, map[string]any{"suggestions": clidto.SuggestionsFromDomain(items)}, stderr)
+		return emit(stdout, *format, map[string]any{
+			"suggestions": clidto.SuggestionsFromDomain(items),
+			"stats":       suggestionsRes.Stats,
+		}, stderr)
 	case "accept":
 		fs := flag.NewFlagSet("rules accept", flag.ContinueOnError)
 		fs.SetOutput(stderr)
@@ -324,6 +359,7 @@ func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.
 		projectID := fs.Int64("project-id", 0, "project id")
 		activityID := fs.Int64("activity-id", 0, "activity id")
 		applyNow := fs.Bool("apply-now", true, "apply immediately")
+		date := fs.String("date", "", "optional date scope")
 		if err := fs.Parse(args[1:]); err != nil {
 			return 2
 		}
@@ -335,6 +371,10 @@ func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.
 		if strings.TrimSpace(*titlePattern) != "" {
 			tp = titlePattern
 		}
+		var datePtr *string
+		if strings.TrimSpace(*date) != "" {
+			datePtr = date
+		}
 		res, err := r.App.Rules.AcceptSuggestion(ctx, contracts.RulesAcceptSuggestionRequest{Input: domain.ApplySuggestionInput{
 			Suggestion: domain.RuleSuggestion{
 				SuggestionType: domain.SuggestionTypeAppOnly,
@@ -344,6 +384,7 @@ func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.
 				ActivityID:     *activityID,
 			},
 			ApplyNow: *applyNow,
+			Date:     datePtr,
 		}})
 		if err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
@@ -351,19 +392,63 @@ func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.
 		}
 		fmt.Fprintf(stdout, "accepted: rule_created=%v mapped_events=%d\n", res.Result.RuleCreated, res.Result.MappedEvents)
 		return 0
+	case "reject":
+		fs := flag.NewFlagSet("rules reject", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		appPattern := fs.String("app-pattern", "", "app pattern")
+		titlePattern := fs.String("title-pattern", "", "title pattern")
+		suggestionType := fs.String("suggestion-type", string(domain.SuggestionTypeAppOnly), "app_only|app_and_title")
+		projectID := fs.Int64("project-id", 0, "project id")
+		activityID := fs.Int64("activity-id", 0, "activity id")
+		if err := fs.Parse(args[1:]); err != nil {
+			return 2
+		}
+		if strings.TrimSpace(*appPattern) == "" {
+			fmt.Fprintln(stderr, "--app-pattern is required")
+			return 2
+		}
+		var tp *string
+		if strings.TrimSpace(*titlePattern) != "" {
+			tp = titlePattern
+		}
+		if _, err := r.App.Rules.RejectSuggestion(ctx, contracts.RulesRejectSuggestionRequest{
+			Input: domain.RuleSuggestion{
+				SuggestionType: domain.SuggestionType(*suggestionType),
+				AppPattern:     *appPattern,
+				TitlePattern:   tp,
+				ProjectID:      *projectID,
+				ActivityID:     *activityID,
+			},
+		}); err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(stdout, "suggestion rejected")
+		return 0
 	case "auto-apply":
 		fs := flag.NewFlagSet("rules auto-apply", flag.ContinueOnError)
 		fs.SetOutput(stderr)
 		format := fs.String("format", "text", "text|json|yaml")
 		minConf := fs.Int("min-confidence", 85, "minimum confidence")
 		applyNow := fs.Bool("apply-now", true, "apply after creating rules")
+		date := fs.String("date", "", "optional date scope YYYY-MM-DD")
 		minDur := fs.Int64("min-duration-ms", 2000, "minimum duration")
 		limit := fs.Int("limit", 100, "max suggestions")
 		if err := fs.Parse(args[1:]); err != nil {
 			return 2
 		}
+		var datePtr *string
+		if strings.TrimSpace(*date) != "" {
+			datePtr = date
+		}
 		res, err := r.App.Rules.AutoApplySuggestions(ctx, contracts.RulesAutoApplySuggestionsRequest{
-			Input: domain.AutoApplySuggestionsInput{MinConfidence: *minConf, ApplyNow: *applyNow, MinDurationMS: *minDur, Limit: *limit},
+			Input: domain.AutoApplySuggestionsInput{
+				Date:          datePtr,
+				MinConfidence: *minConf,
+				ApplyNow:      *applyNow,
+				MinDurationMS: *minDur,
+				Limit:         *limit,
+			},
 		})
 		if err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
@@ -374,6 +459,78 @@ func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.
 			return 0
 		}
 		return emit(stdout, *format, clidto.AutoApplyResultFromDomain(res.Result), stderr)
+	case "bootstrap":
+		fs := flag.NewFlagSet("rules bootstrap", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		date := fs.String("date", "", "optional date scope YYYY-MM-DD")
+		minDur := fs.Int64("min-duration-ms", 2000, "minimum duration")
+		limit := fs.Int("limit", 20, "max groups")
+		format := fs.String("format", "text", "text|json|yaml")
+		if err := fs.Parse(args[1:]); err != nil {
+			return 2
+		}
+		var datePtr *string
+		if strings.TrimSpace(*date) != "" {
+			datePtr = date
+		}
+		res, err := r.App.Rules.BootstrapGroups(ctx, contracts.RulesBootstrapGroupsRequest{
+			Query: domain.SuggestionQuery{
+				Date:          datePtr,
+				MinDurationMS: *minDur,
+				Limit:         *limit,
+			},
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return 1
+		}
+		if *format == "text" {
+			if res.Stats.IsColdStart {
+				fmt.Fprintf(stdout, "cold_start: %s\n", res.Stats.Message)
+			}
+			for _, g := range res.Groups {
+				fmt.Fprintf(stdout, "%s | %s | %d events | %s\n", g.AppName, g.WindowTitle, g.EventCount, domain.FormatDuration(g.TotalDurationMS))
+			}
+			if len(res.Groups) == 0 {
+				fmt.Fprintln(stdout, "No bootstrap groups")
+			}
+			return 0
+		}
+		return emit(stdout, *format, map[string]any{"groups": clidto.GroupedEventsFromDomain(res.Groups), "stats": res.Stats}, stderr)
+	case "label-group":
+		fs := flag.NewFlagSet("rules label-group", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		date := fs.String("date", "", "date YYYY-MM-DD")
+		appName := fs.String("app", "", "app name")
+		windowTitle := fs.String("title", "", "window title")
+		projectID := fs.Int64("project-id", 0, "project id")
+		activityID := fs.Int64("activity-id", 0, "activity id")
+		createRule := fs.Bool("create-rule", true, "create a reusable rule")
+		applyNow := fs.Bool("apply-now", true, "map events now")
+		if err := fs.Parse(args[1:]); err != nil {
+			return 2
+		}
+		if *date == "" || *appName == "" || *projectID <= 0 || *activityID <= 0 {
+			fmt.Fprintln(stderr, "--date --app --project-id --activity-id are required")
+			return 2
+		}
+		res, err := r.App.Rules.LabelBootstrapGroup(ctx, contracts.RulesBootstrapLabelRequest{
+			Input: domain.BootstrapLabelInput{
+				Date:        *date,
+				AppName:     *appName,
+				WindowTitle: *windowTitle,
+				ProjectID:   *projectID,
+				ActivityID:  *activityID,
+				CreateRule:  *createRule,
+				ApplyNow:    *applyNow,
+			},
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "label-group: rule_created=%v mapped_events=%d\n", res.Result.RuleCreated, res.Result.MappedEvents)
+		return 0
 	case "apply-rules":
 		fs := flag.NewFlagSet("rules apply-rules", flag.ContinueOnError)
 		fs.SetOutput(stderr)
@@ -680,6 +837,19 @@ func splitList(s string) []string {
 	return out
 }
 
+func splitCSVNormalized(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
 func (r *Runner) runReview(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "usage: tt review <dates|groups|map-group|discard-group>")
@@ -857,8 +1027,10 @@ Global conventions for LLM/tooling:
 Examples:
   tt help rules --format json
   tt schema rules
-  tt rules suggest --format json --limit 20
+  tt rules suggest --format json --limit 20 --min-evidence 2
   tt rules auto-apply --min-confidence 90 --apply-now
+  tt rules bootstrap --date 2026-02-06 --format json
+  tt rules label-group --date 2026-02-06 --app Arc --title "Daily standup" --project-id 10 --activity-id 100 --create-rule --apply-now
   tt review groups --date 2026-02-06 --format json
   tt reports --range week --format json
 `)

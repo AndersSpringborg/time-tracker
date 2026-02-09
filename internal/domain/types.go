@@ -145,6 +145,14 @@ const (
 	SuggestionTypeAppAndTitle SuggestionType = "app_and_title"
 )
 
+type SuggestionFeedbackAction string
+
+const (
+	SuggestionFeedbackAccepted SuggestionFeedbackAction = "accepted"
+	SuggestionFeedbackRejected SuggestionFeedbackAction = "rejected"
+	SuggestionFeedbackIgnored  SuggestionFeedbackAction = "ignored"
+)
+
 type RuleSuggestion struct {
 	SuggestionType   SuggestionType
 	AppPattern       string
@@ -153,15 +161,71 @@ type RuleSuggestion struct {
 	ActivityID       int64
 	DisplayPath      string
 	Confidence       int
+	Score            float64
+	ConfidenceReason string
+	Ambiguity        float64
 	ImpactCount      int
 	ImpactDurationMS int64
 	EvidenceCount    int
+	LastSeenMS       int64
+	ContextHints     []string
 }
 
 type SuggestionQuery struct {
-	Date          *string
-	MinDurationMS int64
-	Limit         int
+	Date           *string
+	MinDurationMS  int64
+	Limit          int
+	MinEvidence    int
+	IncludeContext bool
+	ExcludeApps    []string
+}
+
+type SuggestionStats struct {
+	MappedEvents int64
+	Activities   int64
+	IsColdStart  bool
+	Message      string
+}
+
+type SuggestionFeedback struct {
+	SuggestionType SuggestionType
+	AppPattern     string
+	TitlePattern   *string
+	ProjectID      int64
+	ActivityID     int64
+	Score          float64
+	Confidence     int
+	Action         SuggestionFeedbackAction
+	AppliedNow     bool
+	DateScope      *string
+}
+
+type SuggestionRun struct {
+	DateScope      *string
+	MinDurationMS  int64
+	Limit          int
+	MinEvidence    int
+	MinConfidence  int
+	IncludeContext bool
+	ApplyNow       bool
+	Analyzed       int
+	Accepted       int
+	MappedEvents   int64
+}
+
+type BootstrapLabelInput struct {
+	Date        string
+	AppName     string
+	WindowTitle string
+	ProjectID   int64
+	ActivityID  int64
+	CreateRule  bool
+	ApplyNow    bool
+}
+
+type BootstrapLabelResult struct {
+	MappedEvents int64
+	RuleCreated  bool
 }
 
 type ApplySuggestionInput struct {

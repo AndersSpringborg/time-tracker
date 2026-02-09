@@ -31,16 +31,21 @@ type Rule struct {
 }
 
 type RuleSuggestion struct {
-	SuggestionType   string  `json:"suggestion_type" yaml:"suggestion_type"`
-	AppPattern       string  `json:"app_pattern" yaml:"app_pattern"`
-	TitlePattern     *string `json:"title_pattern,omitempty" yaml:"title_pattern,omitempty"`
-	ProjectID        int64   `json:"project_id" yaml:"project_id"`
-	ActivityID       int64   `json:"activity_id" yaml:"activity_id"`
-	DisplayPath      string  `json:"display_path" yaml:"display_path"`
-	Confidence       int     `json:"confidence" yaml:"confidence"`
-	ImpactCount      int     `json:"impact_count" yaml:"impact_count"`
-	ImpactDurationMS int64   `json:"impact_duration_ms" yaml:"impact_duration_ms"`
-	EvidenceCount    int     `json:"evidence_count" yaml:"evidence_count"`
+	SuggestionType   string   `json:"suggestion_type" yaml:"suggestion_type"`
+	AppPattern       string   `json:"app_pattern" yaml:"app_pattern"`
+	TitlePattern     *string  `json:"title_pattern,omitempty" yaml:"title_pattern,omitempty"`
+	ProjectID        int64    `json:"project_id" yaml:"project_id"`
+	ActivityID       int64    `json:"activity_id" yaml:"activity_id"`
+	DisplayPath      string   `json:"display_path" yaml:"display_path"`
+	Confidence       int      `json:"confidence" yaml:"confidence"`
+	Score            float64  `json:"score" yaml:"score"`
+	ConfidenceReason string   `json:"confidence_reason" yaml:"confidence_reason"`
+	Ambiguity        float64  `json:"ambiguity" yaml:"ambiguity"`
+	ImpactCount      int      `json:"impact_count" yaml:"impact_count"`
+	ImpactDurationMS int64    `json:"impact_duration_ms" yaml:"impact_duration_ms"`
+	EvidenceCount    int      `json:"evidence_count" yaml:"evidence_count"`
+	LastSeenMS       int64    `json:"last_seen_ms" yaml:"last_seen_ms"`
+	ContextHints     []string `json:"context_hints,omitempty" yaml:"context_hints,omitempty"`
 }
 
 type AutoApplySuggestionsResult struct {
@@ -142,9 +147,14 @@ func SuggestionsFromDomain(items []domain.RuleSuggestion) []RuleSuggestion {
 			ActivityID:       item.ActivityID,
 			DisplayPath:      item.DisplayPath,
 			Confidence:       item.Confidence,
+			Score:            item.Score,
+			ConfidenceReason: item.ConfidenceReason,
+			Ambiguity:        item.Ambiguity,
 			ImpactCount:      item.ImpactCount,
 			ImpactDurationMS: item.ImpactDurationMS,
 			EvidenceCount:    item.EvidenceCount,
+			LastSeenMS:       item.LastSeenMS,
+			ContextHints:     item.ContextHints,
 		})
 	}
 	return out

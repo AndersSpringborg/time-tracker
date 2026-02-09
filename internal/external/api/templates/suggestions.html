@@ -2,18 +2,53 @@
 <section class="card">
   <h2>Auto Categorize Suggestions</h2>
   <form class="inline-form" hx-get="/partials/suggestions" hx-target="#suggestions-table" hx-swap="innerHTML">
-    <label>Date (optional) <input type="text" name="date" placeholder="YYYY-MM-DD"></label>
-    <label>Min Duration ms <input type="number" name="min_duration_ms" value="2000"></label>
-    <label>Limit <input type="number" name="limit" value="50"></label>
+    <label>Date (optional) <input type="text" name="date" value="{{if .SuggestionQuery.Date}}{{.SuggestionQuery.Date}}{{end}}" placeholder="YYYY-MM-DD"></label>
+    <label>Min Duration ms <input type="number" name="min_duration_ms" value="{{.SuggestionQuery.MinDurationMS}}"></label>
+    <label>Limit <input type="number" name="limit" value="{{.SuggestionQuery.Limit}}"></label>
+    <label>Min Evidence <input type="number" name="min_evidence" value="{{.SuggestionQuery.MinEvidence}}"></label>
+    <label>Exclude Apps <input type="text" name="exclude_apps" value="{{range $i, $a := .SuggestionQuery.ExcludeApps}}{{if $i}}, {{end}}{{$a}}{{end}}" placeholder="Spotify, loginwindow"></label>
+    <label>Include Context
+      <select name="include_context">
+        <option value="1" {{if .SuggestionQuery.IncludeContext}}selected{{end}}>Yes</option>
+        <option value="0" {{if not .SuggestionQuery.IncludeContext}}selected{{end}}>No</option>
+      </select>
+    </label>
     <button type="submit">Analyze</button>
   </form>
   <form class="inline-form" hx-post="/suggestions/auto-apply" hx-target="#suggestions-table" hx-swap="innerHTML">
     <label>Min Confidence <input type="number" name="min_confidence" value="85"></label>
     <label>Apply Now <input type="checkbox" name="apply_now" value="1" checked></label>
+    <input type="hidden" name="date" value="{{if .SuggestionQuery.Date}}{{.SuggestionQuery.Date}}{{end}}">
+    <input type="hidden" name="min_duration_ms" value="{{.SuggestionQuery.MinDurationMS}}">
+    <input type="hidden" name="limit" value="{{.SuggestionQuery.Limit}}">
+    <input type="hidden" name="min_evidence" value="{{.SuggestionQuery.MinEvidence}}">
+    <input type="hidden" name="exclude_apps" value="{{range $i, $a := .SuggestionQuery.ExcludeApps}}{{if $i}},{{end}}{{$a}}{{end}}">
+    <input type="hidden" name="include_context" value="{{if .SuggestionQuery.IncludeContext}}1{{else}}0{{end}}">
     <button type="submit">Accept All Above Threshold</button>
   </form>
 </section>
 <section class="card">
-  <div id="suggestions-table" hx-get="/partials/suggestions" hx-trigger="load" hx-swap="innerHTML">Loading...</div>
+  <div
+    id="suggestions-table"
+    hx-get="/partials/suggestions?date={{if .SuggestionQuery.Date}}{{.SuggestionQuery.Date}}{{end}}&min_duration_ms={{.SuggestionQuery.MinDurationMS}}&limit={{.SuggestionQuery.Limit}}&min_evidence={{.SuggestionQuery.MinEvidence}}&include_context={{if .SuggestionQuery.IncludeContext}}1{{else}}0{{end}}&exclude_apps={{range $i, $a := .SuggestionQuery.ExcludeApps}}{{if $i}},{{end}}{{$a}}{{end}}"
+    hx-trigger="load"
+    hx-swap="innerHTML"
+  >Loading...</div>
+</section>
+<section class="card">
+  <h2>Cold-Start Bootstrap</h2>
+  <p class="muted">Map high-impact unmapped groups first so the suggestions model can learn from your own data.</p>
+  <form class="inline-form" hx-get="/partials/suggestions/bootstrap" hx-target="#bootstrap-table" hx-swap="innerHTML">
+    <label>Date (required) <input type="text" name="date" value="{{if .SuggestionQuery.Date}}{{.SuggestionQuery.Date}}{{end}}" placeholder="YYYY-MM-DD"></label>
+    <label>Min Duration ms <input type="number" name="min_duration_ms" value="{{.SuggestionQuery.MinDurationMS}}"></label>
+    <label>Top Groups <input type="number" name="bootstrap_limit" value="20"></label>
+    <button type="submit">Load Bootstrap Groups</button>
+  </form>
+  <div
+    id="bootstrap-table"
+    hx-get="/partials/suggestions/bootstrap?date={{if .SuggestionQuery.Date}}{{.SuggestionQuery.Date}}{{end}}&min_duration_ms={{.SuggestionQuery.MinDurationMS}}&bootstrap_limit=20"
+    hx-trigger="load"
+    hx-swap="innerHTML"
+  >Loading...</div>
 </section>
 {{end}}

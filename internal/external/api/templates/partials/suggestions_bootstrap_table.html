@@ -1,0 +1,47 @@
+{{define "partials/suggestions_bootstrap_table"}}
+{{if .BootstrapSummary}}<p class="flash">{{.BootstrapSummary}}</p>{{end}}
+{{if .SuggestionStats.IsColdStart}}
+<p class="muted">{{.SuggestionStats.Message}}</p>
+{{end}}
+<table>
+  <thead>
+    <tr>
+      <th>App</th>
+      <th>Window Title</th>
+      <th>Events</th>
+      <th>Duration</th>
+      <th>Map</th>
+    </tr>
+  </thead>
+  <tbody>
+  {{range .BootstrapGroups}}
+    <tr>
+      <td>{{.AppName}}</td>
+      <td>{{.WindowTitle}}</td>
+      <td>{{.EventCount}}</td>
+      <td>{{formatDuration .TotalDurationMS}}</td>
+      <td>
+        <form class="inline-form" hx-post="/suggestions/bootstrap/map" hx-target="#bootstrap-table" hx-swap="innerHTML">
+          <input type="hidden" name="date" value="{{if $.SuggestionQuery.Date}}{{$.SuggestionQuery.Date}}{{end}}">
+          <input type="hidden" name="app_name" value="{{.AppName}}">
+          <input type="hidden" name="window_title" value="{{.WindowTitle}}">
+          <input type="hidden" name="min_duration_ms" value="{{$.SuggestionQuery.MinDurationMS}}">
+          <input type="hidden" name="limit" value="{{$.SuggestionQuery.Limit}}">
+          <input type="hidden" name="bootstrap_limit" value="{{$.SuggestionQuery.Limit}}">
+          <input type="hidden" name="min_evidence" value="{{$.SuggestionQuery.MinEvidence}}">
+          <input type="hidden" name="exclude_apps" value="{{range $i, $a := $.SuggestionQuery.ExcludeApps}}{{if $i}},{{end}}{{$a}}{{end}}">
+          <input type="hidden" name="include_context" value="{{if $.SuggestionQuery.IncludeContext}}1{{else}}0{{end}}">
+          <label>Project ID <input type="number" name="project_id" placeholder="10"></label>
+          <label>Activity ID <input type="number" name="activity_id" placeholder="100"></label>
+          <label>Create rule <input type="checkbox" name="create_rule" value="1" checked></label>
+          <label>Apply now <input type="checkbox" name="apply_now" value="1" checked></label>
+          <button type="submit">Label</button>
+        </form>
+      </td>
+    </tr>
+  {{else}}
+    <tr><td colspan="5" class="muted">No bootstrap groups for current scope</td></tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}

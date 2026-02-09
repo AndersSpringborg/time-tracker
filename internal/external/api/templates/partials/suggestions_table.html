@@ -1,13 +1,21 @@
 {{define "partials/suggestions_table"}}
 {{if .AutoApplySummary}}<p class="flash">{{.AutoApplySummary}}</p>{{end}}
+{{if .SuggestionStats.IsColdStart}}
+<section class="flash warning">
+  <strong>Cold start:</strong> {{.SuggestionStats.Message}}
+  <div class="muted">Mapped events: {{.SuggestionStats.MappedEvents}}, activities: {{.SuggestionStats.Activities}}</div>
+</section>
+{{end}}
 <table>
   <thead>
     <tr>
       <th>Pattern</th>
       <th>Target</th>
       <th>Confidence</th>
+      <th>Score</th>
       <th>Impact</th>
       <th>Evidence</th>
+      <th>Reason</th>
       <th></th>
     </tr>
   </thead>
@@ -20,8 +28,15 @@
       </td>
       <td>{{.DisplayPath}}</td>
       <td>{{.Confidence}}%</td>
+      <td>{{printf "%.1f" .Score}} (ambig {{printf "%.2f" .Ambiguity}})</td>
       <td>{{.ImpactCount}} events / {{formatDuration .ImpactDurationMS}}</td>
       <td>{{.EvidenceCount}}</td>
+      <td>
+        {{.ConfidenceReason}}
+        {{if .ContextHints}}
+          <br><span class="muted">{{range $i, $hint := .ContextHints}}{{if $i}} | {{end}}{{$hint}}{{end}}</span>
+        {{end}}
+      </td>
       <td>
         <form hx-post="/suggestions/accept" hx-target="#suggestions-table" hx-swap="innerHTML">
           <input type="hidden" name="suggestion_type" value="{{.SuggestionType}}">
@@ -31,16 +46,44 @@
           <input type="hidden" name="activity_id" value="{{.ActivityID}}">
           <input type="hidden" name="display_path" value="{{.DisplayPath}}">
           <input type="hidden" name="confidence" value="{{.Confidence}}">
+          <input type="hidden" name="score" value="{{.Score}}">
+          <input type="hidden" name="confidence_reason" value="{{.ConfidenceReason}}">
+          <input type="hidden" name="ambiguity" value="{{.Ambiguity}}">
           <input type="hidden" name="impact_count" value="{{.ImpactCount}}">
           <input type="hidden" name="impact_duration_ms" value="{{.ImpactDurationMS}}">
           <input type="hidden" name="evidence_count" value="{{.EvidenceCount}}">
+          <input type="hidden" name="last_seen_ms" value="{{.LastSeenMS}}">
+          <input type="hidden" name="context_hints" value="{{range $i, $hint := .ContextHints}}{{if $i}},{{end}}{{$hint}}{{end}}">
+          <input type="hidden" name="date" value="{{if $.SuggestionQuery.Date}}{{$.SuggestionQuery.Date}}{{end}}">
+          <input type="hidden" name="min_duration_ms" value="{{$.SuggestionQuery.MinDurationMS}}">
+          <input type="hidden" name="limit" value="{{$.SuggestionQuery.Limit}}">
+          <input type="hidden" name="min_evidence" value="{{$.SuggestionQuery.MinEvidence}}">
+          <input type="hidden" name="exclude_apps" value="{{range $i, $a := $.SuggestionQuery.ExcludeApps}}{{if $i}},{{end}}{{$a}}{{end}}">
+          <input type="hidden" name="include_context" value="{{if $.SuggestionQuery.IncludeContext}}1{{else}}0{{end}}">
           <label>Apply now <input type="checkbox" name="apply_now" value="1" checked></label>
           <button type="submit">Accept</button>
+        </form>
+        <form hx-post="/suggestions/reject" hx-target="#suggestions-table" hx-swap="innerHTML">
+          <input type="hidden" name="suggestion_type" value="{{.SuggestionType}}">
+          <input type="hidden" name="app_pattern" value="{{.AppPattern}}">
+          <input type="hidden" name="title_pattern" value="{{if .TitlePattern}}{{.TitlePattern}}{{end}}">
+          <input type="hidden" name="project_id" value="{{.ProjectID}}">
+          <input type="hidden" name="activity_id" value="{{.ActivityID}}">
+          <input type="hidden" name="confidence" value="{{.Confidence}}">
+          <input type="hidden" name="score" value="{{.Score}}">
+          <input type="hidden" name="ambiguity" value="{{.Ambiguity}}">
+          <input type="hidden" name="date" value="{{if $.SuggestionQuery.Date}}{{$.SuggestionQuery.Date}}{{end}}">
+          <input type="hidden" name="min_duration_ms" value="{{$.SuggestionQuery.MinDurationMS}}">
+          <input type="hidden" name="limit" value="{{$.SuggestionQuery.Limit}}">
+          <input type="hidden" name="min_evidence" value="{{$.SuggestionQuery.MinEvidence}}">
+          <input type="hidden" name="exclude_apps" value="{{range $i, $a := $.SuggestionQuery.ExcludeApps}}{{if $i}},{{end}}{{$a}}{{end}}">
+          <input type="hidden" name="include_context" value="{{if $.SuggestionQuery.IncludeContext}}1{{else}}0{{end}}">
+          <button type="submit">Reject</button>
         </form>
       </td>
     </tr>
   {{else}}
-    <tr><td colspan="6" class="muted">No suggestions for current scope</td></tr>
+    <tr><td colspan="8" class="muted">No suggestions for current scope</td></tr>
   {{end}}
   </tbody>
 </table>

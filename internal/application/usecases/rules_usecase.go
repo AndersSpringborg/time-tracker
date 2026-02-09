@@ -3,6 +3,7 @@ package usecases
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -233,14 +234,11 @@ func (u *RulesUsecase) ListGroupedUnmappedEvents(ctx context.Context, req contra
 }
 
 func (u *RulesUsecase) AnalyzeSuggestions(ctx context.Context, req contracts.RulesAnalyzeSuggestionsRequest) (contracts.RulesAnalyzeSuggestionsResponse, error) {
-	q := req.Query
-	if q.Limit <= 0 {
-		q.Limit = 50
+	q := normalizeSuggestionQuery(req.Query, 50)
+	stats, err := u.loadSuggestionStats(ctx)
+	if err != nil {
+		return contracts.RulesAnalyzeSuggestionsResponse{}, err
 	}
-	if q.MinDurationMS <= 0 {
-		q.MinDurationMS = 2000
-	}
-
 	app, err := u.repo.ListAppSuggestions(ctx, q)
 	if err != nil {
 		return contracts.RulesAnalyzeSuggestionsResponse{}, err
@@ -250,7 +248,65 @@ func (u *RulesUsecase) AnalyzeSuggestions(ctx context.Context, req contracts.Rul
 		return contracts.RulesAnalyzeSuggestionsResponse{}, err
 	}
 	all := append(app, title...)
-	return contracts.RulesAnalyzeSuggestionsResponse{Suggestions: domain.RankSuggestions(all, q.Limit)}, nil
+	stats.Message = domain.BuildSuggestionColdStartMessage(stats)
+	return contracts.RulesAnalyzeSuggestionsResponse{
+		Suggestions: domain.RankSuggestions(all, q.Limit),
+		Stats:       stats,
+	}, nil
+}
+
+func (u *RulesUsecase) BootstrapGroups(ctx context.Context, req contracts.RulesBootstrapGroupsRequest) (contracts.RulesBootstrapGroupsResponse, error) {
+	q := normalizeSuggestionQuery(req.Query, 20)
+	stats, err := u.loadSuggestionStats(ctx)
+	if err != nil {
+		return contracts.RulesBootstrapGroupsResponse{}, err
+	}
+	groups, err := u.repo.ListBootstrapGroups(ctx, q)
+	if err != nil {
+		return contracts.RulesBootstrapGroupsResponse{}, err
+	}
+	stats.Message = domain.BuildSuggestionColdStartMessage(stats)
+	return contracts.RulesBootstrapGroupsResponse{Groups: groups, Stats: stats}, nil
+}
+
+func (u *RulesUsecase) LabelBootstrapGroup(ctx context.Context, req contracts.RulesBootstrapLabelRequest) (contracts.RulesBootstrapLabelResponse, error) {
+	in := req.Input
+	if strings.TrimSpace(in.Date) == "" {
+		return contracts.RulesBootstrapLabelResponse{}, fmt.Errorf("date is required")
+	}
+	if strings.TrimSpace(in.AppName) == "" {
+		return contracts.RulesBootstrapLabelResponse{}, fmt.Errorf("app_name is required")
+	}
+	if in.ProjectID <= 0 || in.ActivityID <= 0 {
+		return contracts.RulesBootstrapLabelResponse{}, fmt.Errorf("project_id and activity_id are required")
+	}
+
+	out := domain.BootstrapLabelResult{}
+	if in.CreateRule {
+		projectID := in.ProjectID
+		activityID := in.ActivityID
+		appPattern := "(?i)^" + regexp.QuoteMeta(strings.TrimSpace(in.AppName)) + "$"
+		titlePattern := domain.BuildTitlePattern(in.WindowTitle)
+		if _, err := u.repo.AddRule(ctx, domain.NormalizeRuleInput(domain.RuleInput{
+			Priority:     100,
+			AppPattern:   appPattern,
+			TitlePattern: titlePattern,
+			ProjectID:    &projectID,
+			ActivityID:   &activityID,
+			ActionType:   domain.RuleActionAssignExplicit,
+		})); err != nil {
+			return contracts.RulesBootstrapLabelResponse{}, err
+		}
+		out.RuleCreated = true
+	}
+	if in.ApplyNow {
+		mapped, err := u.repo.MapEventsByGroupWithLabel(ctx, in.Date, in.AppName, in.WindowTitle, in.ProjectID, in.ActivityID, "bootstrap")
+		if err != nil {
+			return contracts.RulesBootstrapLabelResponse{}, err
+		}
+		out.MappedEvents = mapped
+	}
+	return contracts.RulesBootstrapLabelResponse{Result: out}, nil
 }
 
 func (u *RulesUsecase) AcceptSuggestion(ctx context.Context, req contracts.RulesAcceptSuggestionRequest) (contracts.RulesAcceptSuggestionResponse, error) {
@@ -278,6 +334,20 @@ func (u *RulesUsecase) AcceptSuggestion(ctx context.Context, req contracts.Rules
 
 	result := domain.ApplySuggestionResult{RuleCreated: true}
 	if !in.ApplyNow {
+		if err := u.repo.RecordSuggestionFeedback(ctx, domain.SuggestionFeedback{
+			SuggestionType: in.Suggestion.SuggestionType,
+			AppPattern:     in.Suggestion.AppPattern,
+			TitlePattern:   in.Suggestion.TitlePattern,
+			ProjectID:      in.Suggestion.ProjectID,
+			ActivityID:     in.Suggestion.ActivityID,
+			Score:          in.Suggestion.Score,
+			Confidence:     in.Suggestion.Confidence,
+			Action:         domain.SuggestionFeedbackAccepted,
+			AppliedNow:     false,
+			DateScope:      in.Date,
+		}); err != nil {
+			return contracts.RulesAcceptSuggestionResponse{}, err
+		}
 		return contracts.RulesAcceptSuggestionResponse{Result: result}, nil
 	}
 	events, err := u.repo.ListUnmappedEvents(ctx, in.Date, 0)
@@ -290,7 +360,41 @@ func (u *RulesUsecase) AcceptSuggestion(ctx context.Context, req contracts.Rules
 		return contracts.RulesAcceptSuggestionResponse{}, err
 	}
 	result.MappedEvents = count
+	if err := u.repo.RecordSuggestionFeedback(ctx, domain.SuggestionFeedback{
+		SuggestionType: in.Suggestion.SuggestionType,
+		AppPattern:     in.Suggestion.AppPattern,
+		TitlePattern:   in.Suggestion.TitlePattern,
+		ProjectID:      in.Suggestion.ProjectID,
+		ActivityID:     in.Suggestion.ActivityID,
+		Score:          in.Suggestion.Score,
+		Confidence:     in.Suggestion.Confidence,
+		Action:         domain.SuggestionFeedbackAccepted,
+		AppliedNow:     in.ApplyNow,
+		DateScope:      in.Date,
+	}); err != nil {
+		return contracts.RulesAcceptSuggestionResponse{}, err
+	}
 	return contracts.RulesAcceptSuggestionResponse{Result: result}, nil
+}
+
+func (u *RulesUsecase) RejectSuggestion(ctx context.Context, req contracts.RulesRejectSuggestionRequest) (contracts.RulesRejectSuggestionResponse, error) {
+	in := req.Input
+	if strings.TrimSpace(in.AppPattern) == "" {
+		return contracts.RulesRejectSuggestionResponse{}, fmt.Errorf("app_pattern is required")
+	}
+	if err := u.repo.RecordSuggestionFeedback(ctx, domain.SuggestionFeedback{
+		SuggestionType: in.SuggestionType,
+		AppPattern:     in.AppPattern,
+		TitlePattern:   in.TitlePattern,
+		ProjectID:      in.ProjectID,
+		ActivityID:     in.ActivityID,
+		Score:          in.Score,
+		Confidence:     in.Confidence,
+		Action:         domain.SuggestionFeedbackRejected,
+	}); err != nil {
+		return contracts.RulesRejectSuggestionResponse{}, err
+	}
+	return contracts.RulesRejectSuggestionResponse{}, nil
 }
 
 func (u *RulesUsecase) AutoApplySuggestions(ctx context.Context, req contracts.RulesAutoApplySuggestionsRequest) (contracts.RulesAutoApplySuggestionsResponse, error) {
@@ -301,7 +405,13 @@ func (u *RulesUsecase) AutoApplySuggestions(ctx context.Context, req contracts.R
 	if in.MinConfidence <= 0 {
 		in.MinConfidence = 85
 	}
-	q := domain.SuggestionQuery{Date: in.Date, MinDurationMS: in.MinDurationMS, Limit: in.Limit}
+	q := normalizeSuggestionQuery(domain.SuggestionQuery{
+		Date:           in.Date,
+		MinDurationMS:  in.MinDurationMS,
+		Limit:          in.Limit,
+		MinEvidence:    2,
+		IncludeContext: true,
+	}, in.Limit)
 	suggestionsRes, err := u.AnalyzeSuggestions(ctx, contracts.RulesAnalyzeSuggestionsRequest{Query: q})
 	if err != nil {
 		return contracts.RulesAutoApplySuggestionsResponse{}, err
@@ -324,7 +434,48 @@ func (u *RulesUsecase) AutoApplySuggestions(ctx context.Context, req contracts.R
 		}
 		out.MappedEvents += res.Result.MappedEvents
 	}
+	_ = u.repo.RecordSuggestionRun(ctx, domain.SuggestionRun{
+		DateScope:      in.Date,
+		MinDurationMS:  q.MinDurationMS,
+		Limit:          q.Limit,
+		MinEvidence:    q.MinEvidence,
+		MinConfidence:  in.MinConfidence,
+		IncludeContext: q.IncludeContext,
+		ApplyNow:       in.ApplyNow,
+		Analyzed:       out.Analyzed,
+		Accepted:       out.Accepted,
+		MappedEvents:   out.MappedEvents,
+	})
 	return contracts.RulesAutoApplySuggestionsResponse{Result: out}, nil
+}
+
+func (u *RulesUsecase) loadSuggestionStats(ctx context.Context) (domain.SuggestionStats, error) {
+	mapped, err := u.repo.CountMappedEvents(ctx)
+	if err != nil {
+		return domain.SuggestionStats{}, err
+	}
+	activities, err := u.repo.CountActivities(ctx)
+	if err != nil {
+		return domain.SuggestionStats{}, err
+	}
+	return domain.SuggestionStats{
+		MappedEvents: mapped,
+		Activities:   activities,
+		IsColdStart:  mapped == 0 || activities == 0,
+	}, nil
+}
+
+func normalizeSuggestionQuery(q domain.SuggestionQuery, defaultLimit int) domain.SuggestionQuery {
+	if q.Limit <= 0 {
+		q.Limit = defaultLimit
+	}
+	if q.MinDurationMS <= 0 {
+		q.MinDurationMS = 2000
+	}
+	if q.MinEvidence <= 0 {
+		q.MinEvidence = 2
+	}
+	return q
 }
 
 func (u *RulesUsecase) ApplyRules(ctx context.Context, req contracts.RulesApplyRequest) (contracts.RulesApplyResponse, error) {
