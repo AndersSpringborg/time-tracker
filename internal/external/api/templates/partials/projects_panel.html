@@ -1,33 +1,177 @@
 {{define "partials/projects_panel"}}
-<div class="split">
-  <div>
-    <h2>Active Projects</h2>
-    <table>
-      <thead><tr><th>Project</th><th>Notes</th><th></th></tr></thead>
-      <tbody>
-      {{range .ActiveProjects}}
-        <tr>
-          <td>{{.Title}}</td>
-          <td>{{.Metadata}}</td>
-          <td><button hx-post="/projects/{{.ProjectID}}/end" hx-target="#projects-panel" hx-swap="innerHTML">End</button></td>
-        </tr>
-      {{else}}
-        <tr><td colspan="3" class="muted">No active projects</td></tr>
-      {{end}}
-      </tbody>
-    </table>
-    <button hx-post="/projects/clear" hx-target="#projects-panel" hx-swap="innerHTML">End All</button>
-  </div>
-  <div>
-    <h2>Activate Project</h2>
-    <form hx-post="/projects/activate" hx-target="#projects-panel" hx-swap="innerHTML">
-      <select name="project_id">
-        {{range .AllProjects}}
-          <option value="{{.ProjectID}}">{{.Title}}</option>
-        {{end}}
-      </select>
-      <button type="submit">Activate</button>
+<div class="space-y-5">
+  {{if .ProjectError}}
+    <div class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{{.ProjectError}}</div>
+  {{end}}
+  {{if .ProjectSummary}}
+    <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{{.ProjectSummary}}</div>
+  {{end}}
+
+  <section class="grid gap-3 sm:grid-cols-3">
+    <article class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <p class="text-xs uppercase tracking-wide text-slate-500">Projects</p>
+      <p class="mt-2 text-2xl font-semibold text-tt-ink">{{len .AllProjects}}</p>
+    </article>
+    <article class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <p class="text-xs uppercase tracking-wide text-slate-500">Active Contexts</p>
+      <p class="mt-2 text-2xl font-semibold text-tt-ink">{{len .ActiveProjects}}</p>
+    </article>
+    <article class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <p class="text-xs uppercase tracking-wide text-slate-500">Activities</p>
+      <p class="mt-2 text-2xl font-semibold text-tt-ink">{{len .AllActivities}}</p>
+    </article>
+  </section>
+
+  <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" id="project-create-card">
+    <h2 class="text-lg font-semibold text-tt-ink">Create Project</h2>
+    <form class="mt-4 grid gap-3 md:grid-cols-5" hx-post="/projects/create" hx-target="#projects-panel" hx-swap="innerHTML">
+      <label class="md:col-span-2">
+        <span class="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Title</span>
+        <input class="w-full rounded-lg border-slate-300 text-sm" type="text" name="title" placeholder="Customer Portal" required>
+      </label>
+      <label class="md:col-span-2">
+        <span class="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Notes</span>
+        <input class="w-full rounded-lg border-slate-300 text-sm" type="text" name="metadata" placeholder="optional context">
+      </label>
+      <div class="md:col-span-1 md:self-end">
+        <button class="w-full rounded-lg bg-tt-accent px-3 py-2 text-sm font-semibold text-white hover:bg-teal-700" type="submit">Add Project</button>
+      </div>
     </form>
-  </div>
+  </section>
+
+  <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <h2 class="text-lg font-semibold text-tt-ink">Active Project Context</h2>
+      <button class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50" hx-post="/projects/clear" hx-target="#projects-panel" hx-swap="innerHTML" hx-confirm="End all active project contexts?">End All</button>
+    </div>
+    <div class="mt-3 space-y-2">
+      {{range .ActiveProjects}}
+        <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2">
+          <div>
+            <p class="font-medium text-tt-ink">{{.Title}}</p>
+            <p class="text-xs text-slate-600">
+              {{with index $.ProjectActivities .ProjectID}}
+                {{range $i, $a := .}}{{if $i}}, {{end}}{{$a.Title}}{{end}}
+              {{else}}
+                No activities yet
+              {{end}}
+            </p>
+          </div>
+          <button class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50" hx-post="/projects/{{.ProjectID}}/end" hx-target="#projects-panel" hx-swap="innerHTML">End</button>
+        </div>
+      {{else}}
+        <p class="text-sm text-slate-600">No active project context.</p>
+      {{end}}
+    </div>
+  </section>
+
+  <section class="grid gap-4 lg:grid-cols-2">
+    {{range .AllProjects}}
+      <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <h3 class="text-base font-semibold text-tt-ink">{{.Title}}</h3>
+            {{if .Metadata}}<p class="mt-1 text-sm text-slate-600">{{.Metadata}}</p>{{end}}
+          </div>
+          <div class="flex flex-wrap gap-2">
+            {{if index $.ActiveProjectIDs .ProjectID}}
+              <span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">Active</span>
+              <button class="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-700 hover:bg-slate-50" hx-post="/projects/{{.ProjectID}}/end" hx-target="#projects-panel" hx-swap="innerHTML">End</button>
+            {{else}}
+              <form hx-post="/projects/activate" hx-target="#projects-panel" hx-swap="innerHTML">
+                <input type="hidden" name="project_id" value="{{.ProjectID}}">
+                <button class="rounded-md border border-teal-300 bg-teal-50 px-2.5 py-1.5 text-xs font-semibold text-teal-700 hover:bg-teal-100" type="submit">Activate</button>
+              </form>
+            {{end}}
+            <button class="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-100" hx-post="/projects/{{.ProjectID}}/archive" hx-target="#projects-panel" hx-swap="innerHTML" hx-confirm="Archive this project?">Archive</button>
+          </div>
+        </div>
+
+        <form class="mt-4 flex gap-2" hx-post="/projects/{{.ProjectID}}/activities/add" hx-target="#projects-panel" hx-swap="innerHTML">
+          <input class="w-full rounded-md border-slate-300 text-sm" type="text" name="title" placeholder="Add activity (e.g. Development)" required>
+          <button class="rounded-md bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-700" type="submit">Add</button>
+        </form>
+
+        <div class="mt-4">
+          <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Activities</p>
+          {{$project := .}}
+          <div class="mt-2 space-y-2">
+            {{with index $.ProjectActivities .ProjectID}}
+              {{range .}}
+                <div class="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                  <span class="text-sm text-slate-800">{{.Title}}</span>
+                  <button class="rounded-md border border-red-200 bg-white px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-50" hx-post="/projects/{{$project.ProjectID}}/activities/{{.ActivityID}}/remove" hx-target="#projects-panel" hx-swap="innerHTML" hx-confirm="Remove this activity from project '{{$project.Title}}'?">Remove</button>
+                </div>
+              {{end}}
+            {{else}}
+              <p class="text-sm text-slate-500">No activities yet.</p>
+            {{end}}
+          </div>
+        </div>
+      </article>
+    {{else}}
+      <article class="rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-500 lg:col-span-2">
+        No projects available yet. Create your first project to start mapping events.
+      </article>
+    {{end}}
+  </section>
+
+  <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <details>
+      <summary class="cursor-pointer list-none text-sm font-semibold text-slate-700">
+        Archived Projects ({{len .ArchivedProjects}})
+      </summary>
+      <div class="mt-3 space-y-2">
+        {{range .ArchivedProjects}}
+          <div class="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+            <div>
+              <p class="font-medium text-tt-ink">{{.Title}}</p>
+              {{if .Metadata}}<p class="text-xs text-slate-500">{{.Metadata}}</p>{{end}}
+            </div>
+            <button class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-100" hx-post="/projects/{{.ProjectID}}/restore" hx-target="#projects-panel" hx-swap="innerHTML">Restore</button>
+          </div>
+        {{else}}
+          <p class="text-sm text-slate-500">No archived projects.</p>
+        {{end}}
+      </div>
+    </details>
+  </section>
+
+  <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <h2 class="text-lg font-semibold text-tt-ink">Mapping Targets</h2>
+      <span class="text-xs uppercase tracking-wide text-slate-500" id="mapping-target-count">{{len .ProjectTargets}} shown</span>
+    </div>
+    <p class="mt-1 text-sm text-slate-600">Event mapping uses these composite targets: <strong>Project > Activity</strong>.</p>
+    <input class="mt-3 w-full rounded-lg border-slate-300 text-sm" id="mapping-target-filter" type="search" placeholder="Filter targets...">
+    <ul class="mt-3 grid gap-2 md:grid-cols-2" id="mapping-target-list">
+      {{range .ProjectTargets}}
+        <li class="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700" data-path="{{.}}">{{.}}</li>
+      {{else}}
+        <li class="text-sm text-slate-500">No mapping targets yet. Add activities to projects first.</li>
+      {{end}}
+    </ul>
+  </section>
 </div>
+<script>
+  (() => {
+    const input = document.getElementById("mapping-target-filter");
+    const list = document.getElementById("mapping-target-list");
+    const count = document.getElementById("mapping-target-count");
+    if (!input || !list || !count) return;
+    const items = Array.from(list.querySelectorAll("[data-path]"));
+    const applyFilter = () => {
+      const query = input.value.trim().toLowerCase();
+      let visible = 0;
+      items.forEach((item) => {
+        const match = query === "" || item.dataset.path.toLowerCase().includes(query);
+        item.classList.toggle("hidden", !match);
+        if (match) visible += 1;
+      });
+      count.textContent = visible + " shown";
+    };
+    input.addEventListener("input", applyFilter);
+    applyFilter();
+  })();
+</script>
 {{end}}

@@ -1,54 +1,109 @@
 {{define "suggestions"}}
-<section class="card">
-  <h2>Auto Categorize Suggestions</h2>
-  <form class="inline-form" hx-get="/partials/suggestions" hx-target="#suggestions-table" hx-swap="innerHTML">
-    <label>Date (optional) <input type="text" name="date" value="{{if .SuggestionQuery.Date}}{{.SuggestionQuery.Date}}{{end}}" placeholder="YYYY-MM-DD"></label>
-    <label>Min Duration ms <input type="number" name="min_duration_ms" value="{{.SuggestionQuery.MinDurationMS}}"></label>
-    <label>Limit <input type="number" name="limit" value="{{.SuggestionQuery.Limit}}"></label>
-    <label>Min Evidence <input type="number" name="min_evidence" value="{{.SuggestionQuery.MinEvidence}}"></label>
-    <label>Exclude Apps <input type="text" name="exclude_apps" value="{{range $i, $a := .SuggestionQuery.ExcludeApps}}{{if $i}}, {{end}}{{$a}}{{end}}" placeholder="Spotify, loginwindow"></label>
-    <label>Include Context
-      <select name="include_context">
-        <option value="1" {{if .SuggestionQuery.IncludeContext}}selected{{end}}>Yes</option>
-        <option value="0" {{if not .SuggestionQuery.IncludeContext}}selected{{end}}>No</option>
-      </select>
-    </label>
-    <button type="submit">Analyze</button>
-  </form>
-  <form class="inline-form" hx-post="/suggestions/auto-apply" hx-target="#suggestions-table" hx-swap="innerHTML">
-    <label>Min Confidence <input type="number" name="min_confidence" value="85"></label>
-    <label>Apply Now <input type="checkbox" name="apply_now" value="1" checked></label>
-    <input type="hidden" name="date" value="{{if .SuggestionQuery.Date}}{{.SuggestionQuery.Date}}{{end}}">
-    <input type="hidden" name="min_duration_ms" value="{{.SuggestionQuery.MinDurationMS}}">
-    <input type="hidden" name="limit" value="{{.SuggestionQuery.Limit}}">
-    <input type="hidden" name="min_evidence" value="{{.SuggestionQuery.MinEvidence}}">
-    <input type="hidden" name="exclude_apps" value="{{range $i, $a := .SuggestionQuery.ExcludeApps}}{{if $i}},{{end}}{{$a}}{{end}}">
-    <input type="hidden" name="include_context" value="{{if .SuggestionQuery.IncludeContext}}1{{else}}0{{end}}">
-    <button type="submit">Accept All Above Threshold</button>
-  </form>
-</section>
-<section class="card">
-  <div
-    id="suggestions-table"
-    hx-get="/partials/suggestions?date={{if .SuggestionQuery.Date}}{{.SuggestionQuery.Date}}{{end}}&min_duration_ms={{.SuggestionQuery.MinDurationMS}}&limit={{.SuggestionQuery.Limit}}&min_evidence={{.SuggestionQuery.MinEvidence}}&include_context={{if .SuggestionQuery.IncludeContext}}1{{else}}0{{end}}&exclude_apps={{range $i, $a := .SuggestionQuery.ExcludeApps}}{{if $i}},{{end}}{{$a}}{{end}}"
-    hx-trigger="load"
-    hx-swap="innerHTML"
-  >Loading...</div>
-</section>
-<section class="card">
-  <h2>Cold-Start Bootstrap</h2>
-  <p class="muted">Map high-impact unmapped groups first so the suggestions model can learn from your own data.</p>
-  <form class="inline-form" hx-get="/partials/suggestions/bootstrap" hx-target="#bootstrap-table" hx-swap="innerHTML">
-    <label>Date (required) <input type="text" name="date" value="{{if .SuggestionQuery.Date}}{{.SuggestionQuery.Date}}{{end}}" placeholder="YYYY-MM-DD"></label>
-    <label>Min Duration ms <input type="number" name="min_duration_ms" value="{{.SuggestionQuery.MinDurationMS}}"></label>
-    <label>Top Groups <input type="number" name="bootstrap_limit" value="20"></label>
-    <button type="submit">Load Bootstrap Groups</button>
-  </form>
-  <div
-    id="bootstrap-table"
-    hx-get="/partials/suggestions/bootstrap?date={{if .SuggestionQuery.Date}}{{.SuggestionQuery.Date}}{{end}}&min_duration_ms={{.SuggestionQuery.MinDurationMS}}&bootstrap_limit=20"
-    hx-trigger="load"
-    hx-swap="innerHTML"
-  >Loading...</div>
+<section class="space-y-6">
+  <header class="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+    <div class="flex flex-wrap items-start justify-between gap-4">
+      <div>
+        <h1 class="text-2xl font-semibold text-tt-ink">Auto Categorize Suggestions</h1>
+        <p class="mt-1 max-w-2xl text-sm text-slate-600">AI-powered suggestions for mapping unmapped events based on existing patterns.</p>
+      </div>
+    </div>
+  </header>
+
+  <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <h2 class="mb-4 text-lg font-semibold text-tt-ink">Analyze Suggestions</h2>
+    <form class="grid gap-4 md:grid-cols-2 lg:grid-cols-4" hx-get="/partials/suggestions" hx-target="#suggestions-table" hx-swap="innerHTML">
+      <label class="flex flex-col gap-1">
+        <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Date (optional)</span>
+        <input type="text" name="date" value="{{if .SuggestionQuery.Date}}{{.SuggestionQuery.Date}}{{end}}" placeholder="YYYY-MM-DD" class="rounded-lg border-slate-300 text-sm">
+      </label>
+      <label class="flex flex-col gap-1">
+        <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Min Duration ms</span>
+        <input type="number" name="min_duration_ms" value="{{.SuggestionQuery.MinDurationMS}}" class="rounded-lg border-slate-300 text-sm">
+      </label>
+      <label class="flex flex-col gap-1">
+        <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Limit</span>
+        <input type="number" name="limit" value="{{.SuggestionQuery.Limit}}" class="rounded-lg border-slate-300 text-sm">
+      </label>
+      <label class="flex flex-col gap-1">
+        <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Min Evidence</span>
+        <input type="number" name="min_evidence" value="{{.SuggestionQuery.MinEvidence}}" class="rounded-lg border-slate-300 text-sm">
+      </label>
+      <label class="flex flex-col gap-1">
+        <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Exclude Apps</span>
+        <input type="text" name="exclude_apps" value="{{range $i, $a := .SuggestionQuery.ExcludeApps}}{{if $i}}, {{end}}{{$a}}{{end}}" placeholder="Spotify, loginwindow" class="rounded-lg border-slate-300 text-sm">
+      </label>
+      <label class="flex flex-col gap-1">
+        <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Include Context</span>
+        <select name="include_context" class="rounded-lg border-slate-300 text-sm">
+          <option value="1" {{if .SuggestionQuery.IncludeContext}}selected{{end}}>Yes</option>
+          <option value="0" {{if not .SuggestionQuery.IncludeContext}}selected{{end}}>No</option>
+        </select>
+      </label>
+      <div class="flex items-end gap-2 lg:col-span-2">
+        <button type="submit" class="rounded-lg bg-tt-accent px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700">Analyze</button>
+        <a href="/suggestions" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Reset Filters</a>
+      </div>
+    </form>
+  </section>
+
+  <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <h2 class="mb-4 text-lg font-semibold text-tt-ink">Batch Actions</h2>
+    <form class="flex flex-wrap items-end gap-4" hx-post="/suggestions/auto-apply" hx-target="#suggestions-table" hx-swap="innerHTML">
+      <label class="flex flex-col gap-1">
+        <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Min Confidence</span>
+        <input type="number" name="min_confidence" value="85" class="w-24 rounded-lg border-slate-300 text-sm">
+      </label>
+      <label class="flex items-center gap-2 text-sm text-slate-700">
+        <input type="checkbox" name="apply_now" value="1" checked class="rounded border-slate-300 text-tt-accent focus:ring-tt-accent">
+        Apply Now
+      </label>
+      <input type="hidden" name="date" value="{{if .SuggestionQuery.Date}}{{.SuggestionQuery.Date}}{{end}}">
+      <input type="hidden" name="min_duration_ms" value="{{.SuggestionQuery.MinDurationMS}}">
+      <input type="hidden" name="limit" value="{{.SuggestionQuery.Limit}}">
+      <input type="hidden" name="min_evidence" value="{{.SuggestionQuery.MinEvidence}}">
+      <input type="hidden" name="exclude_apps" value="{{range $i, $a := .SuggestionQuery.ExcludeApps}}{{if $i}},{{end}}{{$a}}{{end}}">
+      <input type="hidden" name="include_context" value="{{if .SuggestionQuery.IncludeContext}}1{{else}}0{{end}}">
+      <button type="submit" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">Accept All Above Threshold</button>
+    </form>
+  </section>
+
+  <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <div
+      id="suggestions-table"
+      hx-get="/partials/suggestions?date={{if .SuggestionQuery.Date}}{{.SuggestionQuery.Date}}{{end}}&min_duration_ms={{.SuggestionQuery.MinDurationMS}}&limit={{.SuggestionQuery.Limit}}&min_evidence={{.SuggestionQuery.MinEvidence}}&include_context={{if .SuggestionQuery.IncludeContext}}1{{else}}0{{end}}&exclude_apps={{range $i, $a := .SuggestionQuery.ExcludeApps}}{{if $i}},{{end}}{{$a}}{{end}}"
+      hx-trigger="load"
+      hx-swap="innerHTML"
+    >
+      <div class="text-sm text-slate-600">Loading...</div>
+    </div>
+  </section>
+
+  <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <h2 class="mb-2 text-lg font-semibold text-tt-ink">Cold-Start Bootstrap</h2>
+    <p class="mb-4 text-sm text-slate-600">Map high-impact unmapped groups first so the suggestions model can learn from your own data.</p>
+    <form class="mb-4 flex flex-wrap items-end gap-3" hx-get="/partials/suggestions/bootstrap" hx-target="#bootstrap-table" hx-swap="innerHTML">
+      <label class="flex flex-col gap-1">
+        <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Date (required)</span>
+        <input type="text" name="date" value="{{if .SuggestionQuery.Date}}{{.SuggestionQuery.Date}}{{end}}" placeholder="YYYY-MM-DD" class="rounded-lg border-slate-300 text-sm">
+      </label>
+      <label class="flex flex-col gap-1">
+        <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Min Duration ms</span>
+        <input type="number" name="min_duration_ms" value="{{.SuggestionQuery.MinDurationMS}}" class="rounded-lg border-slate-300 text-sm">
+      </label>
+      <label class="flex flex-col gap-1">
+        <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Top Groups</span>
+        <input type="number" name="bootstrap_limit" value="20" class="w-24 rounded-lg border-slate-300 text-sm">
+      </label>
+      <button type="submit" class="rounded-lg bg-tt-accent px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700">Load Bootstrap Groups</button>
+    </form>
+    <div
+      id="bootstrap-table"
+      hx-get="/partials/suggestions/bootstrap?date={{if .SuggestionQuery.Date}}{{.SuggestionQuery.Date}}{{end}}&min_duration_ms={{.SuggestionQuery.MinDurationMS}}&bootstrap_limit=20"
+      hx-trigger="load"
+      hx-swap="innerHTML"
+    >
+      <div class="text-sm text-slate-600">Loading...</div>
+    </div>
+  </section>
 </section>
 {{end}}

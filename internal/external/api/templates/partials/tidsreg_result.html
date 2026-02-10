@@ -1,17 +1,37 @@
 {{define "partials/tidsreg_result"}}
-<div class="stack">
-  <h3>Import Completed</h3>
-  <p>{{.TidsregSummary}}</p>
-  <table>
-    <tbody>
-      <tr><th>Imported Project Phases</th><td>{{.TidsregResult.ImportedCandidates}}</td></tr>
-      <tr><th>Projects Created</th><td>{{.TidsregResult.ProjectsCreated}}</td></tr>
-      <tr><th>Projects Updated</th><td>{{.TidsregResult.ProjectsUpdated}}</td></tr>
-      <tr><th>Activities Created</th><td>{{.TidsregResult.ActivitiesCreated}}</td></tr>
-      <tr><th>Activities Updated</th><td>{{.TidsregResult.ActivitiesUpdated}}</td></tr>
-      <tr><th>Activities Deleted</th><td>{{.TidsregResult.ActivitiesDeleted}}</td></tr>
-    </tbody>
-  </table>
-  <button type="button" hx-get="/partials/tidsreg/login" hx-target="#tidsreg-flow" hx-swap="innerHTML" hx-indicator="#tidsreg-loader">Import Again</button>
+<div class="space-y-4">
+  <h3 class="text-lg font-semibold text-tt-ink">Import Completed</h3>
+  <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{{.TidsregSummary}}</div>
+
+  <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+    <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+      <p class="text-xs uppercase tracking-wide text-slate-500">Imported Phases</p>
+      <p class="mt-1 text-2xl font-semibold text-tt-ink">{{.TidsregResult.ImportedCandidates}}</p>
+    </div>
+    <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+      <p class="text-xs uppercase tracking-wide text-slate-500">Projects Created</p>
+      <p class="mt-1 text-2xl font-semibold text-emerald-600">{{.TidsregResult.ProjectsCreated}}</p>
+    </div>
+    <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+      <p class="text-xs uppercase tracking-wide text-slate-500">Projects Updated</p>
+      <p class="mt-1 text-2xl font-semibold text-blue-600">{{.TidsregResult.ProjectsUpdated}}</p>
+    </div>
+    <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+      <p class="text-xs uppercase tracking-wide text-slate-500">Activities Created</p>
+      <p class="mt-1 text-2xl font-semibold text-emerald-600">{{.TidsregResult.ActivitiesCreated}}</p>
+    </div>
+    <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+      <p class="text-xs uppercase tracking-wide text-slate-500">Activities Updated</p>
+      <p class="mt-1 text-2xl font-semibold text-blue-600">{{.TidsregResult.ActivitiesUpdated}}</p>
+    </div>
+    <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+      <p class="text-xs uppercase tracking-wide text-slate-500">Activities Deleted</p>
+      <p class="mt-1 text-2xl font-semibold text-red-600">{{.TidsregResult.ActivitiesDeleted}}</p>
+    </div>
+  </div>
+
+  <div class="mt-4">
+    <button type="button" hx-get="/partials/tidsreg/login" hx-target="#tidsreg-flow" hx-swap="innerHTML" hx-indicator="#tidsreg-loader" class="rounded-lg bg-tt-accent px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700">Import Again</button>
+  </div>
 </div>
 {{end}}

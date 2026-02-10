@@ -1,20 +1,27 @@
 {{define "partials/tidsreg_login"}}
-<div class="stack">
-  {{if .TidsregError}}<p class="flash">{{.TidsregError}}</p>{{end}}
-  <form class="grid-form" hx-post="/integrations/tidsreg/session" hx-target="#tidsreg-flow" hx-swap="innerHTML" hx-indicator="#tidsreg-loader">
-    <label>Username
-      <input type="text" name="username" autocomplete="username" required>
+<div class="space-y-4">
+  {{if .TidsregError}}
+  <div class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{{.TidsregError}}</div>
+  {{end}}
+  <form class="grid gap-4 md:grid-cols-2" hx-post="/integrations/tidsreg/session" hx-target="#tidsreg-flow" hx-swap="innerHTML" hx-indicator="#tidsreg-loader">
+    <label class="flex flex-col gap-1">
+      <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Username</span>
+      <input type="text" name="username" autocomplete="username" required class="rounded-lg border-slate-300 text-sm">
     </label>
-    <label>Password
-      <input type="password" name="password" autocomplete="current-password" required>
+    <label class="flex flex-col gap-1">
+      <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Password</span>
+      <input type="password" name="password" autocomplete="current-password" required class="rounded-lg border-slate-300 text-sm">
     </label>
-    <label>Mode
-      <select name="mode">
+    <label class="flex flex-col gap-1">
+      <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Mode</span>
+      <select name="mode" class="rounded-lg border-slate-300 text-sm">
         <option value="0" {{if eq .TidsregMode "0"}}selected{{end}}>Time (0)</option>
         <option value="2" {{if eq .TidsregMode "2"}}selected{{end}}>Voucher (2)</option>
       </select>
     </label>
-    <button type="submit">Load Step 1: Customers</button>
+    <div class="flex items-end">
+      <button type="submit" class="rounded-lg bg-tt-accent px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700">Load Step 1: Customers</button>
+    </div>
   </form>
 </div>
 {{end}}

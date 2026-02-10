@@ -1,10 +1,25 @@
 {{define "partials/collector_status"}}
-<div class="status {{.StateClass}}">
-  <div><strong>Collector:</strong> {{.State}}</div>
-  <div class="actions">
-    <button hx-post="/collector/start" hx-target="#collector-status" hx-swap="innerHTML">Start</button>
-    <button hx-post="/collector/stop" hx-target="#collector-status" hx-swap="innerHTML">Stop</button>
+<div class="rounded-xl border {{if eq .StateClass "running"}}border-emerald-200 bg-emerald-50{{else}}border-amber-200 bg-amber-50{{end}} p-4">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <p class="text-xs font-medium uppercase tracking-wide {{if eq .StateClass "running"}}text-emerald-600{{else}}text-amber-600{{end}}">Collector</p>
+      <p class="mt-1 text-lg font-semibold text-tt-ink">{{.State}}</p>
+      {{if .PID}}<p class="mt-0.5 text-xs text-slate-500">PID: {{.PID}}</p>{{end}}
+    </div>
+    <div class="flex gap-2">
+      <button
+        class="rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-sm font-medium text-emerald-700 hover:bg-emerald-50"
+        hx-post="/collector/start"
+        hx-target="#collector-status"
+        hx-swap="innerHTML"
+      >Start</button>
+      <button
+        class="rounded-lg border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50"
+        hx-post="/collector/stop"
+        hx-target="#collector-status"
+        hx-swap="innerHTML"
+      >Stop</button>
+    </div>
   </div>
-  {{if .PID}}<div class="muted">PID: {{.PID}}</div>{{end}}
 </div>
 {{end}}

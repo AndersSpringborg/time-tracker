@@ -88,13 +88,25 @@ func (f *fakeRulesRepo) ListActivitiesByProject(context.Context, int64) ([]domai
 type fakeReportsRepoForAPI struct{}
 
 func (f *fakeReportsRepoForAPI) ListReportEvents(context.Context, string, *string) ([]domain.Event, error) {
+	projectID := int64(10)
+	activityID := int64(100)
 	return []domain.Event{
 		{
 			ID:           1,
 			TimestampMS:  1,
 			DurationMS:   60_000,
 			AppName:      "Code",
+			WindowTitle:  "main.go",
+			ProjectID:    &projectID,
+			ActivityID:   &activityID,
 			ProjectTitle: "project a",
+		},
+		{
+			ID:          2,
+			TimestampMS: 2,
+			DurationMS:  30_000,
+			AppName:     "Arc",
+			WindowTitle: "Daily standup",
 		},
 	}, nil
 }
@@ -102,12 +114,55 @@ func (f *fakeReportsRepoForAPI) ListReportEvents(context.Context, string, *strin
 type fakeProjectsRepoForAPI struct{}
 
 func (fakeProjectsRepoForAPI) ListActiveProjects(context.Context) ([]domain.Project, error) {
-	return nil, nil
+	return []domain.Project{{ProjectID: 10, Title: "Project A", Metadata: "notes"}}, nil
 }
 func (fakeProjectsRepoForAPI) ListAllProjects(context.Context) ([]domain.Project, error) {
-	return nil, nil
+	return []domain.Project{
+		{ProjectID: 10, Title: "Project A"},
+		{ProjectID: 20, Title: "Project B"},
+	}, nil
+}
+func (fakeProjectsRepoForAPI) ListArchivedProjects(context.Context) ([]domain.Project, error) {
+	return []domain.Project{
+		{ProjectID: 30, Title: "Project C"},
+	}, nil
+}
+func (fakeProjectsRepoForAPI) CreateProject(_ context.Context, title, metadata string) (domain.Project, error) {
+	return domain.Project{ProjectID: 99, Title: title, Metadata: metadata}, nil
+}
+func (fakeProjectsRepoForAPI) ListActivitiesByProject(_ context.Context, projectID int64) ([]domain.Activity, error) {
+	switch projectID {
+	case 10:
+		return []domain.Activity{
+			{ActivityID: 100, ProjectID: 10, Title: "Development"},
+			{ActivityID: 101, ProjectID: 10, Title: "Meeting"},
+		}, nil
+	case 20:
+		return []domain.Activity{
+			{ActivityID: 200, ProjectID: 20, Title: "Review"},
+		}, nil
+	default:
+		return nil, nil
+	}
+}
+func (fakeProjectsRepoForAPI) ListAllActivities(context.Context) ([]domain.Activity, error) {
+	return []domain.Activity{
+		{ActivityID: 100, ProjectID: 10, Title: "Development"},
+		{ActivityID: 101, ProjectID: 10, Title: "Meeting"},
+		{ActivityID: 200, ProjectID: 20, Title: "Review"},
+		{ActivityID: 300, ProjectID: 30, Title: "Archived work"},
+	}, nil
+}
+func (fakeProjectsRepoForAPI) AddActivity(_ context.Context, projectID int64, title string) (domain.Activity, error) {
+	return domain.Activity{ActivityID: 999, ProjectID: projectID, Title: title}, nil
+}
+func (fakeProjectsRepoForAPI) DeleteActivity(context.Context, int64) error { return nil }
+func (fakeProjectsRepoForAPI) RemoveActivityFromProject(context.Context, int64, int64) error {
+	return nil
 }
 func (fakeProjectsRepoForAPI) ActivateProject(context.Context, int64) error { return nil }
+func (fakeProjectsRepoForAPI) ArchiveProject(context.Context, int64) error  { return nil }
+func (fakeProjectsRepoForAPI) RestoreProject(context.Context, int64) error  { return nil }
 func (fakeProjectsRepoForAPI) EndProject(context.Context, int64) error      { return nil }
 func (fakeProjectsRepoForAPI) EndAllProjects(context.Context) error         { return nil }
 func (fakeProjectsRepoForAPI) CurrentProject(context.Context) (string, *int64, error) {
@@ -121,6 +176,139 @@ func (fakeSettingsRepoForAPI) Load(context.Context) (domain.Settings, string, er
 }
 func (fakeSettingsRepoForAPI) Save(context.Context, domain.Settings) (string, error) {
 	return "", nil
+}
+
+type fakeMutableProjectsRepoForAPI struct {
+	projects   []domain.Project
+	archived   []domain.Project
+	activities []domain.Activity
+	nextProjID int64
+	nextActID  int64
+}
+
+func newFakeMutableProjectsRepoForAPI() *fakeMutableProjectsRepoForAPI {
+	return &fakeMutableProjectsRepoForAPI{
+		projects: []domain.Project{
+			{ProjectID: 10, Title: "Project A", Metadata: "notes"},
+			{ProjectID: 20, Title: "Project B"},
+		},
+		activities: []domain.Activity{
+			{ActivityID: 100, ProjectID: 10, Title: "Development"},
+			{ActivityID: 101, ProjectID: 10, Title: "Meeting"},
+			{ActivityID: 200, ProjectID: 20, Title: "Review"},
+		},
+		nextProjID: 21,
+		nextActID:  201,
+	}
+}
+
+func (f *fakeMutableProjectsRepoForAPI) ListActiveProjects(context.Context) ([]domain.Project, error) {
+	if len(f.projects) == 0 {
+		return nil, nil
+	}
+	return []domain.Project{f.projects[0]}, nil
+}
+
+func (f *fakeMutableProjectsRepoForAPI) ListAllProjects(context.Context) ([]domain.Project, error) {
+	out := make([]domain.Project, len(f.projects))
+	copy(out, f.projects)
+	return out, nil
+}
+
+func (f *fakeMutableProjectsRepoForAPI) ListArchivedProjects(context.Context) ([]domain.Project, error) {
+	out := make([]domain.Project, len(f.archived))
+	copy(out, f.archived)
+	return out, nil
+}
+
+func (f *fakeMutableProjectsRepoForAPI) CreateProject(_ context.Context, title, metadata string) (domain.Project, error) {
+	for _, project := range f.projects {
+		if strings.EqualFold(project.Title, strings.TrimSpace(title)) {
+			return domain.Project{}, domain.ErrProjectTitleConflict
+		}
+	}
+	project := domain.Project{ProjectID: f.nextProjID, Title: strings.TrimSpace(title), Metadata: strings.TrimSpace(metadata)}
+	f.nextProjID++
+	f.projects = append(f.projects, project)
+	return project, nil
+}
+
+func (f *fakeMutableProjectsRepoForAPI) ListActivitiesByProject(_ context.Context, projectID int64) ([]domain.Activity, error) {
+	out := make([]domain.Activity, 0)
+	for _, activity := range f.activities {
+		if activity.ProjectID == projectID {
+			out = append(out, activity)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeMutableProjectsRepoForAPI) ListAllActivities(context.Context) ([]domain.Activity, error) {
+	out := make([]domain.Activity, len(f.activities))
+	copy(out, f.activities)
+	return out, nil
+}
+
+func (f *fakeMutableProjectsRepoForAPI) AddActivity(_ context.Context, projectID int64, title string) (domain.Activity, error) {
+	for _, project := range f.projects {
+		if project.ProjectID == projectID {
+			activity := domain.Activity{ActivityID: f.nextActID, ProjectID: projectID, Title: strings.TrimSpace(title)}
+			f.nextActID++
+			f.activities = append(f.activities, activity)
+			return activity, nil
+		}
+	}
+	return domain.Activity{}, domain.ErrProjectNotFound
+}
+
+func (f *fakeMutableProjectsRepoForAPI) DeleteActivity(_ context.Context, activityID int64) error {
+	for i, activity := range f.activities {
+		if activity.ActivityID == activityID {
+			f.activities = append(f.activities[:i], f.activities[i+1:]...)
+			return nil
+		}
+	}
+	return domain.ErrActivityNotFound
+}
+
+func (f *fakeMutableProjectsRepoForAPI) RemoveActivityFromProject(_ context.Context, projectID, activityID int64) error {
+	for i, activity := range f.activities {
+		if activity.ActivityID == activityID && activity.ProjectID == projectID {
+			f.activities = append(f.activities[:i], f.activities[i+1:]...)
+			return nil
+		}
+	}
+	return domain.ErrActivityNotFound
+}
+
+func (f *fakeMutableProjectsRepoForAPI) ActivateProject(context.Context, int64) error { return nil }
+
+func (f *fakeMutableProjectsRepoForAPI) ArchiveProject(_ context.Context, projectID int64) error {
+	for i, project := range f.projects {
+		if project.ProjectID == projectID {
+			f.projects = append(f.projects[:i], f.projects[i+1:]...)
+			f.archived = append(f.archived, project)
+			return nil
+		}
+	}
+	return domain.ErrProjectNotFound
+}
+
+func (f *fakeMutableProjectsRepoForAPI) RestoreProject(_ context.Context, projectID int64) error {
+	for i, project := range f.archived {
+		if project.ProjectID == projectID {
+			f.archived = append(f.archived[:i], f.archived[i+1:]...)
+			f.projects = append(f.projects, project)
+			return nil
+		}
+	}
+	return domain.ErrProjectNotFound
+}
+
+func (f *fakeMutableProjectsRepoForAPI) EndProject(context.Context, int64) error { return nil }
+func (f *fakeMutableProjectsRepoForAPI) EndAllProjects(context.Context) error    { return nil }
+func (f *fakeMutableProjectsRepoForAPI) CurrentProject(context.Context) (string, *int64, error) {
+	return "", nil, nil
 }
 
 func TestSuggestionsPartialRendersRows(t *testing.T) {
@@ -184,7 +372,7 @@ func TestRulesPartialRendersDraftActions(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 	body := rr.Body.String()
-	if !strings.Contains(body, "Re add default rules") {
+	if !strings.Contains(body, "Re-add Default Rules") {
 		t.Fatalf("expected re-add defaults button")
 	}
 	if !strings.Contains(body, "Draft Preview") {
@@ -215,14 +403,17 @@ func TestReportsPageRendersDayNavigationControls(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 	body := rr.Body.String()
-	if !strings.Contains(body, "Previous day") {
+	if !strings.Contains(body, "Previous") {
 		t.Fatalf("expected previous day control")
 	}
 	if !strings.Contains(body, `type="date"`) {
 		t.Fatalf("expected date input")
 	}
-	if !strings.Contains(body, "Refresh range") {
+	if !strings.Contains(body, "View Range") {
 		t.Fatalf("expected range refresh button")
+	}
+	if !strings.Contains(body, "Apply Rules") {
+		t.Fatalf("expected apply rules action on reports page")
 	}
 }
 
@@ -243,8 +434,11 @@ func TestReportsPartialShowsDateContext(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 	body := rr.Body.String()
-	if !strings.Contains(body, "Showing date: 2026-02-07") {
+	if !strings.Contains(body, "2026-02-07") {
 		t.Fatalf("expected selected date context, got %s", body)
+	}
+	if !strings.Contains(body, "Top Window Titles") {
+		t.Fatalf("expected detailed windows table in reports partial")
 	}
 }
 
@@ -265,8 +459,165 @@ func TestReportsPartialShowsRangeContextWithoutDate(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 	body := rr.Body.String()
-	if !strings.Contains(body, "Showing range: week") {
+	if !strings.Contains(body, "Range") {
 		t.Fatalf("expected range context, got %s", body)
+	}
+	if !strings.Contains(body, "Mapped") || !strings.Contains(body, "Unmapped") {
+		t.Fatalf("expected mapped/unmapped details in reports partial")
+	}
+}
+
+func TestReportsApplyRulesRendersSummary(t *testing.T) {
+	app := &usecases.App{
+		Reports: usecases.NewReportsUsecase(&fakeReportsRepoForAPI{}, fakeProjectsRepoForAPI{}, fakeSettingsRepoForAPI{}),
+		Rules:   usecases.NewRulesUsecase(&fakeRulesRepo{}),
+	}
+	s, err := New(app)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	form := url.Values{}
+	form.Set("range", "today")
+	form.Set("date", "2026-02-07")
+	form.Set("dry_run", "1")
+	req := httptest.NewRequest(http.MethodPost, "/reports/apply-rules", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "Dry run rules for 2026-02-07") {
+		t.Fatalf("expected dry-run summary, got %s", body)
+	}
+}
+
+func TestProjectsPartialRendersActivitiesPerProject(t *testing.T) {
+	app := &usecases.App{
+		Projects: usecases.NewProjectsUsecase(fakeProjectsRepoForAPI{}),
+	}
+	s, err := New(app)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/partials/projects", nil)
+	rr := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "Project A") || !strings.Contains(body, "Project B") {
+		t.Fatalf("expected projects in body, got %s", body)
+	}
+	if !strings.Contains(body, "Create Project") {
+		t.Fatalf("expected create project section, got %s", body)
+	}
+	if !strings.Contains(body, "Mapping Targets") {
+		t.Fatalf("expected mapping targets section, got %s", body)
+	}
+	if !strings.Contains(body, "Project A &gt; Development") && !strings.Contains(body, "Project A > Development") {
+		t.Fatalf("expected project target list, got %s", body)
+	}
+}
+
+func TestProjectsCreateEndpointRendersUpdatedPanel(t *testing.T) {
+	repo := newFakeMutableProjectsRepoForAPI()
+	app := &usecases.App{
+		Projects: usecases.NewProjectsUsecase(repo),
+	}
+	s, err := New(app)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	form := url.Values{}
+	form.Set("title", "Project Z")
+	form.Set("metadata", "new scope")
+	req := httptest.NewRequest(http.MethodPost, "/projects/create", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "Created project") {
+		t.Fatalf("expected create summary, got %s", body)
+	}
+	if !strings.Contains(body, "Project Z") {
+		t.Fatalf("expected new project in response, got %s", body)
+	}
+}
+
+func TestProjectsArchiveAndRestoreEndpoints(t *testing.T) {
+	repo := newFakeMutableProjectsRepoForAPI()
+	app := &usecases.App{
+		Projects: usecases.NewProjectsUsecase(repo),
+	}
+	s, err := New(app)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	archiveReq := httptest.NewRequest(http.MethodPost, "/projects/10/archive", nil)
+	archiveRR := httptest.NewRecorder()
+	s.Routes().ServeHTTP(archiveRR, archiveReq)
+	if archiveRR.Code != http.StatusOK {
+		t.Fatalf("expected 200 on archive, got %d", archiveRR.Code)
+	}
+	if !strings.Contains(archiveRR.Body.String(), "Project archived") {
+		t.Fatalf("expected archive summary, got %s", archiveRR.Body.String())
+	}
+
+	restoreReq := httptest.NewRequest(http.MethodPost, "/projects/10/restore", nil)
+	restoreRR := httptest.NewRecorder()
+	s.Routes().ServeHTTP(restoreRR, restoreReq)
+	if restoreRR.Code != http.StatusOK {
+		t.Fatalf("expected 200 on restore, got %d", restoreRR.Code)
+	}
+	if !strings.Contains(restoreRR.Body.String(), "Project restored") {
+		t.Fatalf("expected restore summary, got %s", restoreRR.Body.String())
+	}
+}
+
+func TestProjectsAddAndRemoveActivityEndpoints(t *testing.T) {
+	repo := newFakeMutableProjectsRepoForAPI()
+	app := &usecases.App{
+		Projects: usecases.NewProjectsUsecase(repo),
+	}
+	s, err := New(app)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	form := url.Values{}
+	form.Set("title", "Planning")
+	addReq := httptest.NewRequest(http.MethodPost, "/projects/10/activities/add", strings.NewReader(form.Encode()))
+	addReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	addRR := httptest.NewRecorder()
+	s.Routes().ServeHTTP(addRR, addReq)
+	if addRR.Code != http.StatusOK {
+		t.Fatalf("expected 200 on add activity, got %d", addRR.Code)
+	}
+	if !strings.Contains(addRR.Body.String(), "Added activity") || !strings.Contains(addRR.Body.String(), "Planning") {
+		t.Fatalf("expected add activity summary and title, got %s", addRR.Body.String())
+	}
+
+	removeReq := httptest.NewRequest(http.MethodPost, "/projects/10/activities/201/remove", nil)
+	removeRR := httptest.NewRecorder()
+	s.Routes().ServeHTTP(removeRR, removeReq)
+	if removeRR.Code != http.StatusOK {
+		t.Fatalf("expected 200 on remove activity, got %d", removeRR.Code)
+	}
+	if !strings.Contains(removeRR.Body.String(), "Activity removed from project") {
+		t.Fatalf("expected remove summary, got %s", removeRR.Body.String())
 	}
 }
 
@@ -359,7 +710,7 @@ func TestTidsregCustomersTemplateDefaultsToUnchecked(t *testing.T) {
 	if !strings.Contains(body, "hx-post=\"/integrations/tidsreg/projects\"") {
 		t.Fatalf("expected customers step to post to projects route")
 	}
-	if !strings.Contains(body, "Check/Uncheck All") {
+	if !strings.Contains(body, "Select All / None") {
 		t.Fatalf("expected check/uncheck button in customers step")
 	}
 	if !strings.Contains(body, "hx-indicator=\"#tidsreg-loader\"") {
@@ -389,7 +740,7 @@ func TestTidsregProjectsTemplateRendersProjectSelection(t *testing.T) {
 	if !strings.Contains(body, "name=\"project_ids\" value=\"42\"") {
 		t.Fatalf("expected project checkbox in projects step")
 	}
-	if !strings.Contains(body, "Check/Uncheck All") {
+	if !strings.Contains(body, "Select All / None") {
 		t.Fatalf("expected check/uncheck button in projects step")
 	}
 	if !strings.Contains(body, "hx-indicator=\"#tidsreg-loader\"") {

@@ -1,24 +1,97 @@
 {{define "reports"}}
-<section class="card">
-  <h2>Reports</h2>
-  <div class="inline-form">
-    <a href="/reports?range={{.Range}}&date={{.PrevReportDate}}">Previous day</a>
-    <form class="inline-form" action="/reports" method="get">
-      <input type="hidden" name="range" value="{{.Range}}">
-      <label for="report-date">Date</label>
-      <input type="date" id="report-date" name="date" value="{{.ReportDate}}">
-      <button type="submit">View day</button>
-    </form>
-  </div>
-  <form class="inline-form" action="/reports" method="get">
-    <label for="range">Range</label>
-    <select name="range" id="range">
-      <option value="today" {{if eq .Range "today"}}selected{{end}}>Today</option>
-      <option value="week" {{if eq .Range "week"}}selected{{end}}>Last 7 Days</option>
-      <option value="all" {{if eq .Range "all"}}selected{{end}}>All time</option>
-    </select>
-    <button type="submit">Refresh range</button>
-  </form>
-  <div id="reports-table" hx-get="/partials/reports?range={{.Range}}{{if .ReportDateActive}}&date={{.ReportDate}}{{end}}" hx-trigger="load" hx-swap="innerHTML">Loading...</div>
+<section class="space-y-6">
+  <header class="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+    <div class="flex flex-wrap items-start justify-between gap-4">
+      <div>
+        <h1 class="text-2xl font-semibold text-tt-ink">Reports</h1>
+        <p class="mt-1 max-w-2xl text-sm text-slate-600">View time tracking data by day or range. Apply rules to categorize unmapped events.</p>
+      </div>
+    </div>
+  </header>
+
+  <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <div class="flex flex-wrap items-center gap-3">
+      <span class="text-sm font-medium text-slate-600">Date Navigation</span>
+      <div class="flex items-center gap-2">
+        <a
+          href="/reports?range={{.Range}}&date={{.PrevReportDate}}"
+          class="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+        >
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+          Previous
+        </a>
+        <form class="flex items-center gap-2" action="/reports" method="get">
+          <input type="hidden" name="range" value="{{.Range}}">
+          <input
+            type="date"
+            name="date"
+            value="{{.ReportDate}}"
+            class="rounded-lg border-slate-300 text-sm"
+          >
+          <button
+            type="submit"
+            class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          >Go</button>
+        </form>
+        <a
+          href="/reports?range={{.Range}}&date={{.NextReportDate}}"
+          class="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+        >
+          Next
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+        </a>
+        <a
+          href="/reports"
+          class="rounded-lg bg-tt-accent px-3 py-2 text-sm font-semibold text-white hover:bg-teal-700"
+        >Today</a>
+      </div>
+    </div>
+
+    <div class="mt-4 flex flex-wrap items-end gap-4 border-t border-slate-100 pt-4">
+      <form class="flex items-center gap-3" action="/reports" method="get">
+        <label class="flex flex-col gap-1">
+          <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Range</span>
+          <select name="range" class="rounded-lg border-slate-300 text-sm">
+            <option value="today" {{if eq .Range "today"}}selected{{end}}>Today</option>
+            <option value="week" {{if eq .Range "week"}}selected{{end}}>Last 7 Days</option>
+            <option value="all" {{if eq .Range "all"}}selected{{end}}>All time</option>
+          </select>
+        </label>
+        <button
+          type="submit"
+          class="self-end rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+        >View Range</button>
+      </form>
+
+      <form
+        class="flex items-center gap-3"
+        hx-post="/reports/apply-rules"
+        hx-target="#reports-table"
+        hx-swap="innerHTML"
+      >
+        <input type="hidden" name="range" value="{{.Range}}">
+        <input type="hidden" name="date" value="{{if .ReportDateActive}}{{.ReportDate}}{{end}}">
+        <label class="flex items-center gap-2 text-sm text-slate-700">
+          <input type="checkbox" name="dry_run" value="1" class="rounded border-slate-300 text-tt-accent focus:ring-tt-accent">
+          Dry run
+        </label>
+        <button
+          type="submit"
+          class="rounded-lg bg-tt-accent px-3 py-2 text-sm font-semibold text-white hover:bg-teal-700"
+        >Apply Rules</button>
+      </form>
+    </div>
+  </section>
+
+  <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <div
+      id="reports-table"
+      hx-get="/partials/reports?range={{.Range}}{{if .ReportDateActive}}&date={{.ReportDate}}{{end}}"
+      hx-trigger="load"
+      hx-swap="innerHTML"
+    >
+      <div class="text-sm text-slate-600">Loading...</div>
+    </div>
+  </section>
 </section>
 {{end}}

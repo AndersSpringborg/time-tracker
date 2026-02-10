@@ -1,29 +1,40 @@
 {{define "partials/tidsreg_customers"}}
-<div class="stack">
-  <h3>Step 1: Select Customers</h3>
-  {{if .TidsregError}}<p class="flash">{{.TidsregError}}</p>{{end}}
+<div class="space-y-4">
+  <h3 class="text-lg font-semibold text-tt-ink">Step 1: Select Customers</h3>
+  {{if .TidsregError}}
+  <div class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{{.TidsregError}}</div>
+  {{end}}
   {{if .TidsregCustomers}}
     <form hx-post="/integrations/tidsreg/projects" hx-target="#tidsreg-flow" hx-swap="innerHTML" hx-indicator="#tidsreg-loader">
-      <table>
-        <thead><tr><th>Include</th><th>Customer</th></tr></thead>
-        <tbody>
-        {{range .TidsregCustomers}}
-          <tr>
-            <td><input type="checkbox" name="customer_ids" value="{{.CustomerID}}"></td>
-            <td>{{.Name}}</td>
-          </tr>
-        {{end}}
-        </tbody>
-      </table>
-      <div class="actions">
-        <button type="button" data-toggle-checkboxes data-checkbox-name="customer_ids">Check/Uncheck All</button>
-        <button type="submit">Load Step 2: Projects</button>
-        <button type="button" hx-post="/integrations/tidsreg/session/clear" hx-target="#tidsreg-flow" hx-swap="innerHTML" hx-indicator="#tidsreg-loader">Start Over</button>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-slate-200">
+              <th class="py-2 text-left font-medium text-slate-600 w-10">Include</th>
+              <th class="py-2 text-left font-medium text-slate-600">Customer</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+          {{range .TidsregCustomers}}
+            <tr class="hover:bg-slate-50">
+              <td class="py-2">
+                <input type="checkbox" name="customer_ids" value="{{.CustomerID}}" class="rounded border-slate-300 text-tt-accent focus:ring-tt-accent">
+              </td>
+              <td class="py-2 text-slate-800">{{.Name}}</td>
+            </tr>
+          {{end}}
+          </tbody>
+        </table>
+      </div>
+      <div class="mt-4 flex flex-wrap items-center gap-3">
+        <button type="button" data-toggle-checkboxes data-checkbox-name="customer_ids" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Select All / None</button>
+        <button type="submit" class="rounded-lg bg-tt-accent px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700">Load Step 2: Projects</button>
+        <button type="button" hx-post="/integrations/tidsreg/session/clear" hx-target="#tidsreg-flow" hx-swap="innerHTML" hx-indicator="#tidsreg-loader" class="rounded-lg border border-red-300 bg-white px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50">Start Over</button>
       </div>
     </form>
   {{else}}
-    <p class="muted">No customers returned by tidsreg for this account.</p>
-    <button type="button" hx-post="/integrations/tidsreg/session/clear" hx-target="#tidsreg-flow" hx-swap="innerHTML" hx-indicator="#tidsreg-loader">Back to Login</button>
+    <p class="text-sm text-slate-600">No customers returned by tidsreg for this account.</p>
+    <button type="button" hx-post="/integrations/tidsreg/session/clear" hx-target="#tidsreg-flow" hx-swap="innerHTML" hx-indicator="#tidsreg-loader" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Back to Login</button>
   {{end}}
 </div>
 {{end}}

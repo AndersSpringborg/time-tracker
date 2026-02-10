@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -42,14 +43,23 @@ type pageData struct {
 	ReportDate        string
 	ReportDateActive  bool
 	PrevReportDate    string
+	NextReportDate    string
 	Config            domain.Settings
 	NoisePatternsText string
 	WorkWifisText     string
 	Dashboard         domain.Dashboard
 	Report            domain.Report
+	RulesApplySummary string
 	Rules             []domain.Rule
 	ActiveProjects    []domain.Project
 	AllProjects       []domain.Project
+	ArchivedProjects  []domain.Project
+	AllActivities     []domain.Activity
+	ProjectActivities map[int64][]domain.Activity
+	ActiveProjectIDs  map[int64]bool
+	ProjectTargets    []string
+	ProjectSummary    string
+	ProjectError      string
 	Suggestions       []domain.RuleSuggestion
 	SuggestionStats   domain.SuggestionStats
 	SuggestionQuery   domain.SuggestionQuery
@@ -104,6 +114,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/partials/dashboard", s.handleDashboardPartial)
 	mux.HandleFunc("/reports", s.handleReports)
 	mux.HandleFunc("/partials/reports", s.handleReportsPartial)
+	mux.HandleFunc("/reports/apply-rules", s.handleReportsApplyRules)
 	mux.HandleFunc("/rules", s.handleRules)
 	mux.HandleFunc("/partials/rules", s.handleRulesPartial)
 	mux.HandleFunc("/rules/draft/add", s.handleRulesDraftAdd)
@@ -122,9 +133,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/suggestions/bootstrap/map", s.handleSuggestionsBootstrapMap)
 	mux.HandleFunc("/projects", s.handleProjects)
 	mux.HandleFunc("/partials/projects", s.handleProjectsPartial)
+	mux.HandleFunc("/projects/create", s.handleProjectCreate)
 	mux.HandleFunc("/projects/activate", s.handleProjectActivate)
 	mux.HandleFunc("/projects/clear", s.handleProjectClear)
-	mux.HandleFunc("/projects/", s.handleProjectEnd)
+	mux.HandleFunc("/projects/", s.handleProjectPathActions)
+	mux.HandleFunc("/activities/", s.handleActivityPathActions)
 	mux.HandleFunc("/integrations", s.handleIntegrationsPage)
 	mux.HandleFunc("/integrations/tidsreg", s.handleTidsregPage)
 	mux.HandleFunc("/partials/tidsreg/login", s.handleTidsregLoginPartial)
@@ -262,12 +275,55 @@ func (s *Server) handleReports(w http.ResponseWriter, r *http.Request) {
 		ReportDate:       reportDate,
 		ReportDateActive: dateActive,
 		PrevReportDate:   usecases.PreviousDate(reportDate),
+		NextReportDate:   usecases.NextDate(reportDate),
 	})
 }
 
 func (s *Server) handleReportsPartial(w http.ResponseWriter, r *http.Request) {
 	rangeKey := usecases.NormalizeRange(r.URL.Query().Get("range"))
 	requestDate := usecases.NormalizeReportDate(r.URL.Query().Get("date"))
+	s.renderReportsTable(w, r, rangeKey, requestDate, "")
+}
+
+func (s *Server) handleReportsApplyRules(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.NotFound(w, r)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", 400)
+		return
+	}
+	rangeKey := usecases.NormalizeRange(r.Form.Get("range"))
+	requestDate := usecases.NormalizeReportDate(r.Form.Get("date"))
+	dryRun := r.Form.Get("dry_run") != ""
+	if s.app == nil || s.app.Rules == nil {
+		http.Error(w, "rules usecase is not configured", 500)
+		return
+	}
+	applyRes, err := s.app.Rules.ApplyRules(r.Context(), contracts.RulesApplyRequest{
+		Input: domain.ApplyRulesInput{
+			Date:   requestDate,
+			DryRun: dryRun,
+		},
+	})
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	mode := "Applied"
+	if dryRun {
+		mode = "Dry run"
+	}
+	scope := "all dates"
+	if requestDate != nil {
+		scope = *requestDate
+	}
+	summary := fmt.Sprintf("%s rules for %s: matched %d of %d unmapped events", mode, scope, applyRes.Result.MatchedEvents, applyRes.Result.UnmappedEvents)
+	s.renderReportsTable(w, r, rangeKey, requestDate, summary)
+}
+
+func (s *Server) renderReportsTable(w http.ResponseWriter, r *http.Request, rangeKey string, requestDate *string, applySummary string) {
 	res, err := s.app.Reports.Report(r.Context(), contracts.ReportsBuildRequest{RangeKey: rangeKey, Date: requestDate})
 	if err != nil {
 		http.Error(w, err.Error(), 500)
@@ -280,11 +336,13 @@ func (s *Server) handleReportsPartial(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.render(w, "partials/report_table", pageData{
-		Report:           res.Report,
-		Range:            rangeKey,
-		ReportDate:       reportDate,
-		ReportDateActive: requestDate != nil,
-		PrevReportDate:   usecases.PreviousDate(reportDate),
+		Report:            res.Report,
+		Range:             rangeKey,
+		ReportDate:        reportDate,
+		ReportDateActive:  requestDate != nil,
+		PrevReportDate:    usecases.PreviousDate(reportDate),
+		NextReportDate:    usecases.NextDate(reportDate),
+		RulesApplySummary: applySummary,
 	})
 }
 
@@ -732,6 +790,15 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleProjectsPartial(w http.ResponseWriter, r *http.Request) {
+	s.renderProjectsPanel(w, r, "", "")
+}
+
+func (s *Server) renderProjectsPanel(w http.ResponseWriter, r *http.Request, summary, errorMessage string) {
+	if s.app == nil || s.app.Projects == nil {
+		http.Error(w, "projects usecase is not configured", 500)
+		return
+	}
+
 	activeRes, err := s.app.Projects.ListActive(r.Context(), contracts.ProjectsListActiveRequest{})
 	if err != nil {
 		http.Error(w, err.Error(), 500)
@@ -742,7 +809,69 @@ func (s *Server) handleProjectsPartial(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	s.render(w, "partials/projects_panel", pageData{ActiveProjects: activeRes.Projects, AllProjects: allRes.Projects})
+	archivedRes, err := s.app.Projects.ListArchived(r.Context(), contracts.ProjectsListArchivedRequest{})
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	activitiesRes, err := s.app.Projects.ListAllActivities(r.Context(), contracts.ProjectsListAllActivitiesRequest{})
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	projectActivities := make(map[int64][]domain.Activity, len(allRes.Projects)+len(archivedRes.Projects))
+	for _, activity := range activitiesRes.Activities {
+		projectActivities[activity.ProjectID] = append(projectActivities[activity.ProjectID], activity)
+	}
+
+	activeIDs := make(map[int64]bool, len(activeRes.Projects))
+	for _, project := range activeRes.Projects {
+		activeIDs[project.ProjectID] = true
+	}
+
+	targets := make([]string, 0)
+	for _, project := range allRes.Projects {
+		for _, activity := range projectActivities[project.ProjectID] {
+			targets = append(targets, project.Title+" > "+activity.Title)
+		}
+	}
+
+	s.render(w, "partials/projects_panel", pageData{
+		ActiveProjects:    activeRes.Projects,
+		AllProjects:       allRes.Projects,
+		ArchivedProjects:  archivedRes.Projects,
+		AllActivities:     activitiesRes.Activities,
+		ProjectActivities: projectActivities,
+		ActiveProjectIDs:  activeIDs,
+		ProjectTargets:    targets,
+		ProjectSummary:    summary,
+		ProjectError:      errorMessage,
+	})
+}
+
+func (s *Server) handleProjectCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.NotFound(w, r)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", 400)
+		return
+	}
+	res, err := s.app.Projects.Create(r.Context(), contracts.ProjectsCreateRequest{
+		Title:    r.Form.Get("title"),
+		Metadata: r.Form.Get("metadata"),
+	})
+	if err != nil {
+		if msg := projectUserMessage(err); msg != "" {
+			s.renderProjectsPanel(w, r, "", msg)
+			return
+		}
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	s.renderProjectsPanel(w, r, fmt.Sprintf("Created project %q", res.Project.Title), "")
 }
 
 func (s *Server) handleProjectActivate(w http.ResponseWriter, r *http.Request) {
@@ -751,16 +880,20 @@ func (s *Server) handleProjectActivate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = r.ParseForm()
-	id, err := strconv.ParseInt(r.Form.Get("project_id"), 10, 64)
+	id, err := strconv.ParseInt(strings.TrimSpace(r.Form.Get("project_id")), 10, 64)
 	if err != nil {
 		http.Error(w, "invalid project id", 400)
 		return
 	}
 	if _, err := s.app.Projects.Activate(r.Context(), contracts.ProjectsActivateRequest{ProjectID: id}); err != nil {
+		if msg := projectUserMessage(err); msg != "" {
+			s.renderProjectsPanel(w, r, "", msg)
+			return
+		}
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	s.handleProjectsPartial(w, r)
+	s.renderProjectsPanel(w, r, "Activated project context", "")
 }
 
 func (s *Server) handleProjectClear(w http.ResponseWriter, r *http.Request) {
@@ -772,25 +905,176 @@ func (s *Server) handleProjectClear(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	s.handleProjectsPartial(w, r)
+	s.renderProjectsPanel(w, r, "Ended all active project contexts", "")
 }
 
-func (s *Server) handleProjectEnd(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/end") {
+func (s *Server) handleProjectPathActions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
 		http.NotFound(w, r)
 		return
 	}
-	idStr := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/projects/"), "/end")
-	id, err := strconv.ParseInt(strings.Trim(idStr, "/"), 10, 64)
-	if err != nil {
-		http.Error(w, "invalid project id", 400)
+
+	switch {
+	case strings.HasSuffix(r.URL.Path, "/end"):
+		id, err := parsePathID(r.URL.Path, "/projects/", "/end")
+		if err != nil {
+			http.Error(w, "invalid project id", 400)
+			return
+		}
+		if _, err := s.app.Projects.End(r.Context(), contracts.ProjectsEndRequest{ProjectID: id}); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		s.renderProjectsPanel(w, r, "Ended active project context", "")
+	case strings.HasSuffix(r.URL.Path, "/archive"):
+		id, err := parsePathID(r.URL.Path, "/projects/", "/archive")
+		if err != nil {
+			http.Error(w, "invalid project id", 400)
+			return
+		}
+		if _, err := s.app.Projects.Archive(r.Context(), contracts.ProjectsArchiveRequest{ProjectID: id}); err != nil {
+			if msg := projectUserMessage(err); msg != "" {
+				s.renderProjectsPanel(w, r, "", msg)
+				return
+			}
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		s.renderProjectsPanel(w, r, "Project archived", "")
+	case strings.HasSuffix(r.URL.Path, "/restore"):
+		id, err := parsePathID(r.URL.Path, "/projects/", "/restore")
+		if err != nil {
+			http.Error(w, "invalid project id", 400)
+			return
+		}
+		if _, err := s.app.Projects.Restore(r.Context(), contracts.ProjectsRestoreRequest{ProjectID: id}); err != nil {
+			if msg := projectUserMessage(err); msg != "" {
+				s.renderProjectsPanel(w, r, "", msg)
+				return
+			}
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		s.renderProjectsPanel(w, r, "Project restored", "")
+	case strings.HasSuffix(r.URL.Path, "/activities/add"):
+		id, err := parsePathID(r.URL.Path, "/projects/", "/activities/add")
+		if err != nil {
+			http.Error(w, "invalid project id", 400)
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "invalid form", 400)
+			return
+		}
+		activityRes, err := s.app.Projects.AddActivity(r.Context(), contracts.ProjectsAddActivityRequest{
+			ProjectID: id,
+			Title:     r.Form.Get("title"),
+		})
+		if err != nil {
+			if msg := projectUserMessage(err); msg != "" {
+				s.renderProjectsPanel(w, r, "", msg)
+				return
+			}
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		s.renderProjectsPanel(w, r, fmt.Sprintf("Added activity %q", activityRes.Activity.Title), "")
+	case strings.HasSuffix(r.URL.Path, "/remove") && strings.Contains(r.URL.Path, "/activities/"):
+		projectID, activityID, err := parseProjectActivityPathIDs(r.URL.Path)
+		if err != nil {
+			http.Error(w, "invalid project/activity path", 400)
+			return
+		}
+		if _, err := s.app.Projects.RemoveActivityFromProject(r.Context(), contracts.ProjectsRemoveActivityFromProjectRequest{
+			ProjectID:  projectID,
+			ActivityID: activityID,
+		}); err != nil {
+			if msg := projectUserMessage(err); msg != "" {
+				s.renderProjectsPanel(w, r, "", msg)
+				return
+			}
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		s.renderProjectsPanel(w, r, "Activity removed from project", "")
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func (s *Server) handleActivityPathActions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/delete") {
+		http.NotFound(w, r)
 		return
 	}
-	if _, err := s.app.Projects.End(r.Context(), contracts.ProjectsEndRequest{ProjectID: id}); err != nil {
+	id, err := parsePathID(r.URL.Path, "/activities/", "/delete")
+	if err != nil {
+		http.Error(w, "invalid activity id", 400)
+		return
+	}
+	if _, err := s.app.Projects.DeleteActivity(r.Context(), contracts.ProjectsDeleteActivityRequest{ActivityID: id}); err != nil {
+		if msg := projectUserMessage(err); msg != "" {
+			s.renderProjectsPanel(w, r, "", msg)
+			return
+		}
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	s.handleProjectsPartial(w, r)
+	s.renderProjectsPanel(w, r, "Activity deleted", "")
+}
+
+func parsePathID(path, prefix, suffix string) (int64, error) {
+	if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, suffix) {
+		return 0, fmt.Errorf("invalid path")
+	}
+	raw := strings.TrimSuffix(strings.TrimPrefix(path, prefix), suffix)
+	raw = strings.Trim(raw, "/")
+	if raw == "" {
+		return 0, fmt.Errorf("missing id")
+	}
+	return strconv.ParseInt(raw, 10, 64)
+}
+
+func parseProjectActivityPathIDs(path string) (int64, int64, error) {
+	if !strings.HasPrefix(path, "/projects/") || !strings.HasSuffix(path, "/remove") {
+		return 0, 0, fmt.Errorf("invalid path")
+	}
+	trimmed := strings.TrimPrefix(path, "/projects/")
+	trimmed = strings.TrimSuffix(trimmed, "/remove")
+	parts := strings.Split(strings.Trim(trimmed, "/"), "/")
+	if len(parts) != 3 || parts[1] != "activities" {
+		return 0, 0, fmt.Errorf("invalid path")
+	}
+	projectID, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return 0, 0, err
+	}
+	activityID, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil {
+		return 0, 0, err
+	}
+	return projectID, activityID, nil
+}
+
+func projectUserMessage(err error) string {
+	switch {
+	case errors.Is(err, domain.ErrProjectTitleRequired):
+		return "Project title is required."
+	case errors.Is(err, domain.ErrProjectTitleConflict):
+		return "A project with that title already exists."
+	case errors.Is(err, domain.ErrProjectNotFound):
+		return "Project not found."
+	case errors.Is(err, domain.ErrActivityTitleRequired):
+		return "Activity title is required."
+	case errors.Is(err, domain.ErrActivityTitleConflict):
+		return "That activity already exists for this project."
+	case errors.Is(err, domain.ErrActivityNotFound):
+		return "Activity not found."
+	case errors.Is(err, domain.ErrActivityInUse):
+		return "Activity cannot be deleted because it is referenced by events or rules."
+	default:
+		return ""
+	}
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {

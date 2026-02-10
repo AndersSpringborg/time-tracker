@@ -1,90 +1,116 @@
 {{define "partials/suggestions_table"}}
-{{if .AutoApplySummary}}<p class="flash">{{.AutoApplySummary}}</p>{{end}}
-{{if .SuggestionStats.IsColdStart}}
-<section class="flash warning">
-  <strong>Cold start:</strong> {{.SuggestionStats.Message}}
-  <div class="muted">Mapped events: {{.SuggestionStats.MappedEvents}}, activities: {{.SuggestionStats.Activities}}</div>
-</section>
+{{if .AutoApplySummary}}
+<div class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{{.AutoApplySummary}}</div>
 {{end}}
-<table>
-  <thead>
-    <tr>
-      <th>Pattern</th>
-      <th>Target</th>
-      <th>Confidence</th>
-      <th>Score</th>
-      <th>Impact</th>
-      <th>Evidence</th>
-      <th>Reason</th>
-      <th></th>
-    </tr>
-  </thead>
-  <tbody>
-  {{range .Suggestions}}
-    <tr>
-      <td>
-        app: <code>{{.AppPattern}}</code><br>
-        {{if .TitlePattern}}title: <code>{{.TitlePattern}}</code>{{else}}title: <code>*</code>{{end}}
-      </td>
-      <td>{{.DisplayPath}}</td>
-      <td>{{.Confidence}}%</td>
-      <td>{{printf "%.1f" .Score}} (ambig {{printf "%.2f" .Ambiguity}})</td>
-      <td>{{.ImpactCount}} events / {{formatDuration .ImpactDurationMS}}</td>
-      <td>{{.EvidenceCount}}</td>
-      <td>
-        {{.ConfidenceReason}}
-        {{if .ContextHints}}
-          <br><span class="muted">{{range $i, $hint := .ContextHints}}{{if $i}} | {{end}}{{$hint}}{{end}}</span>
-        {{end}}
-      </td>
-      <td>
-        <form hx-post="/suggestions/accept" hx-target="#suggestions-table" hx-swap="innerHTML">
-          <input type="hidden" name="suggestion_type" value="{{.SuggestionType}}">
-          <input type="hidden" name="app_pattern" value="{{.AppPattern}}">
-          <input type="hidden" name="title_pattern" value="{{if .TitlePattern}}{{.TitlePattern}}{{end}}">
-          <input type="hidden" name="project_id" value="{{.ProjectID}}">
-          <input type="hidden" name="activity_id" value="{{.ActivityID}}">
-          <input type="hidden" name="display_path" value="{{.DisplayPath}}">
-          <input type="hidden" name="confidence" value="{{.Confidence}}">
-          <input type="hidden" name="score" value="{{.Score}}">
-          <input type="hidden" name="confidence_reason" value="{{.ConfidenceReason}}">
-          <input type="hidden" name="ambiguity" value="{{.Ambiguity}}">
-          <input type="hidden" name="impact_count" value="{{.ImpactCount}}">
-          <input type="hidden" name="impact_duration_ms" value="{{.ImpactDurationMS}}">
-          <input type="hidden" name="evidence_count" value="{{.EvidenceCount}}">
-          <input type="hidden" name="last_seen_ms" value="{{.LastSeenMS}}">
-          <input type="hidden" name="context_hints" value="{{range $i, $hint := .ContextHints}}{{if $i}},{{end}}{{$hint}}{{end}}">
-          <input type="hidden" name="date" value="{{if $.SuggestionQuery.Date}}{{$.SuggestionQuery.Date}}{{end}}">
-          <input type="hidden" name="min_duration_ms" value="{{$.SuggestionQuery.MinDurationMS}}">
-          <input type="hidden" name="limit" value="{{$.SuggestionQuery.Limit}}">
-          <input type="hidden" name="min_evidence" value="{{$.SuggestionQuery.MinEvidence}}">
-          <input type="hidden" name="exclude_apps" value="{{range $i, $a := $.SuggestionQuery.ExcludeApps}}{{if $i}},{{end}}{{$a}}{{end}}">
-          <input type="hidden" name="include_context" value="{{if $.SuggestionQuery.IncludeContext}}1{{else}}0{{end}}">
-          <label>Apply now <input type="checkbox" name="apply_now" value="1" checked></label>
-          <button type="submit">Accept</button>
-        </form>
-        <form hx-post="/suggestions/reject" hx-target="#suggestions-table" hx-swap="innerHTML">
-          <input type="hidden" name="suggestion_type" value="{{.SuggestionType}}">
-          <input type="hidden" name="app_pattern" value="{{.AppPattern}}">
-          <input type="hidden" name="title_pattern" value="{{if .TitlePattern}}{{.TitlePattern}}{{end}}">
-          <input type="hidden" name="project_id" value="{{.ProjectID}}">
-          <input type="hidden" name="activity_id" value="{{.ActivityID}}">
-          <input type="hidden" name="confidence" value="{{.Confidence}}">
-          <input type="hidden" name="score" value="{{.Score}}">
-          <input type="hidden" name="ambiguity" value="{{.Ambiguity}}">
-          <input type="hidden" name="date" value="{{if $.SuggestionQuery.Date}}{{$.SuggestionQuery.Date}}{{end}}">
-          <input type="hidden" name="min_duration_ms" value="{{$.SuggestionQuery.MinDurationMS}}">
-          <input type="hidden" name="limit" value="{{$.SuggestionQuery.Limit}}">
-          <input type="hidden" name="min_evidence" value="{{$.SuggestionQuery.MinEvidence}}">
-          <input type="hidden" name="exclude_apps" value="{{range $i, $a := $.SuggestionQuery.ExcludeApps}}{{if $i}},{{end}}{{$a}}{{end}}">
-          <input type="hidden" name="include_context" value="{{if $.SuggestionQuery.IncludeContext}}1{{else}}0{{end}}">
-          <button type="submit">Reject</button>
-        </form>
-      </td>
-    </tr>
-  {{else}}
-    <tr><td colspan="8" class="muted">No suggestions for current scope</td></tr>
-  {{end}}
-  </tbody>
-</table>
+{{if .SuggestionStats.IsColdStart}}
+<div class="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+  <p class="font-semibold text-amber-800">Cold start</p>
+  <p class="mt-1 text-sm text-amber-700">{{.SuggestionStats.Message}}</p>
+  <p class="mt-1 text-xs text-amber-600">Mapped events: {{.SuggestionStats.MappedEvents}}, activities: {{.SuggestionStats.Activities}}</p>
+</div>
+{{end}}
+
+<div class="overflow-x-auto">
+  <table class="w-full text-sm">
+    <thead>
+      <tr class="border-b border-slate-200">
+        <th class="py-2 text-left font-medium text-slate-600">Pattern</th>
+        <th class="py-2 text-left font-medium text-slate-600">Target</th>
+        <th class="py-2 text-right font-medium text-slate-600">Confidence</th>
+        <th class="py-2 text-right font-medium text-slate-600">Score</th>
+        <th class="py-2 text-right font-medium text-slate-600">Impact</th>
+        <th class="py-2 text-right font-medium text-slate-600">Evidence</th>
+        <th class="py-2 text-left font-medium text-slate-600">Reason</th>
+        <th class="py-2 text-right font-medium text-slate-600 w-44">Actions</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-slate-100">
+    {{range .Suggestions}}
+      <tr class="hover:bg-slate-50">
+        <td class="py-3">
+          <div class="space-y-1">
+            <div class="flex items-center gap-1">
+              <span class="text-xs text-slate-500">app:</span>
+              <code class="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-700">{{.AppPattern}}</code>
+            </div>
+            <div class="flex items-center gap-1">
+              <span class="text-xs text-slate-500">title:</span>
+              <code class="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-700">{{if .TitlePattern}}{{.TitlePattern}}{{else}}*{{end}}</code>
+            </div>
+          </div>
+        </td>
+        <td class="py-3 text-slate-800">{{.DisplayPath}}</td>
+        <td class="py-3 text-right">
+          <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold
+            {{if ge .Confidence 80}}bg-emerald-100 text-emerald-700{{else if ge .Confidence 60}}bg-amber-100 text-amber-700{{else}}bg-red-100 text-red-700{{end}}
+          ">{{.Confidence}}%</span>
+        </td>
+        <td class="py-3 text-right text-slate-700">
+          <span>{{printf "%.1f" .Score}}</span>
+          <span class="text-xs text-slate-500">({{printf "%.2f" .Ambiguity}})</span>
+        </td>
+        <td class="py-3 text-right text-slate-700">
+          <div>{{.ImpactCount}} events</div>
+          <div class="text-xs text-slate-500">{{formatDuration .ImpactDurationMS}}</div>
+        </td>
+        <td class="py-3 text-right text-slate-700">{{.EvidenceCount}}</td>
+        <td class="py-3 text-slate-600">
+          <div>{{.ConfidenceReason}}</div>
+          {{if .ContextHints}}
+            <div class="mt-1 text-xs text-slate-500">{{range $i, $hint := .ContextHints}}{{if $i}} | {{end}}{{$hint}}{{end}}</div>
+          {{end}}
+        </td>
+        <td class="py-3">
+          <div class="flex items-center justify-end gap-2">
+            <form hx-post="/suggestions/accept" hx-target="#suggestions-table" hx-swap="innerHTML">
+              <input type="hidden" name="suggestion_type" value="{{.SuggestionType}}">
+              <input type="hidden" name="app_pattern" value="{{.AppPattern}}">
+              <input type="hidden" name="title_pattern" value="{{if .TitlePattern}}{{.TitlePattern}}{{end}}">
+              <input type="hidden" name="project_id" value="{{.ProjectID}}">
+              <input type="hidden" name="activity_id" value="{{.ActivityID}}">
+              <input type="hidden" name="display_path" value="{{.DisplayPath}}">
+              <input type="hidden" name="confidence" value="{{.Confidence}}">
+              <input type="hidden" name="score" value="{{.Score}}">
+              <input type="hidden" name="confidence_reason" value="{{.ConfidenceReason}}">
+              <input type="hidden" name="ambiguity" value="{{.Ambiguity}}">
+              <input type="hidden" name="impact_count" value="{{.ImpactCount}}">
+              <input type="hidden" name="impact_duration_ms" value="{{.ImpactDurationMS}}">
+              <input type="hidden" name="evidence_count" value="{{.EvidenceCount}}">
+              <input type="hidden" name="last_seen_ms" value="{{.LastSeenMS}}">
+              <input type="hidden" name="context_hints" value="{{range $i, $hint := .ContextHints}}{{if $i}},{{end}}{{$hint}}{{end}}">
+              <input type="hidden" name="date" value="{{if $.SuggestionQuery.Date}}{{$.SuggestionQuery.Date}}{{end}}">
+              <input type="hidden" name="min_duration_ms" value="{{$.SuggestionQuery.MinDurationMS}}">
+              <input type="hidden" name="limit" value="{{$.SuggestionQuery.Limit}}">
+              <input type="hidden" name="min_evidence" value="{{$.SuggestionQuery.MinEvidence}}">
+              <input type="hidden" name="exclude_apps" value="{{range $i, $a := $.SuggestionQuery.ExcludeApps}}{{if $i}},{{end}}{{$a}}{{end}}">
+              <input type="hidden" name="include_context" value="{{if $.SuggestionQuery.IncludeContext}}1{{else}}0{{end}}">
+              <input type="hidden" name="apply_now" value="1">
+              <button type="submit" class="rounded-md bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700">Accept</button>
+            </form>
+            <form hx-post="/suggestions/reject" hx-target="#suggestions-table" hx-swap="innerHTML">
+              <input type="hidden" name="suggestion_type" value="{{.SuggestionType}}">
+              <input type="hidden" name="app_pattern" value="{{.AppPattern}}">
+              <input type="hidden" name="title_pattern" value="{{if .TitlePattern}}{{.TitlePattern}}{{end}}">
+              <input type="hidden" name="project_id" value="{{.ProjectID}}">
+              <input type="hidden" name="activity_id" value="{{.ActivityID}}">
+              <input type="hidden" name="confidence" value="{{.Confidence}}">
+              <input type="hidden" name="score" value="{{.Score}}">
+              <input type="hidden" name="ambiguity" value="{{.Ambiguity}}">
+              <input type="hidden" name="date" value="{{if $.SuggestionQuery.Date}}{{$.SuggestionQuery.Date}}{{end}}">
+              <input type="hidden" name="min_duration_ms" value="{{$.SuggestionQuery.MinDurationMS}}">
+              <input type="hidden" name="limit" value="{{$.SuggestionQuery.Limit}}">
+              <input type="hidden" name="min_evidence" value="{{$.SuggestionQuery.MinEvidence}}">
+              <input type="hidden" name="exclude_apps" value="{{range $i, $a := $.SuggestionQuery.ExcludeApps}}{{if $i}},{{end}}{{$a}}{{end}}">
+              <input type="hidden" name="include_context" value="{{if $.SuggestionQuery.IncludeContext}}1{{else}}0{{end}}">
+              <button type="submit" class="rounded-md border border-red-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50">Reject</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+    {{else}}
+      <tr><td colspan="8" class="py-8 text-center text-slate-500">No suggestions for current scope</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+</div>
 {{end}}

@@ -1,19 +1,77 @@
 {{define "settings"}}
-<section class="card">
-  <h2>Settings</h2>
-  <form class="grid-form" method="post" action="/settings">
-    <label>Tracking Enabled <input type="checkbox" name="enabled" value="1" {{if .Config.Enabled}}checked{{end}}></label>
-    <label>Weighted Bucket Minutes <input type="number" name="weighted_bucket_minutes" value="{{.Config.WeightedBucketMinutes}}"></label>
-    <label>Weighted Switch Minutes <input type="number" name="weighted_switch_minutes" value="{{.Config.WeightedSwitchMinutes}}"></label>
-    <label>Noise Bucket Minutes <input type="number" name="noise_bucket_minutes" value="{{.Config.NoiseBucketMinutes}}"></label>
-    <label>Noise Switch Minutes <input type="number" name="noise_switch_minutes" value="{{.Config.NoiseSwitchMinutes}}"></label>
-    <label>Noise App Patterns (one per line)
-      <textarea name="noise_app_patterns" rows="6">{{.NoisePatternsText}}</textarea>
-    </label>
-    <label>Work WiFi Patterns (one per line)
-      <textarea name="work_wifis" rows="6">{{.WorkWifisText}}</textarea>
-    </label>
-    <button type="submit">Save</button>
-  </form>
+<section class="space-y-6">
+  <header class="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+    <div class="flex flex-wrap items-start justify-between gap-4">
+      <div>
+        <h1 class="text-2xl font-semibold text-tt-ink">Settings</h1>
+        <p class="mt-1 max-w-2xl text-sm text-slate-600">Configure tracking behavior, noise filtering, and work context detection.</p>
+      </div>
+    </div>
+  </header>
+
+  <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <form class="space-y-6" method="post" action="/settings">
+      <div class="grid gap-6 md:grid-cols-2">
+        <div class="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <label class="flex items-center gap-3">
+            <input type="checkbox" name="enabled" value="1" {{if .Config.Enabled}}checked{{end}} class="h-5 w-5 rounded border-slate-300 text-tt-accent focus:ring-tt-accent">
+            <div>
+              <span class="font-medium text-tt-ink">Tracking Enabled</span>
+              <p class="text-sm text-slate-500">Enable or disable event tracking</p>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <div class="border-t border-slate-200 pt-6">
+        <h3 class="mb-4 text-base font-semibold text-tt-ink">Weighted Scoring</h3>
+        <div class="grid gap-4 md:grid-cols-2">
+          <label class="flex flex-col gap-1">
+            <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Weighted Bucket Minutes</span>
+            <input type="number" name="weighted_bucket_minutes" value="{{.Config.WeightedBucketMinutes}}" class="rounded-lg border-slate-300 text-sm">
+          </label>
+          <label class="flex flex-col gap-1">
+            <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Weighted Switch Minutes</span>
+            <input type="number" name="weighted_switch_minutes" value="{{.Config.WeightedSwitchMinutes}}" class="rounded-lg border-slate-300 text-sm">
+          </label>
+        </div>
+      </div>
+
+      <div class="border-t border-slate-200 pt-6">
+        <h3 class="mb-4 text-base font-semibold text-tt-ink">Noise Filtering</h3>
+        <div class="grid gap-4 md:grid-cols-2">
+          <label class="flex flex-col gap-1">
+            <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Noise Bucket Minutes</span>
+            <input type="number" name="noise_bucket_minutes" value="{{.Config.NoiseBucketMinutes}}" class="rounded-lg border-slate-300 text-sm">
+          </label>
+          <label class="flex flex-col gap-1">
+            <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Noise Switch Minutes</span>
+            <input type="number" name="noise_switch_minutes" value="{{.Config.NoiseSwitchMinutes}}" class="rounded-lg border-slate-300 text-sm">
+          </label>
+          <label class="flex flex-col gap-1 md:col-span-2">
+            <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Noise App Patterns (one per line)</span>
+            <textarea name="noise_app_patterns" rows="5" class="rounded-lg border-slate-300 text-sm font-mono">{{.NoisePatternsText}}</textarea>
+            <span class="text-xs text-slate-500">Regex patterns to exclude apps from tracking</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="border-t border-slate-200 pt-6">
+        <h3 class="mb-4 text-base font-semibold text-tt-ink">Work Context Detection</h3>
+        <div class="grid gap-4">
+          <label class="flex flex-col gap-1">
+            <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Work WiFi Patterns (one per line)</span>
+            <textarea name="work_wifis" rows="5" class="rounded-lg border-slate-300 text-sm font-mono">{{.WorkWifisText}}</textarea>
+            <span class="text-xs text-slate-500">WiFi network names or patterns that indicate work context</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-3 border-t border-slate-200 pt-6">
+        <button type="submit" class="rounded-lg bg-tt-accent px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700">Save Settings</button>
+        <a href="/settings" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</a>
+      </div>
+    </form>
+  </section>
 </section>
 {{end}}

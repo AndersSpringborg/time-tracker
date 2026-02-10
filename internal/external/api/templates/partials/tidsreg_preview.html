@@ -1,33 +1,48 @@
 {{define "partials/tidsreg_preview"}}
-<div class="stack">
-  <h3>Step 3: Confirm Import</h3>
-  {{if .TidsregError}}<p class="flash">{{.TidsregError}}</p>{{end}}
+<div class="space-y-4">
+  <h3 class="text-lg font-semibold text-tt-ink">Step 3: Confirm Import</h3>
+  {{if .TidsregError}}
+  <div class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{{.TidsregError}}</div>
+  {{end}}
   {{if .TidsregPreview.Candidates}}
     <form hx-post="/integrations/tidsreg/import" hx-target="#tidsreg-flow" hx-swap="innerHTML" hx-indicator="#tidsreg-loader">
-      <table>
-        <thead><tr><th>Import</th><th>Customer</th><th>Project</th><th>Phase</th><th>Target Project</th><th>Activities</th></tr></thead>
-        <tbody>
-        {{range .TidsregPreview.Candidates}}
-          <tr>
-            <td><input type="checkbox" name="candidate_keys" value="{{.Key}}" checked></td>
-            <td>{{.CustomerName}}</td>
-            <td>{{.ProjectName}}</td>
-            <td>{{.PhaseName}}</td>
-            <td>{{.TargetTitle}}</td>
-            <td>{{formatActivities .Activities}}</td>
-          </tr>
-        {{end}}
-        </tbody>
-      </table>
-      <div class="actions">
-        <button type="button" data-toggle-checkboxes data-checkbox-name="candidate_keys">Check/Uncheck All</button>
-        <button type="submit">Import Selected</button>
-        <button type="button" hx-post="/integrations/tidsreg/session/clear" hx-target="#tidsreg-flow" hx-swap="innerHTML" hx-indicator="#tidsreg-loader">Cancel</button>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-slate-200">
+              <th class="py-2 text-left font-medium text-slate-600 w-10">Import</th>
+              <th class="py-2 text-left font-medium text-slate-600">Customer</th>
+              <th class="py-2 text-left font-medium text-slate-600">Project</th>
+              <th class="py-2 text-left font-medium text-slate-600">Phase</th>
+              <th class="py-2 text-left font-medium text-slate-600">Target Project</th>
+              <th class="py-2 text-left font-medium text-slate-600">Activities</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+          {{range .TidsregPreview.Candidates}}
+            <tr class="hover:bg-slate-50">
+              <td class="py-2">
+                <input type="checkbox" name="candidate_keys" value="{{.Key}}" checked class="rounded border-slate-300 text-tt-accent focus:ring-tt-accent">
+              </td>
+              <td class="py-2 text-slate-600">{{.CustomerName}}</td>
+              <td class="py-2 text-slate-800">{{.ProjectName}}</td>
+              <td class="py-2 text-slate-600">{{.PhaseName}}</td>
+              <td class="py-2 text-slate-800">{{.TargetTitle}}</td>
+              <td class="py-2 text-slate-600">{{formatActivities .Activities}}</td>
+            </tr>
+          {{end}}
+          </tbody>
+        </table>
+      </div>
+      <div class="mt-4 flex flex-wrap items-center gap-3">
+        <button type="button" data-toggle-checkboxes data-checkbox-name="candidate_keys" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Select All / None</button>
+        <button type="submit" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">Import Selected</button>
+        <button type="button" hx-post="/integrations/tidsreg/session/clear" hx-target="#tidsreg-flow" hx-swap="innerHTML" hx-indicator="#tidsreg-loader" class="rounded-lg border border-red-300 bg-white px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50">Cancel</button>
       </div>
     </form>
   {{else}}
-    <p class="muted">No project variants found for selected projects.</p>
-    <button type="button" hx-post="/integrations/tidsreg/session/clear" hx-target="#tidsreg-flow" hx-swap="innerHTML" hx-indicator="#tidsreg-loader">Back to Login</button>
+    <p class="text-sm text-slate-600">No project variants found for selected projects.</p>
+    <button type="button" hx-post="/integrations/tidsreg/session/clear" hx-target="#tidsreg-flow" hx-swap="innerHTML" hx-indicator="#tidsreg-loader" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Back to Login</button>
   {{end}}
 </div>
 {{end}}

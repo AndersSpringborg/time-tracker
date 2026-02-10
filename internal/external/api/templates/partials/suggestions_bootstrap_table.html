@@ -1,47 +1,58 @@
 {{define "partials/suggestions_bootstrap_table"}}
-{{if .BootstrapSummary}}<p class="flash">{{.BootstrapSummary}}</p>{{end}}
-{{if .SuggestionStats.IsColdStart}}
-<p class="muted">{{.SuggestionStats.Message}}</p>
+{{if .BootstrapSummary}}
+<div class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{{.BootstrapSummary}}</div>
 {{end}}
-<table>
-  <thead>
-    <tr>
-      <th>App</th>
-      <th>Window Title</th>
-      <th>Events</th>
-      <th>Duration</th>
-      <th>Map</th>
-    </tr>
-  </thead>
-  <tbody>
-  {{range .BootstrapGroups}}
-    <tr>
-      <td>{{.AppName}}</td>
-      <td>{{.WindowTitle}}</td>
-      <td>{{.EventCount}}</td>
-      <td>{{formatDuration .TotalDurationMS}}</td>
-      <td>
-        <form class="inline-form" hx-post="/suggestions/bootstrap/map" hx-target="#bootstrap-table" hx-swap="innerHTML">
-          <input type="hidden" name="date" value="{{if $.SuggestionQuery.Date}}{{$.SuggestionQuery.Date}}{{end}}">
-          <input type="hidden" name="app_name" value="{{.AppName}}">
-          <input type="hidden" name="window_title" value="{{.WindowTitle}}">
-          <input type="hidden" name="min_duration_ms" value="{{$.SuggestionQuery.MinDurationMS}}">
-          <input type="hidden" name="limit" value="{{$.SuggestionQuery.Limit}}">
-          <input type="hidden" name="bootstrap_limit" value="{{$.SuggestionQuery.Limit}}">
-          <input type="hidden" name="min_evidence" value="{{$.SuggestionQuery.MinEvidence}}">
-          <input type="hidden" name="exclude_apps" value="{{range $i, $a := $.SuggestionQuery.ExcludeApps}}{{if $i}},{{end}}{{$a}}{{end}}">
-          <input type="hidden" name="include_context" value="{{if $.SuggestionQuery.IncludeContext}}1{{else}}0{{end}}">
-          <label>Project ID <input type="number" name="project_id" placeholder="10"></label>
-          <label>Activity ID <input type="number" name="activity_id" placeholder="100"></label>
-          <label>Create rule <input type="checkbox" name="create_rule" value="1" checked></label>
-          <label>Apply now <input type="checkbox" name="apply_now" value="1" checked></label>
-          <button type="submit">Label</button>
-        </form>
-      </td>
-    </tr>
-  {{else}}
-    <tr><td colspan="5" class="muted">No bootstrap groups for current scope</td></tr>
-  {{end}}
-  </tbody>
-</table>
+{{if .SuggestionStats.IsColdStart}}
+<div class="mb-4 text-sm text-amber-700">{{.SuggestionStats.Message}}</div>
+{{end}}
+
+<div class="overflow-x-auto">
+  <table class="w-full text-sm">
+    <thead>
+      <tr class="border-b border-slate-200">
+        <th class="py-2 text-left font-medium text-slate-600">App</th>
+        <th class="py-2 text-left font-medium text-slate-600">Window Title</th>
+        <th class="py-2 text-right font-medium text-slate-600">Events</th>
+        <th class="py-2 text-right font-medium text-slate-600">Duration</th>
+        <th class="py-2 text-left font-medium text-slate-600">Map</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-slate-100">
+    {{range .BootstrapGroups}}
+      <tr class="hover:bg-slate-50">
+        <td class="py-3 text-slate-800">{{.AppName}}</td>
+        <td class="py-3 text-slate-700 max-w-xs truncate" title="{{.WindowTitle}}">{{.WindowTitle}}</td>
+        <td class="py-3 text-right text-slate-700">{{.EventCount}}</td>
+        <td class="py-3 text-right font-medium text-slate-700">{{formatDuration .TotalDurationMS}}</td>
+        <td class="py-3">
+          <form class="flex flex-wrap items-center gap-2" hx-post="/suggestions/bootstrap/map" hx-target="#bootstrap-table" hx-swap="innerHTML">
+            <input type="hidden" name="date" value="{{if $.SuggestionQuery.Date}}{{$.SuggestionQuery.Date}}{{end}}">
+            <input type="hidden" name="app_name" value="{{.AppName}}">
+            <input type="hidden" name="window_title" value="{{.WindowTitle}}">
+            <input type="hidden" name="min_duration_ms" value="{{$.SuggestionQuery.MinDurationMS}}">
+            <input type="hidden" name="limit" value="{{$.SuggestionQuery.Limit}}">
+            <input type="hidden" name="bootstrap_limit" value="{{$.SuggestionQuery.Limit}}">
+            <input type="hidden" name="min_evidence" value="{{$.SuggestionQuery.MinEvidence}}">
+            <input type="hidden" name="exclude_apps" value="{{range $i, $a := $.SuggestionQuery.ExcludeApps}}{{if $i}},{{end}}{{$a}}{{end}}">
+            <input type="hidden" name="include_context" value="{{if $.SuggestionQuery.IncludeContext}}1{{else}}0{{end}}">
+            <input type="number" name="project_id" placeholder="Project ID" class="w-24 rounded-md border-slate-300 text-xs">
+            <input type="number" name="activity_id" placeholder="Activity ID" class="w-24 rounded-md border-slate-300 text-xs">
+            <label class="flex items-center gap-1 text-xs text-slate-600">
+              <input type="checkbox" name="create_rule" value="1" checked class="rounded border-slate-300 text-tt-accent focus:ring-tt-accent">
+              Rule
+            </label>
+            <label class="flex items-center gap-1 text-xs text-slate-600">
+              <input type="checkbox" name="apply_now" value="1" checked class="rounded border-slate-300 text-tt-accent focus:ring-tt-accent">
+              Apply
+            </label>
+            <button type="submit" class="rounded-md bg-tt-accent px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-teal-700">Label</button>
+          </form>
+        </td>
+      </tr>
+    {{else}}
+      <tr><td colspan="5" class="py-8 text-center text-slate-500">No bootstrap groups for current scope</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+</div>
 {{end}}

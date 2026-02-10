@@ -1,39 +1,106 @@
 {{define "partials/report_table"}}
-<div class="stack">
-  {{if .ReportDateActive}}
-  <p class="muted">Showing date: {{.ReportDate}}</p>
-  {{else}}
-  <p class="muted">Showing range: {{.Report.Range}}</p>
-  {{end}}
-  <p>Total tracked: <strong>{{formatDuration .Report.TotalMS}}</strong></p>
-  <p class="muted">Excluded noisy events: {{.Report.ExcludedEvents}}</p>
-</div>
-<div class="split">
-  <div>
-    <h3>By Project</h3>
-    <table>
-      <thead><tr><th>Project</th><th>Duration</th></tr></thead>
-      <tbody>
-      {{range .Report.ByProject}}
-        <tr><td>{{.Name}}</td><td>{{formatDuration .TotalMS}}</td></tr>
-      {{else}}
-        <tr><td colspan="2" class="muted">No rows</td></tr>
-      {{end}}
-      </tbody>
-    </table>
+{{if .RulesApplySummary}}
+<div class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{{.RulesApplySummary}}</div>
+{{end}}
+
+<div class="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+  <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+    <p class="text-xs uppercase tracking-wide text-slate-500">{{if .ReportDateActive}}Date{{else}}Range{{end}}</p>
+    <p class="mt-1 text-lg font-semibold text-tt-ink">{{if .ReportDateActive}}{{.ReportDate}}{{else}}{{.Report.Range}}{{end}}</p>
   </div>
-  <div>
-    <h3>By App</h3>
-    <table>
-      <thead><tr><th>App</th><th>Duration</th></tr></thead>
-      <tbody>
-      {{range .Report.ByApp}}
-        <tr><td>{{.Name}}</td><td>{{formatDuration .TotalMS}}</td></tr>
-      {{else}}
-        <tr><td colspan="2" class="muted">No rows</td></tr>
-      {{end}}
-      </tbody>
-    </table>
+  <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+    <p class="text-xs uppercase tracking-wide text-slate-500">Total Tracked</p>
+    <p class="mt-1 text-lg font-semibold text-tt-accent">{{formatDuration .Report.TotalMS}}</p>
+  </div>
+  <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+    <p class="text-xs uppercase tracking-wide text-slate-500">Mapped</p>
+    <p class="mt-1 text-lg font-semibold text-emerald-600">{{.Report.MappedEvents}} events</p>
+    <p class="text-sm text-slate-600">{{formatDuration .Report.MappedMS}}</p>
+  </div>
+  <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+    <p class="text-xs uppercase tracking-wide text-slate-500">Unmapped</p>
+    <p class="mt-1 text-lg font-semibold text-amber-600">{{.Report.UnmappedEvents}} events</p>
+    <p class="text-sm text-slate-600">{{formatDuration .Report.UnmappedMS}}</p>
+  </div>
+</div>
+
+<div class="mb-4 flex flex-wrap gap-4 text-sm text-slate-600">
+  <span>Total events: <strong class="text-tt-ink">{{.Report.TotalEvents}}</strong></span>
+  <span>Included: <strong class="text-tt-ink">{{.Report.IncludedEvents}}</strong></span>
+  <span class="text-slate-500">Excluded noisy: {{.Report.ExcludedEvents}}</span>
+</div>
+
+<div class="grid gap-6 lg:grid-cols-3">
+  <div class="rounded-xl border border-slate-200 bg-white p-4">
+    <h3 class="mb-3 text-base font-semibold text-tt-ink">By Project</h3>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-slate-200">
+            <th class="py-2 text-left font-medium text-slate-600">Project</th>
+            <th class="py-2 text-right font-medium text-slate-600">Duration</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+        {{range .Report.ByProject}}
+          <tr>
+            <td class="py-2 text-slate-800">{{.Name}}</td>
+            <td class="py-2 text-right font-medium text-slate-700">{{formatDuration .TotalMS}}</td>
+          </tr>
+        {{else}}
+          <tr><td colspan="2" class="py-4 text-center text-slate-500">No rows</td></tr>
+        {{end}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="rounded-xl border border-slate-200 bg-white p-4">
+    <h3 class="mb-3 text-base font-semibold text-tt-ink">By App</h3>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-slate-200">
+            <th class="py-2 text-left font-medium text-slate-600">App</th>
+            <th class="py-2 text-right font-medium text-slate-600">Duration</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+        {{range .Report.ByApp}}
+          <tr>
+            <td class="py-2 text-slate-800">{{.Name}}</td>
+            <td class="py-2 text-right font-medium text-slate-700">{{formatDuration .TotalMS}}</td>
+          </tr>
+        {{else}}
+          <tr><td colspan="2" class="py-4 text-center text-slate-500">No rows</td></tr>
+        {{end}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="rounded-xl border border-slate-200 bg-white p-4">
+    <h3 class="mb-3 text-base font-semibold text-tt-ink">Top Window Titles</h3>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-slate-200">
+            <th class="py-2 text-left font-medium text-slate-600">Window</th>
+            <th class="py-2 text-right font-medium text-slate-600">Duration</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+        {{range .Report.ByWindow}}
+          <tr>
+            <td class="py-2 text-slate-800 max-w-xs truncate" title="{{.Name}}">{{.Name}}</td>
+            <td class="py-2 text-right font-medium text-slate-700">{{formatDuration .TotalMS}}</td>
+          </tr>
+        {{else}}
+          <tr><td colspan="2" class="py-4 text-center text-slate-500">No rows</td></tr>
+        {{end}}
+        </tbody>
+      </table>
+    </div>
   </div>
 </div>
 {{end}}
