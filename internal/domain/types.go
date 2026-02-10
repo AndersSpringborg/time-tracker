@@ -9,6 +9,7 @@ type Event struct {
 	ProjectID    *int64
 	ActivityID   *int64
 	ProjectTitle string
+	ActivityName string
 }
 
 type GroupedEvent struct {
@@ -300,6 +301,27 @@ type SummaryRow struct {
 	TotalMS int64
 }
 
+type MappedEventDetail struct {
+	TimestampMS int64
+	DurationMS  int64
+	AppName     string
+	WindowTitle string
+}
+
+type ActivityDetail struct {
+	ActivityID   int64
+	ActivityName string
+	TotalMS      int64
+	Events       []MappedEventDetail
+}
+
+type ProjectDetail struct {
+	ProjectID    int64
+	ProjectTitle string
+	TotalMS      int64
+	Activities   []ActivityDetail
+}
+
 type Report struct {
 	Range          string
 	TotalMS        int64
@@ -311,8 +333,10 @@ type Report struct {
 	UnmappedMS     int64
 	ExcludedEvents int
 	ByProject      []SummaryRow
+	ByActivity     []SummaryRow
 	ByApp          []SummaryRow
 	ByWindow       []SummaryRow
+	MappedDetails  []ProjectDetail
 }
 
 type Dashboard struct {

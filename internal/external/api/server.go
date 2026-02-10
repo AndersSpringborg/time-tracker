@@ -90,6 +90,7 @@ type ruleTargetOption struct {
 func New(app *usecases.App) (*Server, error) {
 	funcs := template.FuncMap{
 		"formatDuration":   domain.FormatDuration,
+		"formatTimestamp":  domain.FormatTimestamp,
 		"formatActivities": formatActivities,
 	}
 	tpl, err := template.New("root").Funcs(funcs).ParseFS(assets, "templates/*.html", "templates/partials/*.html")
