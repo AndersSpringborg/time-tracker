@@ -35,8 +35,17 @@
             <input type="hidden" name="min_evidence" value="{{$.SuggestionQuery.MinEvidence}}">
             <input type="hidden" name="exclude_apps" value="{{range $i, $a := $.SuggestionQuery.ExcludeApps}}{{if $i}},{{end}}{{$a}}{{end}}">
             <input type="hidden" name="include_context" value="{{if $.SuggestionQuery.IncludeContext}}1{{else}}0{{end}}">
-            <input type="number" name="project_id" placeholder="Project ID" class="w-24 rounded-md border-slate-300 text-xs">
-            <input type="number" name="activity_id" placeholder="Activity ID" class="w-24 rounded-md border-slate-300 text-xs">
+            <span class="rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-600">Current project</span>
+            {{if $.SuggestionActivities}}
+            <select name="activity_name" class="w-40 rounded-md border-slate-300 text-xs">
+              <option value="">Activity</option>
+              {{range $.SuggestionActivities}}
+                <option value="{{.}}">{{.}}</option>
+              {{end}}
+            </select>
+            {{else}}
+            <input type="text" name="activity_name" placeholder="Activity name" class="w-40 rounded-md border-slate-300 text-xs">
+            {{end}}
             <label class="flex items-center gap-1 text-xs text-slate-600">
               <input type="checkbox" name="create_rule" value="1" checked class="rounded border-slate-300 text-tt-accent focus:ring-tt-accent">
               Rule

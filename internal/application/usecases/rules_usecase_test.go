@@ -482,18 +482,24 @@ func TestRulesUsecaseAnalyzeSuggestionsReturnsColdStartStats(t *testing.T) {
 }
 
 func TestRulesUsecaseLabelBootstrapGroupCreatesRuleAndMaps(t *testing.T) {
-	repo := &fakeRulesRepo{}
+	projectID := int64(10)
+	activityID := int64(100)
+	repo := &fakeRulesRepo{
+		currentProjectID: &projectID,
+		activityByKey: map[string]*int64{
+			fmt.Sprintf("%d::%s", projectID, "development"): &activityID,
+		},
+	}
 	uc := NewRulesUsecase(repo)
 
 	res, err := uc.LabelBootstrapGroup(context.Background(), contracts.RulesBootstrapLabelRequest{
 		Input: domain.BootstrapLabelInput{
-			Date:        "2026-02-06",
-			AppName:     "Arc",
-			WindowTitle: "Daily Standup",
-			ProjectID:   10,
-			ActivityID:  100,
-			CreateRule:  true,
-			ApplyNow:    true,
+			Date:         "2026-02-06",
+			AppName:      "Arc",
+			WindowTitle:  "Daily Standup",
+			ActivityName: "development",
+			CreateRule:   true,
+			ApplyNow:     true,
 		},
 	})
 	if err != nil {
@@ -508,8 +514,119 @@ func TestRulesUsecaseLabelBootstrapGroupCreatesRuleAndMaps(t *testing.T) {
 	if len(repo.added) != 1 {
 		t.Fatalf("expected one added rule, got %d", len(repo.added))
 	}
+	if repo.added[0].ActionType != domain.RuleActionAssignActivityCurrent {
+		t.Fatalf("expected dynamic current project rule action, got %q", repo.added[0].ActionType)
+	}
+	if repo.added[0].ActionActivityName != "development" {
+		t.Fatalf("expected development activity name in rule, got %q", repo.added[0].ActionActivityName)
+	}
 	if repo.lastGroupLabel != "bootstrap" {
 		t.Fatalf("expected bootstrap label source, got %q", repo.lastGroupLabel)
+	}
+}
+
+func TestRulesUsecaseLabelBootstrapGroupWarnsWhenCurrentProjectMissing(t *testing.T) {
+	repo := &fakeRulesRepo{}
+	uc := NewRulesUsecase(repo)
+
+	res, err := uc.LabelBootstrapGroup(context.Background(), contracts.RulesBootstrapLabelRequest{
+		Input: domain.BootstrapLabelInput{
+			Date:         "2026-02-06",
+			AppName:      "Arc",
+			WindowTitle:  "Daily Standup",
+			ActivityName: "development",
+			CreateRule:   true,
+			ApplyNow:     true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("label bootstrap group failed: %v", err)
+	}
+	if strings.TrimSpace(res.Result.Warning) == "" {
+		t.Fatalf("expected warning when current project is missing")
+	}
+	if res.Result.MappedEvents != 0 {
+		t.Fatalf("expected mapped events to be 0, got %d", res.Result.MappedEvents)
+	}
+}
+
+func TestRulesUsecaseAcceptSuggestionUsesCurrentProjectActivity(t *testing.T) {
+	projectID := int64(10)
+	activityID := int64(101)
+	repo := &fakeRulesRepo{
+		currentProjectID: &projectID,
+		activityByKey: map[string]*int64{
+			fmt.Sprintf("%d::%s", projectID, "meeting"): &activityID,
+		},
+		unmapped: []domain.Event{
+			{ID: 1, AppName: "Slack", WindowTitle: "daily standup"},
+			{ID: 2, AppName: "Slack", WindowTitle: "project planning"},
+			{ID: 3, AppName: "Code", WindowTitle: "main.go"},
+		},
+	}
+	uc := NewRulesUsecase(repo)
+
+	res, err := uc.AcceptSuggestion(context.Background(), contracts.RulesAcceptSuggestionRequest{
+		Input: domain.ApplySuggestionInput{
+			Suggestion: domain.RuleSuggestion{
+				SuggestionType: domain.SuggestionTypeAppOnly,
+				AppPattern:     "Slack",
+				ActivityTitle:  "meeting",
+				ActionType:     domain.RuleActionAssignActivityCurrent,
+			},
+			ApplyNow: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("accept suggestion failed: %v", err)
+	}
+	if len(repo.added) != 1 {
+		t.Fatalf("expected one rule add, got %d", len(repo.added))
+	}
+	if repo.added[0].ActionType != domain.RuleActionAssignActivityCurrent {
+		t.Fatalf("expected dynamic action type, got %q", repo.added[0].ActionType)
+	}
+	if repo.added[0].ActionActivityName != "meeting" {
+		t.Fatalf("expected meeting activity name, got %q", repo.added[0].ActionActivityName)
+	}
+	if res.Result.MappedEvents != 2 {
+		t.Fatalf("expected 2 mapped events, got %d", res.Result.MappedEvents)
+	}
+	if strings.TrimSpace(res.Result.Warning) != "" {
+		t.Fatalf("expected no warning, got %q", res.Result.Warning)
+	}
+}
+
+func TestRulesUsecaseAcceptSuggestionWarnsWhenCurrentProjectMissing(t *testing.T) {
+	repo := &fakeRulesRepo{
+		unmapped: []domain.Event{
+			{ID: 1, AppName: "Slack", WindowTitle: "daily standup"},
+		},
+	}
+	uc := NewRulesUsecase(repo)
+
+	res, err := uc.AcceptSuggestion(context.Background(), contracts.RulesAcceptSuggestionRequest{
+		Input: domain.ApplySuggestionInput{
+			Suggestion: domain.RuleSuggestion{
+				SuggestionType: domain.SuggestionTypeAppOnly,
+				AppPattern:     "Slack",
+				ActivityTitle:  "meeting",
+				ActionType:     domain.RuleActionAssignActivityCurrent,
+			},
+			ApplyNow: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("accept suggestion failed: %v", err)
+	}
+	if strings.TrimSpace(res.Result.Warning) == "" {
+		t.Fatalf("expected warning when current project is missing")
+	}
+	if res.Result.MappedEvents != 0 {
+		t.Fatalf("expected mapped events to be 0, got %d", res.Result.MappedEvents)
+	}
+	if len(repo.applied) != 0 {
+		t.Fatalf("expected no applied mappings, got %d", len(repo.applied))
 	}
 }
 

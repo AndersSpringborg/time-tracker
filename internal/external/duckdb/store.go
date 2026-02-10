@@ -448,6 +448,8 @@ LIMIT ?
 			return nil, err
 		}
 		item.SuggestionType = domain.SuggestionTypeAppOnly
+		item.ProjectTitle = projectTitle
+		item.ActivityTitle = activityTitle
 		item.DisplayPath = buildPath(projectTitle, activityTitle)
 		suppressed, err := s.isSuggestionSuppressed(ctx, item)
 		if err != nil {
@@ -551,6 +553,8 @@ LIMIT ?
 		pattern := domain.BuildTitlePattern(rawTitle)
 		item.SuggestionType = domain.SuggestionTypeAppAndTitle
 		item.TitlePattern = &pattern
+		item.ProjectTitle = projectTitle
+		item.ActivityTitle = activityTitle
 		item.DisplayPath = buildPath(projectTitle, activityTitle)
 		suppressed, err := s.isSuggestionSuppressed(ctx, item)
 		if err != nil {

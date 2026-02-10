@@ -47,6 +47,8 @@ func (f *fakeRulesRepo) ListTitleSuggestions(context.Context, domain.SuggestionQ
 		TitlePattern:     &title,
 		ProjectID:        10,
 		ActivityID:       101,
+		ProjectTitle:     "web-app",
+		ActivityTitle:    "meeting",
 		DisplayPath:      "web-app > meeting",
 		Confidence:       88,
 		ImpactCount:      3,
@@ -332,6 +334,9 @@ func TestSuggestionsPartialRendersRows(t *testing.T) {
 	if !strings.Contains(body, "Accept") {
 		t.Fatalf("expected Accept button in body")
 	}
+	if !strings.Contains(body, "Current project &gt; meeting") {
+		t.Fatalf("expected dynamic current project target with activity name")
+	}
 }
 
 func TestSuggestionsBootstrapPartialRendersRows(t *testing.T) {
@@ -354,6 +359,12 @@ func TestSuggestionsBootstrapPartialRendersRows(t *testing.T) {
 	}
 	if !strings.Contains(body, "Label") {
 		t.Fatalf("expected label action in bootstrap table")
+	}
+	if strings.Contains(body, "Project ID") || strings.Contains(body, "Activity ID") {
+		t.Fatalf("expected bootstrap table to avoid id-based mapping inputs")
+	}
+	if !strings.Contains(body, "name=\"activity_name\"") {
+		t.Fatalf("expected bootstrap activity name selector/input")
 	}
 }
 

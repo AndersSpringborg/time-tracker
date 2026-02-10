@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -34,51 +36,52 @@ type Server struct {
 }
 
 type pageData struct {
-	Title             string
-	Page              string
-	Body              string
-	BodyHTML          template.HTML
-	Flash             string
-	Range             string
-	ReportDate        string
-	ReportDateActive  bool
-	PrevReportDate    string
-	NextReportDate    string
-	Config            domain.Settings
-	NoisePatternsText string
-	WorkWifisText     string
-	Dashboard         domain.Dashboard
-	Report            domain.Report
-	RulesApplySummary string
-	Rules             []domain.Rule
-	ActiveProjects    []domain.Project
-	AllProjects       []domain.Project
-	ArchivedProjects  []domain.Project
-	AllActivities     []domain.Activity
-	ProjectActivities map[int64][]domain.Activity
-	ActiveProjectIDs  map[int64]bool
-	ProjectTargets    []string
-	ProjectSummary    string
-	ProjectError      string
-	Suggestions       []domain.RuleSuggestion
-	SuggestionStats   domain.SuggestionStats
-	SuggestionQuery   domain.SuggestionQuery
-	AutoApplySummary  string
-	BootstrapSummary  string
-	BootstrapGroups   []domain.GroupedEvent
-	DraftPreview      domain.RuleDraftPreview
-	DraftDate         string
-	DraftMinDuration  int64
-	DraftGroups       []domain.GroupedEvent
-	RuleTargets       []ruleTargetOption
-	RuleSummary       string
-	TidsregCustomers  []tidsregmodel.Customer
-	TidsregProjects   []tidsregmodel.Project
-	TidsregPreview    tidsregmodel.ImportPreview
-	TidsregResult     tidsregmodel.ImportResult
-	TidsregSummary    string
-	TidsregError      string
-	TidsregMode       string
+	Title                string
+	Page                 string
+	Body                 string
+	BodyHTML             template.HTML
+	Flash                string
+	Range                string
+	ReportDate           string
+	ReportDateActive     bool
+	PrevReportDate       string
+	NextReportDate       string
+	Config               domain.Settings
+	NoisePatternsText    string
+	WorkWifisText        string
+	Dashboard            domain.Dashboard
+	Report               domain.Report
+	RulesApplySummary    string
+	Rules                []domain.Rule
+	ActiveProjects       []domain.Project
+	AllProjects          []domain.Project
+	ArchivedProjects     []domain.Project
+	AllActivities        []domain.Activity
+	ProjectActivities    map[int64][]domain.Activity
+	ActiveProjectIDs     map[int64]bool
+	ProjectTargets       []string
+	ProjectSummary       string
+	ProjectError         string
+	Suggestions          []domain.RuleSuggestion
+	SuggestionStats      domain.SuggestionStats
+	SuggestionQuery      domain.SuggestionQuery
+	AutoApplySummary     string
+	BootstrapSummary     string
+	BootstrapGroups      []domain.GroupedEvent
+	SuggestionActivities []string
+	DraftPreview         domain.RuleDraftPreview
+	DraftDate            string
+	DraftMinDuration     int64
+	DraftGroups          []domain.GroupedEvent
+	RuleTargets          []ruleTargetOption
+	RuleSummary          string
+	TidsregCustomers     []tidsregmodel.Customer
+	TidsregProjects      []tidsregmodel.Project
+	TidsregPreview       tidsregmodel.ImportPreview
+	TidsregResult        tidsregmodel.ImportResult
+	TidsregSummary       string
+	TidsregError         string
+	TidsregMode          string
 }
 
 type ruleTargetOption struct {
@@ -636,7 +639,7 @@ func (s *Server) handleSuggestionAccept(w http.ResponseWriter, r *http.Request) 
 			datePtr = &dateCopy
 		}
 	}
-	_, err = s.app.Rules.AcceptSuggestion(r.Context(), contracts.RulesAcceptSuggestionRequest{Input: domain.ApplySuggestionInput{
+	acceptRes, err := s.app.Rules.AcceptSuggestion(r.Context(), contracts.RulesAcceptSuggestionRequest{Input: domain.ApplySuggestionInput{
 		Suggestion: sug,
 		ApplyNow:   r.Form.Get("apply_now") != "",
 		Date:       datePtr,
@@ -645,12 +648,16 @@ func (s *Server) handleSuggestionAccept(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	summary := "Suggestion accepted"
+	if strings.TrimSpace(acceptRes.Result.Warning) != "" {
+		summary = summary + " " + strings.TrimSpace(acceptRes.Result.Warning)
+	}
 	suggestionsRes, _ := s.app.Rules.AnalyzeSuggestions(r.Context(), contracts.RulesAnalyzeSuggestionsRequest{Query: q})
 	s.render(w, "partials/suggestions_table", pageData{
 		Suggestions:      suggestionsRes.Suggestions,
 		SuggestionStats:  suggestionsRes.Stats,
 		SuggestionQuery:  q,
-		AutoApplySummary: "Suggestion accepted",
+		AutoApplySummary: summary,
 	})
 }
 
@@ -729,10 +736,16 @@ func (s *Server) handleSuggestionsBootstrapPartial(w http.ResponseWriter, r *htt
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	activities, err := s.suggestionActivityNames(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
 	s.render(w, "partials/suggestions_bootstrap_table", pageData{
-		BootstrapGroups: res.Groups,
-		SuggestionStats: res.Stats,
-		SuggestionQuery: q,
+		BootstrapGroups:      res.Groups,
+		SuggestionStats:      res.Stats,
+		SuggestionQuery:      q,
+		SuggestionActivities: activities,
 	})
 }
 
@@ -747,24 +760,22 @@ func (s *Server) handleSuggestionsBootstrapMap(w http.ResponseWriter, r *http.Re
 	}
 	q := suggestionQueryFromForm(r)
 	q.Limit = int(parseIntDefault(r.Form.Get("bootstrap_limit"), 20))
-	projectID := parseIntDefault(r.Form.Get("project_id"), 0)
-	activityID := parseIntDefault(r.Form.Get("activity_id"), 0)
+	activityName := strings.TrimSpace(r.Form.Get("activity_name"))
 	date := strings.TrimSpace(r.Form.Get("date"))
 	appName := strings.TrimSpace(r.Form.Get("app_name"))
 	windowTitle := r.Form.Get("window_title")
-	if date == "" || appName == "" || projectID <= 0 || activityID <= 0 {
-		http.Error(w, "date, app_name, project_id and activity_id are required", 400)
+	if date == "" || appName == "" || activityName == "" {
+		http.Error(w, "date, app_name and activity_name are required", 400)
 		return
 	}
 	labelRes, err := s.app.Rules.LabelBootstrapGroup(r.Context(), contracts.RulesBootstrapLabelRequest{
 		Input: domain.BootstrapLabelInput{
-			Date:        date,
-			AppName:     appName,
-			WindowTitle: windowTitle,
-			ProjectID:   projectID,
-			ActivityID:  activityID,
-			CreateRule:  r.Form.Get("create_rule") != "",
-			ApplyNow:    r.Form.Get("apply_now") != "",
+			Date:         date,
+			AppName:      appName,
+			WindowTitle:  windowTitle,
+			ActivityName: activityName,
+			CreateRule:   r.Form.Get("create_rule") != "",
+			ApplyNow:     r.Form.Get("apply_now") != "",
 		},
 	})
 	if err != nil {
@@ -776,12 +787,21 @@ func (s *Server) handleSuggestionsBootstrapMap(w http.ResponseWriter, r *http.Re
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	summary := fmt.Sprintf("Bootstrap label applied: mapped %d events, rule created=%v", labelRes.Result.MappedEvents, labelRes.Result.RuleCreated)
+	activities, err := s.suggestionActivityNames(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	summary := fmt.Sprintf("Bootstrap label applied: target Current project > %s, mapped %d events, rule created=%v", activityName, labelRes.Result.MappedEvents, labelRes.Result.RuleCreated)
+	if strings.TrimSpace(labelRes.Result.Warning) != "" {
+		summary = summary + " " + strings.TrimSpace(labelRes.Result.Warning)
+	}
 	s.render(w, "partials/suggestions_bootstrap_table", pageData{
-		BootstrapGroups:  res.Groups,
-		SuggestionStats:  res.Stats,
-		SuggestionQuery:  q,
-		BootstrapSummary: summary,
+		BootstrapGroups:      res.Groups,
+		SuggestionStats:      res.Stats,
+		SuggestionQuery:      q,
+		SuggestionActivities: activities,
+		BootstrapSummary:     summary,
 	})
 }
 
@@ -1311,6 +1331,34 @@ func summarizeGroups(groups []domain.GroupedEvent, limit int) string {
 	return strings.Join(parts, "; ")
 }
 
+func (s *Server) suggestionActivityNames(ctx context.Context) ([]string, error) {
+	if s.app == nil || s.app.Rules == nil {
+		return nil, fmt.Errorf("rules usecase is not configured")
+	}
+	targetsRes, err := s.app.Rules.ListAssignmentTargets(ctx, contracts.RulesAssignmentTargetsRequest{})
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(targetsRes.Targets))
+	seen := make(map[string]struct{}, len(targetsRes.Targets))
+	for _, target := range targetsRes.Targets {
+		name := strings.TrimSpace(target.ActivityTitle)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		return strings.ToLower(names[i]) < strings.ToLower(names[j])
+	})
+	return names, nil
+}
+
 func suggestionQueryFromRequest(r *http.Request) domain.SuggestionQuery {
 	q := domain.SuggestionQuery{
 		MinDurationMS:  parseIntDefault(r.URL.Query().Get("min_duration_ms"), 2000),
@@ -1342,13 +1390,21 @@ func suggestionQueryFromForm(r *http.Request) domain.SuggestionQuery {
 }
 
 func parseSuggestionFromForm(r *http.Request) (domain.RuleSuggestion, error) {
-	projectID, err := strconv.ParseInt(strings.TrimSpace(r.Form.Get("project_id")), 10, 64)
+	projectID, err := parseNullableInt64(r.Form.Get("project_id"))
 	if err != nil {
 		return domain.RuleSuggestion{}, fmt.Errorf("invalid project_id")
 	}
-	activityID, err := strconv.ParseInt(strings.TrimSpace(r.Form.Get("activity_id")), 10, 64)
+	activityID, err := parseNullableInt64(r.Form.Get("activity_id"))
 	if err != nil {
 		return domain.RuleSuggestion{}, fmt.Errorf("invalid activity_id")
+	}
+	projectValue := int64(0)
+	if projectID != nil {
+		projectValue = *projectID
+	}
+	activityValue := int64(0)
+	if activityID != nil {
+		activityValue = *activityID
 	}
 	conf := int(parseIntDefault(r.Form.Get("confidence"), 0))
 	score := parseFloatDefault(r.Form.Get("score"), 0)
@@ -1364,21 +1420,25 @@ func parseSuggestionFromForm(r *http.Request) (domain.RuleSuggestion, error) {
 		titlePtr = &title
 	}
 	dto := apidto.SuggestionInput{
-		SuggestionType:   st,
-		AppPattern:       r.Form.Get("app_pattern"),
-		TitlePattern:     titlePtr,
-		ProjectID:        projectID,
-		ActivityID:       activityID,
-		DisplayPath:      r.Form.Get("display_path"),
-		Confidence:       conf,
-		Score:            score,
-		ConfidenceReason: strings.TrimSpace(r.Form.Get("confidence_reason")),
-		Ambiguity:        ambiguity,
-		ImpactCount:      impactCount,
-		ImpactDurationMS: impactDur,
-		EvidenceCount:    evidence,
-		LastSeenMS:       lastSeen,
-		ContextHints:     parseCSV(r.Form.Get("context_hints")),
+		SuggestionType:     st,
+		AppPattern:         r.Form.Get("app_pattern"),
+		TitlePattern:       titlePtr,
+		ProjectID:          projectValue,
+		ActivityID:         activityValue,
+		ProjectTitle:       strings.TrimSpace(r.Form.Get("project_title")),
+		ActivityTitle:      strings.TrimSpace(r.Form.Get("activity_title")),
+		ActionType:         strings.TrimSpace(r.Form.Get("action_type")),
+		ActionActivityName: strings.TrimSpace(r.Form.Get("action_activity_name")),
+		DisplayPath:        r.Form.Get("display_path"),
+		Confidence:         conf,
+		Score:              score,
+		ConfidenceReason:   strings.TrimSpace(r.Form.Get("confidence_reason")),
+		Ambiguity:          ambiguity,
+		ImpactCount:        impactCount,
+		ImpactDurationMS:   impactDur,
+		EvidenceCount:      evidence,
+		LastSeenMS:         lastSeen,
+		ContextHints:       parseCSV(r.Form.Get("context_hints")),
 	}
 	return dto.ToDomain(), nil
 }

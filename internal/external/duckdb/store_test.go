@@ -67,6 +67,9 @@ func TestListAppSuggestionsReturnsProjectActivityTarget(t *testing.T) {
 	if suggestions[0].ProjectID != 10 || suggestions[0].ActivityID != 100 {
 		t.Fatalf("expected target project/activity 10/100, got %d/%d", suggestions[0].ProjectID, suggestions[0].ActivityID)
 	}
+	if suggestions[0].ProjectTitle != "web-app" || suggestions[0].ActivityTitle != "development" {
+		t.Fatalf("expected target titles web-app/development, got %q/%q", suggestions[0].ProjectTitle, suggestions[0].ActivityTitle)
+	}
 }
 
 func TestApplyEventMappingsUpdatesEvents(t *testing.T) {

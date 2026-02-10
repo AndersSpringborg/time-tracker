@@ -390,6 +390,10 @@ func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
+		if strings.TrimSpace(res.Result.Warning) != "" {
+			fmt.Fprintf(stdout, "accepted: rule_created=%v mapped_events=%d warning=%q\n", res.Result.RuleCreated, res.Result.MappedEvents, res.Result.Warning)
+			return 0
+		}
 		fmt.Fprintf(stdout, "accepted: rule_created=%v mapped_events=%d\n", res.Result.RuleCreated, res.Result.MappedEvents)
 		return 0
 	case "reject":
@@ -503,31 +507,46 @@ func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.
 		date := fs.String("date", "", "date YYYY-MM-DD")
 		appName := fs.String("app", "", "app name")
 		windowTitle := fs.String("title", "", "window title")
-		projectID := fs.Int64("project-id", 0, "project id")
-		activityID := fs.Int64("activity-id", 0, "activity id")
+		activityName := fs.String("activity", "", "activity name in current project")
+		projectID := fs.Int64("project-id", 0, "project id (legacy explicit mapping)")
+		activityID := fs.Int64("activity-id", 0, "activity id (legacy explicit mapping)")
 		createRule := fs.Bool("create-rule", true, "create a reusable rule")
 		applyNow := fs.Bool("apply-now", true, "map events now")
 		if err := fs.Parse(args[1:]); err != nil {
 			return 2
 		}
-		if *date == "" || *appName == "" || *projectID <= 0 || *activityID <= 0 {
-			fmt.Fprintln(stderr, "--date --app --project-id --activity-id are required")
+		if *date == "" || *appName == "" {
+			fmt.Fprintln(stderr, "--date and --app are required")
 			return 2
 		}
+		activityNameValue := strings.TrimSpace(*activityName)
+		if activityNameValue == "" && (*projectID <= 0 || *activityID <= 0) {
+			fmt.Fprintln(stderr, "either --activity or --project-id/--activity-id is required")
+			return 2
+		}
+		input := domain.BootstrapLabelInput{
+			Date:        *date,
+			AppName:     *appName,
+			WindowTitle: *windowTitle,
+			CreateRule:  *createRule,
+			ApplyNow:    *applyNow,
+		}
+		if activityNameValue != "" {
+			input.ActivityName = activityNameValue
+		} else {
+			input.ProjectID = *projectID
+			input.ActivityID = *activityID
+		}
 		res, err := r.App.Rules.LabelBootstrapGroup(ctx, contracts.RulesBootstrapLabelRequest{
-			Input: domain.BootstrapLabelInput{
-				Date:        *date,
-				AppName:     *appName,
-				WindowTitle: *windowTitle,
-				ProjectID:   *projectID,
-				ActivityID:  *activityID,
-				CreateRule:  *createRule,
-				ApplyNow:    *applyNow,
-			},
+			Input: input,
 		})
 		if err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
+		}
+		if strings.TrimSpace(res.Result.Warning) != "" {
+			fmt.Fprintf(stdout, "label-group: rule_created=%v mapped_events=%d warning=%q\n", res.Result.RuleCreated, res.Result.MappedEvents, res.Result.Warning)
+			return 0
 		}
 		fmt.Fprintf(stdout, "label-group: rule_created=%v mapped_events=%d\n", res.Result.RuleCreated, res.Result.MappedEvents)
 		return 0
@@ -1030,7 +1049,7 @@ Examples:
   tt rules suggest --format json --limit 20 --min-evidence 2
   tt rules auto-apply --min-confidence 90 --apply-now
   tt rules bootstrap --date 2026-02-06 --format json
-  tt rules label-group --date 2026-02-06 --app Arc --title "Daily standup" --project-id 10 --activity-id 100 --create-rule --apply-now
+  tt rules label-group --date 2026-02-06 --app Arc --title "Daily standup" --activity development --create-rule --apply-now
   tt review groups --date 2026-02-06 --format json
   tt reports --range week --format json
 `)

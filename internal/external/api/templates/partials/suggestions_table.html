@@ -39,7 +39,16 @@
             </div>
           </div>
         </td>
-        <td class="py-3 text-slate-800">{{.DisplayPath}}</td>
+        <td class="py-3 text-slate-800">
+          {{if .ActivityTitle}}
+            <div>Current project &gt; {{.ActivityTitle}}</div>
+            {{if .DisplayPath}}
+              <div class="text-xs text-slate-500">learned from {{.DisplayPath}}</div>
+            {{end}}
+          {{else}}
+            <div>{{.DisplayPath}}</div>
+          {{end}}
+        </td>
         <td class="py-3 text-right">
           <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold
             {{if ge .Confidence 80}}bg-emerald-100 text-emerald-700{{else if ge .Confidence 60}}bg-amber-100 text-amber-700{{else}}bg-red-100 text-red-700{{end}}
@@ -68,6 +77,14 @@
               <input type="hidden" name="title_pattern" value="{{if .TitlePattern}}{{.TitlePattern}}{{end}}">
               <input type="hidden" name="project_id" value="{{.ProjectID}}">
               <input type="hidden" name="activity_id" value="{{.ActivityID}}">
+              <input type="hidden" name="project_title" value="{{.ProjectTitle}}">
+              <input type="hidden" name="activity_title" value="{{.ActivityTitle}}">
+              {{if .ActivityTitle}}
+              <input type="hidden" name="action_type" value="assign_activity_in_current_project">
+              <input type="hidden" name="action_activity_name" value="{{.ActivityTitle}}">
+              {{else}}
+              <input type="hidden" name="action_type" value="assign_explicit">
+              {{end}}
               <input type="hidden" name="display_path" value="{{.DisplayPath}}">
               <input type="hidden" name="confidence" value="{{.Confidence}}">
               <input type="hidden" name="score" value="{{.Score}}">
@@ -93,6 +110,8 @@
               <input type="hidden" name="title_pattern" value="{{if .TitlePattern}}{{.TitlePattern}}{{end}}">
               <input type="hidden" name="project_id" value="{{.ProjectID}}">
               <input type="hidden" name="activity_id" value="{{.ActivityID}}">
+              <input type="hidden" name="project_title" value="{{.ProjectTitle}}">
+              <input type="hidden" name="activity_title" value="{{.ActivityTitle}}">
               <input type="hidden" name="confidence" value="{{.Confidence}}">
               <input type="hidden" name="score" value="{{.Score}}">
               <input type="hidden" name="ambiguity" value="{{.Ambiguity}}">

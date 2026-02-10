@@ -36,6 +36,8 @@ type RuleSuggestion struct {
 	TitlePattern     *string  `json:"title_pattern,omitempty" yaml:"title_pattern,omitempty"`
 	ProjectID        int64    `json:"project_id" yaml:"project_id"`
 	ActivityID       int64    `json:"activity_id" yaml:"activity_id"`
+	ProjectTitle     string   `json:"project_title,omitempty" yaml:"project_title,omitempty"`
+	ActivityTitle    string   `json:"activity_title,omitempty" yaml:"activity_title,omitempty"`
 	DisplayPath      string   `json:"display_path" yaml:"display_path"`
 	Confidence       int      `json:"confidence" yaml:"confidence"`
 	Score            float64  `json:"score" yaml:"score"`
@@ -145,6 +147,8 @@ func SuggestionsFromDomain(items []domain.RuleSuggestion) []RuleSuggestion {
 			TitlePattern:     item.TitlePattern,
 			ProjectID:        item.ProjectID,
 			ActivityID:       item.ActivityID,
+			ProjectTitle:     item.ProjectTitle,
+			ActivityTitle:    item.ActivityTitle,
 			DisplayPath:      item.DisplayPath,
 			Confidence:       item.Confidence,
 			Score:            item.Score,

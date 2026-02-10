@@ -154,21 +154,25 @@ const (
 )
 
 type RuleSuggestion struct {
-	SuggestionType   SuggestionType
-	AppPattern       string
-	TitlePattern     *string
-	ProjectID        int64
-	ActivityID       int64
-	DisplayPath      string
-	Confidence       int
-	Score            float64
-	ConfidenceReason string
-	Ambiguity        float64
-	ImpactCount      int
-	ImpactDurationMS int64
-	EvidenceCount    int
-	LastSeenMS       int64
-	ContextHints     []string
+	SuggestionType     SuggestionType
+	AppPattern         string
+	TitlePattern       *string
+	ProjectID          int64
+	ActivityID         int64
+	ProjectTitle       string
+	ActivityTitle      string
+	ActionType         RuleAction
+	ActionActivityName string
+	DisplayPath        string
+	Confidence         int
+	Score              float64
+	ConfidenceReason   string
+	Ambiguity          float64
+	ImpactCount        int
+	ImpactDurationMS   int64
+	EvidenceCount      int
+	LastSeenMS         int64
+	ContextHints       []string
 }
 
 type SuggestionQuery struct {
@@ -214,18 +218,20 @@ type SuggestionRun struct {
 }
 
 type BootstrapLabelInput struct {
-	Date        string
-	AppName     string
-	WindowTitle string
-	ProjectID   int64
-	ActivityID  int64
-	CreateRule  bool
-	ApplyNow    bool
+	Date         string
+	AppName      string
+	WindowTitle  string
+	ProjectID    int64
+	ActivityID   int64
+	ActivityName string
+	CreateRule   bool
+	ApplyNow     bool
 }
 
 type BootstrapLabelResult struct {
 	MappedEvents int64
 	RuleCreated  bool
+	Warning      string
 }
 
 type ApplySuggestionInput struct {
@@ -237,6 +243,7 @@ type ApplySuggestionInput struct {
 type ApplySuggestionResult struct {
 	RuleCreated  bool
 	MappedEvents int64
+	Warning      string
 }
 
 type AutoApplySuggestionsInput struct {

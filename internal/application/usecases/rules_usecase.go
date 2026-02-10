@@ -277,89 +277,143 @@ func (u *RulesUsecase) LabelBootstrapGroup(ctx context.Context, req contracts.Ru
 	if strings.TrimSpace(in.AppName) == "" {
 		return contracts.RulesBootstrapLabelResponse{}, fmt.Errorf("app_name is required")
 	}
-	if in.ProjectID <= 0 || in.ActivityID <= 0 {
-		return contracts.RulesBootstrapLabelResponse{}, fmt.Errorf("project_id and activity_id are required")
+	activityName := strings.TrimSpace(in.ActivityName)
+	useDynamicTarget := activityName != ""
+	if !useDynamicTarget && (in.ProjectID <= 0 || in.ActivityID <= 0) {
+		return contracts.RulesBootstrapLabelResponse{}, fmt.Errorf("activity_name is required")
 	}
 
 	out := domain.BootstrapLabelResult{}
 	if in.CreateRule {
-		projectID := in.ProjectID
-		activityID := in.ActivityID
 		appPattern := "(?i)^" + regexp.QuoteMeta(strings.TrimSpace(in.AppName)) + "$"
 		titlePattern := domain.BuildTitlePattern(in.WindowTitle)
-		if _, err := u.repo.AddRule(ctx, domain.NormalizeRuleInput(domain.RuleInput{
+		ruleInput := domain.RuleInput{
 			Priority:     100,
 			AppPattern:   appPattern,
 			TitlePattern: titlePattern,
-			ProjectID:    &projectID,
-			ActivityID:   &activityID,
-			ActionType:   domain.RuleActionAssignExplicit,
-		})); err != nil {
+		}
+		if useDynamicTarget {
+			ruleInput.ActionType = domain.RuleActionAssignActivityCurrent
+			ruleInput.ActionActivityName = activityName
+		} else {
+			projectID := in.ProjectID
+			activityID := in.ActivityID
+			ruleInput.ActionType = domain.RuleActionAssignExplicit
+			ruleInput.ProjectID = &projectID
+			ruleInput.ActivityID = &activityID
+		}
+		if _, err := u.repo.AddRule(ctx, domain.NormalizeRuleInput(ruleInput)); err != nil {
 			return contracts.RulesBootstrapLabelResponse{}, err
 		}
 		out.RuleCreated = true
 	}
 	if in.ApplyNow {
-		mapped, err := u.repo.MapEventsByGroupWithLabel(ctx, in.Date, in.AppName, in.WindowTitle, in.ProjectID, in.ActivityID, "bootstrap")
-		if err != nil {
-			return contracts.RulesBootstrapLabelResponse{}, err
+		if useDynamicTarget {
+			target, warning, err := u.resolveCurrentProjectActivity(ctx, activityName)
+			if err != nil {
+				return contracts.RulesBootstrapLabelResponse{}, err
+			}
+			out.Warning = warning
+			if target != nil {
+				mapped, err := u.repo.MapEventsByGroupWithLabel(ctx, in.Date, in.AppName, in.WindowTitle, target.ProjectID, target.ActivityID, "bootstrap")
+				if err != nil {
+					return contracts.RulesBootstrapLabelResponse{}, err
+				}
+				out.MappedEvents = mapped
+			}
+		} else {
+			mapped, err := u.repo.MapEventsByGroupWithLabel(ctx, in.Date, in.AppName, in.WindowTitle, in.ProjectID, in.ActivityID, "bootstrap")
+			if err != nil {
+				return contracts.RulesBootstrapLabelResponse{}, err
+			}
+			out.MappedEvents = mapped
 		}
-		out.MappedEvents = mapped
 	}
 	return contracts.RulesBootstrapLabelResponse{Result: out}, nil
 }
 
 func (u *RulesUsecase) AcceptSuggestion(ctx context.Context, req contracts.RulesAcceptSuggestionRequest) (contracts.RulesAcceptSuggestionResponse, error) {
 	in := req.Input
-	if in.Suggestion.ProjectID <= 0 || in.Suggestion.ActivityID <= 0 {
-		return contracts.RulesAcceptSuggestionResponse{}, fmt.Errorf("project_id and activity_id are required")
+	if strings.TrimSpace(in.Suggestion.AppPattern) == "" {
+		return contracts.RulesAcceptSuggestionResponse{}, fmt.Errorf("app_pattern is required")
 	}
 	titlePattern := domain.BuildTitlePattern("")
 	if in.Suggestion.TitlePattern != nil && strings.TrimSpace(*in.Suggestion.TitlePattern) != "" {
 		titlePattern = *in.Suggestion.TitlePattern
 	}
-	projectID := in.Suggestion.ProjectID
-	activityID := in.Suggestion.ActivityID
-	_, err := u.repo.AddRule(ctx, domain.NormalizeRuleInput(domain.RuleInput{
+	actionType := in.Suggestion.ActionType
+	if actionType == "" {
+		if strings.TrimSpace(in.Suggestion.ActionActivityName) != "" || strings.TrimSpace(in.Suggestion.ActivityTitle) != "" {
+			actionType = domain.RuleActionAssignActivityCurrent
+		} else {
+			actionType = domain.RuleActionAssignExplicit
+		}
+	}
+
+	ruleInput := domain.RuleInput{
 		Priority:     100,
 		AppPattern:   in.Suggestion.AppPattern,
 		TitlePattern: titlePattern,
-		ProjectID:    &projectID,
-		ActivityID:   &activityID,
-		ActionType:   domain.RuleActionAssignExplicit,
-	}))
+		ActionType:   actionType,
+	}
+	activityName := strings.TrimSpace(in.Suggestion.ActionActivityName)
+	if activityName == "" {
+		activityName = strings.TrimSpace(in.Suggestion.ActivityTitle)
+	}
+
+	switch actionType {
+	case domain.RuleActionAssignActivityCurrent:
+		if activityName == "" {
+			return contracts.RulesAcceptSuggestionResponse{}, fmt.Errorf("action_activity_name is required for assign_activity_in_current_project")
+		}
+		ruleInput.ActionActivityName = activityName
+	case domain.RuleActionAssignExplicit:
+		if in.Suggestion.ProjectID <= 0 || in.Suggestion.ActivityID <= 0 {
+			return contracts.RulesAcceptSuggestionResponse{}, fmt.Errorf("project_id and activity_id are required")
+		}
+		projectID := in.Suggestion.ProjectID
+		activityID := in.Suggestion.ActivityID
+		ruleInput.ProjectID = &projectID
+		ruleInput.ActivityID = &activityID
+	default:
+		return contracts.RulesAcceptSuggestionResponse{}, fmt.Errorf("unsupported suggestion action_type %q", actionType)
+	}
+
+	_, err := u.repo.AddRule(ctx, domain.NormalizeRuleInput(ruleInput))
 	if err != nil {
 		return contracts.RulesAcceptSuggestionResponse{}, err
 	}
 
 	result := domain.ApplySuggestionResult{RuleCreated: true}
-	if !in.ApplyNow {
-		if err := u.repo.RecordSuggestionFeedback(ctx, domain.SuggestionFeedback{
-			SuggestionType: in.Suggestion.SuggestionType,
-			AppPattern:     in.Suggestion.AppPattern,
-			TitlePattern:   in.Suggestion.TitlePattern,
-			ProjectID:      in.Suggestion.ProjectID,
-			ActivityID:     in.Suggestion.ActivityID,
-			Score:          in.Suggestion.Score,
-			Confidence:     in.Suggestion.Confidence,
-			Action:         domain.SuggestionFeedbackAccepted,
-			AppliedNow:     false,
-			DateScope:      in.Date,
-		}); err != nil {
+	if in.ApplyNow {
+		events, err := u.repo.ListUnmappedEvents(ctx, in.Date, 0)
+		if err != nil {
 			return contracts.RulesAcceptSuggestionResponse{}, err
 		}
-		return contracts.RulesAcceptSuggestionResponse{Result: result}, nil
+
+		suggestionForMatch := in.Suggestion
+		if actionType == domain.RuleActionAssignActivityCurrent {
+			target, warning, err := u.resolveCurrentProjectActivity(ctx, activityName)
+			if err != nil {
+				return contracts.RulesAcceptSuggestionResponse{}, err
+			}
+			result.Warning = warning
+			if target != nil {
+				suggestionForMatch.ProjectID = target.ProjectID
+				suggestionForMatch.ActivityID = target.ActivityID
+			}
+		}
+
+		if suggestionForMatch.ProjectID > 0 && suggestionForMatch.ActivityID > 0 {
+			updates := domain.MatchSuggestionToEvents(events, suggestionForMatch)
+			count, err := u.repo.ApplyEventMappings(ctx, updates, true)
+			if err != nil {
+				return contracts.RulesAcceptSuggestionResponse{}, err
+			}
+			result.MappedEvents = count
+		}
 	}
-	events, err := u.repo.ListUnmappedEvents(ctx, in.Date, 0)
-	if err != nil {
-		return contracts.RulesAcceptSuggestionResponse{}, err
-	}
-	updates := domain.MatchSuggestionToEvents(events, in.Suggestion)
-	count, err := u.repo.ApplyEventMappings(ctx, updates, true)
-	if err != nil {
-		return contracts.RulesAcceptSuggestionResponse{}, err
-	}
-	result.MappedEvents = count
+
 	if err := u.repo.RecordSuggestionFeedback(ctx, domain.SuggestionFeedback{
 		SuggestionType: in.Suggestion.SuggestionType,
 		AppPattern:     in.Suggestion.AppPattern,
@@ -375,6 +429,27 @@ func (u *RulesUsecase) AcceptSuggestion(ctx context.Context, req contracts.Rules
 		return contracts.RulesAcceptSuggestionResponse{}, err
 	}
 	return contracts.RulesAcceptSuggestionResponse{Result: result}, nil
+}
+
+func (u *RulesUsecase) resolveCurrentProjectActivity(ctx context.Context, activityName string) (*domain.RuleTarget, string, error) {
+	currentProjectID, err := u.repo.CurrentProjectID(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	if currentProjectID == nil {
+		return nil, "No current project is active, so Apply now mapped 0 events.", nil
+	}
+	activityID, err := u.repo.FindActivityIDByTitle(ctx, *currentProjectID, activityName)
+	if err != nil {
+		return nil, "", err
+	}
+	if activityID == nil {
+		return nil, fmt.Sprintf("Activity %q was not found in current project, so Apply now mapped 0 events.", activityName), nil
+	}
+	return &domain.RuleTarget{
+		ProjectID:  *currentProjectID,
+		ActivityID: *activityID,
+	}, "", nil
 }
 
 func (u *RulesUsecase) RejectSuggestion(ctx context.Context, req contracts.RulesRejectSuggestionRequest) (contracts.RulesRejectSuggestionResponse, error) {
