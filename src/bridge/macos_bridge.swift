@@ -453,18 +453,11 @@ func matchGlob(pattern: String, text: String) -> Bool {
     return pi >= patternLower.endIndex
 }
 
-/// Check if tracking should be active based on current WiFi
-/// Returns true if we should track, false if paused
+/// Tracking is always active.
+/// Work WiFi patterns are kept for context/analysis, not as a hard tracking gate.
 func shouldTrack(currentWifi: String) -> Bool {
-    if workWifiPatterns.isEmpty {
-        // No patterns configured - always track
-        return true
-    }
-    
-    // Check if current WiFi matches any configured pattern
-    return workWifiPatterns.contains { pattern in
-        matchGlob(pattern: pattern, text: currentWifi)
-    }
+    _ = currentWifi
+    return true
 }
 
 /// Update tracking state and menubar icon
