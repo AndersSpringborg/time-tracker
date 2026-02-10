@@ -28,7 +28,28 @@ func (fakeReportsProjectsRepo) ListActiveProjects(context.Context) ([]domain.Pro
 func (fakeReportsProjectsRepo) ListAllProjects(context.Context) ([]domain.Project, error) {
 	return nil, nil
 }
+func (fakeReportsProjectsRepo) ListArchivedProjects(context.Context) ([]domain.Project, error) {
+	return nil, nil
+}
+func (fakeReportsProjectsRepo) CreateProject(context.Context, string, string) (domain.Project, error) {
+	return domain.Project{}, nil
+}
+func (fakeReportsProjectsRepo) ListActivitiesByProject(context.Context, int64) ([]domain.Activity, error) {
+	return nil, nil
+}
+func (fakeReportsProjectsRepo) ListAllActivities(context.Context) ([]domain.Activity, error) {
+	return nil, nil
+}
+func (fakeReportsProjectsRepo) AddActivity(context.Context, int64, string) (domain.Activity, error) {
+	return domain.Activity{}, nil
+}
+func (fakeReportsProjectsRepo) DeleteActivity(context.Context, int64) error { return nil }
+func (fakeReportsProjectsRepo) RemoveActivityFromProject(context.Context, int64, int64) error {
+	return nil
+}
 func (fakeReportsProjectsRepo) ActivateProject(context.Context, int64) error { return nil }
+func (fakeReportsProjectsRepo) ArchiveProject(context.Context, int64) error  { return nil }
+func (fakeReportsProjectsRepo) RestoreProject(context.Context, int64) error  { return nil }
 func (fakeReportsProjectsRepo) EndProject(context.Context, int64) error      { return nil }
 func (fakeReportsProjectsRepo) EndAllProjects(context.Context) error         { return nil }
 func (fakeReportsProjectsRepo) CurrentProject(context.Context) (string, *int64, error) {
@@ -109,5 +130,55 @@ func TestReportsUsecaseReportNormalizesInvalidRange(t *testing.T) {
 
 	if repo.lastRangeKey != "today" {
 		t.Fatalf("expected invalid range to normalize to today, got %s", repo.lastRangeKey)
+	}
+}
+
+type fakeReportsSettingsRepoWithCfg struct {
+	cfg domain.Settings
+}
+
+func (f fakeReportsSettingsRepoWithCfg) Load(context.Context) (domain.Settings, string, error) {
+	return f.cfg, "", nil
+}
+func (fakeReportsSettingsRepoWithCfg) Save(context.Context, domain.Settings) (string, error) {
+	return "", nil
+}
+
+func TestReportsUsecaseReportBuildsDetailedMetrics(t *testing.T) {
+	projectID := int64(10)
+	activityID := int64(100)
+	repo := &fakeReportsRepo{
+		events: []domain.Event{
+			{ID: 1, TimestampMS: 1, DurationMS: 60_000, AppName: "Code", WindowTitle: "main.go", ProjectID: &projectID, ActivityID: &activityID, ProjectTitle: "project a"},
+			{ID: 2, TimestampMS: 2, DurationMS: 30_000, AppName: "Slack", WindowTitle: "chat"},
+			{ID: 3, TimestampMS: 3, DurationMS: 15_000, AppName: "Arc", WindowTitle: "daily standup"},
+		},
+	}
+	uc := NewReportsUsecase(repo, fakeReportsProjectsRepo{}, fakeReportsSettingsRepoWithCfg{
+		cfg: domain.Settings{NoiseAppPatterns: []string{"Slack"}},
+	})
+
+	res, err := uc.Report(context.Background(), contracts.ReportsBuildRequest{RangeKey: "today"})
+	if err != nil {
+		t.Fatalf("report failed: %v", err)
+	}
+	report := res.Report
+	if report.TotalEvents != 3 {
+		t.Fatalf("expected total events 3, got %d", report.TotalEvents)
+	}
+	if report.ExcludedEvents != 1 {
+		t.Fatalf("expected excluded events 1, got %d", report.ExcludedEvents)
+	}
+	if report.IncludedEvents != 2 {
+		t.Fatalf("expected included events 2, got %d", report.IncludedEvents)
+	}
+	if report.MappedEvents != 1 || report.UnmappedEvents != 1 {
+		t.Fatalf("expected mapped/unmapped 1/1, got %d/%d", report.MappedEvents, report.UnmappedEvents)
+	}
+	if report.MappedMS != 60_000 || report.UnmappedMS != 15_000 {
+		t.Fatalf("unexpected mapped/unmapped durations %d/%d", report.MappedMS, report.UnmappedMS)
+	}
+	if len(report.ByWindow) == 0 {
+		t.Fatalf("expected by-window details")
 	}
 }

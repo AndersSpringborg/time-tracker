@@ -293,9 +293,16 @@ type SummaryRow struct {
 type Report struct {
 	Range          string
 	TotalMS        int64
+	TotalEvents    int64
+	IncludedEvents int64
+	MappedEvents   int64
+	UnmappedEvents int64
+	MappedMS       int64
+	UnmappedMS     int64
 	ExcludedEvents int
 	ByProject      []SummaryRow
 	ByApp          []SummaryRow
+	ByWindow       []SummaryRow
 }
 
 type Dashboard struct {

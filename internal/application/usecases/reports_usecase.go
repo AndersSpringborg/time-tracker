@@ -73,11 +73,20 @@ func (u *ReportsUsecase) Report(ctx context.Context, req contracts.ReportsBuildR
 		if e.DurationMS <= 0 {
 			continue
 		}
+		out.TotalEvents++
 		if mask[i] {
 			out.ExcludedEvents++
 			continue
 		}
+		out.IncludedEvents++
 		out.TotalMS += e.DurationMS
+		if e.ProjectID != nil && e.ActivityID != nil {
+			out.MappedEvents++
+			out.MappedMS += e.DurationMS
+		} else {
+			out.UnmappedEvents++
+			out.UnmappedMS += e.DurationMS
+		}
 	}
 	out.ByProject = summarize(items, mask, func(e domain.Event) string {
 		if strings.TrimSpace(e.ProjectTitle) == "" {
@@ -86,7 +95,35 @@ func (u *ReportsUsecase) Report(ctx context.Context, req contracts.ReportsBuildR
 		return e.ProjectTitle
 	})
 	out.ByApp = summarize(items, mask, func(e domain.Event) string { return e.AppName })
+	out.ByWindow = summarize(items, mask, func(e domain.Event) string {
+		app := strings.TrimSpace(e.AppName)
+		if app == "" {
+			app = "Unknown App"
+		}
+		title := shortenTitle(strings.TrimSpace(e.WindowTitle), 80)
+		if title == "" {
+			title = "(empty title)"
+		}
+		return app + " | " + title
+	})
+	if len(out.ByWindow) > 12 {
+		out.ByWindow = out.ByWindow[:12]
+	}
 	return contracts.ReportsBuildResponse{Report: out}, nil
+}
+
+func shortenTitle(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	if max <= 3 {
+		return string(runes[:max])
+	}
+	return string(runes[:max-3]) + "..."
 }
 
 func summarize(events []domain.Event, excluded []bool, groupBy func(domain.Event) string) []domain.SummaryRow {
@@ -143,6 +180,15 @@ func PreviousDate(raw string) string {
 		base, _ = time.ParseInLocation("2006-01-02", *normalized, time.Local)
 	}
 	return base.AddDate(0, 0, -1).Format("2006-01-02")
+}
+
+func NextDate(raw string) string {
+	normalized := NormalizeReportDate(raw)
+	base := time.Now()
+	if normalized != nil {
+		base, _ = time.ParseInLocation("2006-01-02", *normalized, time.Local)
+	}
+	return base.AddDate(0, 0, 1).Format("2006-01-02")
 }
 
 func RangeStart(rangeKey string, now time.Time) *int64 {
