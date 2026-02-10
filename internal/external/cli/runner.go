@@ -749,61 +749,257 @@ func buildTimeTrackerRulesPreset(devActivity, meetingActivity string, includeMee
 
 func (r *Runner) runProjects(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: tt projects <list|add|end|clear|current>")
+		fmt.Fprintln(stderr, "usage: tt projects <list|create|activities|add-activity|add|end|clear|current>")
 		return 2
 	}
 	sub := args[0]
-	format, _ := extractFormat(args[1:])
 	switch sub {
 	case "list":
-		listRes, err := r.App.Projects.ListActive(ctx, contracts.ProjectsListActiveRequest{})
-		if err != nil {
-			fmt.Fprintf(stderr, "error: %v\n", err)
-			return 1
+		fs := flag.NewFlagSet("projects list", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		format := fs.String("format", "text", "text|json|yaml")
+		scope := fs.String("scope", "active", "active|all|archived")
+		if err := fs.Parse(args[1:]); err != nil {
+			return 2
 		}
-		items := listRes.Projects
-		if format == "text" {
+
+		scopeValue := strings.ToLower(strings.TrimSpace(*scope))
+		var items []domain.Project
+		switch scopeValue {
+		case "active":
+			listRes, err := r.App.Projects.ListActive(ctx, contracts.ProjectsListActiveRequest{})
+			if err != nil {
+				fmt.Fprintf(stderr, "error: %v\n", err)
+				return 1
+			}
+			items = listRes.Projects
+		case "all":
+			listRes, err := r.App.Projects.ListAll(ctx, contracts.ProjectsListAllRequest{})
+			if err != nil {
+				fmt.Fprintf(stderr, "error: %v\n", err)
+				return 1
+			}
+			items = listRes.Projects
+		case "archived":
+			listRes, err := r.App.Projects.ListArchived(ctx, contracts.ProjectsListArchivedRequest{})
+			if err != nil {
+				fmt.Fprintf(stderr, "error: %v\n", err)
+				return 1
+			}
+			items = listRes.Projects
+		default:
+			fmt.Fprintln(stderr, "--scope must be one of active|all|archived")
+			return 2
+		}
+
+		if *format == "text" {
 			if len(items) == 0 {
-				fmt.Fprintln(stdout, "No active projects")
+				fmt.Fprintf(stdout, "No %s projects\n", scopeValue)
 				return 0
 			}
 			for _, p := range items {
+				if strings.TrimSpace(p.Metadata) != "" {
+					fmt.Fprintf(stdout, "%d %s | %s\n", p.ProjectID, p.Title, p.Metadata)
+					continue
+				}
 				fmt.Fprintf(stdout, "%d %s\n", p.ProjectID, p.Title)
 			}
 			return 0
 		}
-		return emit(stdout, format, map[string]any{"projects": clidto.ProjectsFromDomain(items)}, stderr)
-	case "add":
-		if len(args) < 2 {
-			fmt.Fprintln(stderr, "usage: tt projects add <project_id>")
+		return emit(stdout, *format, map[string]any{"scope": scopeValue, "projects": clidto.ProjectsFromDomain(items)}, stderr)
+	case "create":
+		fs := flag.NewFlagSet("projects create", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		format := fs.String("format", "text", "text|json|yaml")
+		title := fs.String("title", "", "project title")
+		metadata := fs.String("metadata", "", "project metadata")
+		activate := fs.Bool("activate", false, "activate created project")
+		if err := fs.Parse(args[1:]); err != nil {
 			return 2
 		}
-		id, err := strconv.ParseInt(args[1], 10, 64)
+		titleValue := strings.TrimSpace(*title)
+		if titleValue == "" {
+			fmt.Fprintln(stderr, "--title is required")
+			return 2
+		}
+		createRes, err := r.App.Projects.Create(ctx, contracts.ProjectsCreateRequest{
+			Title:    titleValue,
+			Metadata: *metadata,
+		})
 		if err != nil {
-			fmt.Fprintln(stderr, "invalid project id")
-			return 2
-		}
-		if _, err := r.App.Projects.Activate(ctx, contracts.ProjectsActivateRequest{ProjectID: id}); err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
-		fmt.Fprintf(stdout, "project activated: %d\n", id)
+
+		activated := false
+		if *activate {
+			if _, err := r.App.Projects.Activate(ctx, contracts.ProjectsActivateRequest{ProjectID: createRes.Project.ProjectID}); err != nil {
+				fmt.Fprintf(stderr, "error: %v\n", err)
+				return 1
+			}
+			activated = true
+		}
+
+		if *format == "text" {
+			fmt.Fprintf(stdout, "project created: %d %s\n", createRes.Project.ProjectID, createRes.Project.Title)
+			if activated {
+				fmt.Fprintf(stdout, "project activated: %d %s\n", createRes.Project.ProjectID, createRes.Project.Title)
+			}
+			return 0
+		}
+		projectDTOs := clidto.ProjectsFromDomain([]domain.Project{createRes.Project})
+		projectDTO := clidto.Project{}
+		if len(projectDTOs) > 0 {
+			projectDTO = projectDTOs[0]
+		}
+		return emit(stdout, *format, map[string]any{"project": projectDTO, "activated": activated}, stderr)
+	case "activities":
+		fs := flag.NewFlagSet("projects activities", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		format := fs.String("format", "text", "text|json|yaml")
+		projectID := fs.Int64("project-id", 0, "project id")
+		projectTitle := fs.String("project", "", "project title")
+		if err := fs.Parse(args[1:]); err != nil {
+			return 2
+		}
+		resolvedProjectID, resolvedProjectTitle, err := r.resolveProjectReference(ctx, *projectID, *projectTitle)
+		if err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return 1
+		}
+
+		listRes, err := r.App.Projects.ListActivitiesByProject(ctx, contracts.ProjectsListActivitiesRequest{
+			ProjectID: resolvedProjectID,
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return 1
+		}
+		if *format == "text" {
+			if len(listRes.Activities) == 0 {
+				fmt.Fprintf(stdout, "No activities in project: %s\n", resolvedProjectTitle)
+				return 0
+			}
+			for _, activity := range listRes.Activities {
+				fmt.Fprintf(stdout, "%d %s\n", activity.ActivityID, activity.Title)
+			}
+			return 0
+		}
+		return emit(stdout, *format, map[string]any{
+			"project_id":    resolvedProjectID,
+			"project_title": resolvedProjectTitle,
+			"activities":    clidto.ActivitiesFromDomain(listRes.Activities),
+		}, stderr)
+	case "add-activity":
+		fs := flag.NewFlagSet("projects add-activity", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		format := fs.String("format", "text", "text|json|yaml")
+		projectID := fs.Int64("project-id", 0, "project id")
+		projectTitle := fs.String("project", "", "project title")
+		title := fs.String("title", "", "activity title")
+		if err := fs.Parse(args[1:]); err != nil {
+			return 2
+		}
+		titleValue := strings.TrimSpace(*title)
+		if titleValue == "" {
+			fmt.Fprintln(stderr, "--title is required")
+			return 2
+		}
+		resolvedProjectID, resolvedProjectTitle, err := r.resolveProjectReference(ctx, *projectID, *projectTitle)
+		if err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return 1
+		}
+
+		addRes, err := r.App.Projects.AddActivity(ctx, contracts.ProjectsAddActivityRequest{
+			ProjectID: resolvedProjectID,
+			Title:     titleValue,
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return 1
+		}
+		if *format == "text" {
+			fmt.Fprintf(stdout, "activity added: %d %s (project: %s)\n", addRes.Activity.ActivityID, addRes.Activity.Title, resolvedProjectTitle)
+			return 0
+		}
+		activityDTOs := clidto.ActivitiesFromDomain([]domain.Activity{addRes.Activity})
+		activityDTO := clidto.Activity{}
+		if len(activityDTOs) > 0 {
+			activityDTO = activityDTOs[0]
+		}
+		return emit(stdout, *format, map[string]any{
+			"project_id":    resolvedProjectID,
+			"project_title": resolvedProjectTitle,
+			"activity":      activityDTO,
+		}, stderr)
+	case "add":
+		fs := flag.NewFlagSet("projects add", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		projectID := fs.Int64("project-id", 0, "project id")
+		projectTitle := fs.String("project", "", "project title")
+		if err := fs.Parse(args[1:]); err != nil {
+			return 2
+		}
+
+		resolvedProjectID := *projectID
+		if resolvedProjectID <= 0 && strings.TrimSpace(*projectTitle) == "" {
+			if fs.NArg() < 1 {
+				fmt.Fprintln(stderr, "usage: tt projects add <project_id> OR tt projects add --project <title>")
+				return 2
+			}
+			parsedID, err := strconv.ParseInt(fs.Arg(0), 10, 64)
+			if err != nil {
+				fmt.Fprintln(stderr, "invalid project id")
+				return 2
+			}
+			resolvedProjectID = parsedID
+		}
+
+		resolvedProjectID, resolvedProjectTitle, err := r.resolveProjectReference(ctx, resolvedProjectID, *projectTitle)
+		if err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return 1
+		}
+		if _, err := r.App.Projects.Activate(ctx, contracts.ProjectsActivateRequest{ProjectID: resolvedProjectID}); err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "project activated: %d %s\n", resolvedProjectID, resolvedProjectTitle)
 		return 0
 	case "end":
-		if len(args) < 2 {
-			fmt.Fprintln(stderr, "usage: tt projects end <project_id>")
+		fs := flag.NewFlagSet("projects end", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		projectID := fs.Int64("project-id", 0, "project id")
+		projectTitle := fs.String("project", "", "project title")
+		if err := fs.Parse(args[1:]); err != nil {
 			return 2
 		}
-		id, err := strconv.ParseInt(args[1], 10, 64)
+
+		resolvedProjectID := *projectID
+		if resolvedProjectID <= 0 && strings.TrimSpace(*projectTitle) == "" {
+			if fs.NArg() < 1 {
+				fmt.Fprintln(stderr, "usage: tt projects end <project_id> OR tt projects end --project <title>")
+				return 2
+			}
+			parsedID, err := strconv.ParseInt(fs.Arg(0), 10, 64)
+			if err != nil {
+				fmt.Fprintln(stderr, "invalid project id")
+				return 2
+			}
+			resolvedProjectID = parsedID
+		}
+
+		resolvedProjectID, resolvedProjectTitle, err := r.resolveProjectReference(ctx, resolvedProjectID, *projectTitle)
 		if err != nil {
-			fmt.Fprintln(stderr, "invalid project id")
-			return 2
-		}
-		if _, err := r.App.Projects.End(ctx, contracts.ProjectsEndRequest{ProjectID: id}); err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
-		fmt.Fprintf(stdout, "project ended: %d\n", id)
+		if _, err := r.App.Projects.End(ctx, contracts.ProjectsEndRequest{ProjectID: resolvedProjectID}); err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "project ended: %d %s\n", resolvedProjectID, resolvedProjectTitle)
 		return 0
 	case "clear":
 		if _, err := r.App.Projects.EndAll(ctx, contracts.ProjectsEndAllRequest{}); err != nil {
@@ -813,6 +1009,12 @@ func (r *Runner) runProjects(ctx context.Context, args []string, stdout, stderr 
 		fmt.Fprintln(stdout, "all projects ended")
 		return 0
 	case "current":
+		fs := flag.NewFlagSet("projects current", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		format := fs.String("format", "text", "text|json|yaml")
+		if err := fs.Parse(args[1:]); err != nil {
+			return 2
+		}
 		currentRes, err := r.App.Projects.Current(ctx, contracts.ProjectsCurrentRequest{})
 		if err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
@@ -820,7 +1022,7 @@ func (r *Runner) runProjects(ctx context.Context, args []string, stdout, stderr 
 		}
 		name := currentRes.Name
 		id := currentRes.ProjectID
-		if format == "text" {
+		if *format == "text" {
 			if id == nil {
 				fmt.Fprintln(stdout, "No current project")
 			} else {
@@ -828,11 +1030,40 @@ func (r *Runner) runProjects(ctx context.Context, args []string, stdout, stderr 
 			}
 			return 0
 		}
-		return emit(stdout, format, map[string]any{"project_id": id, "name": name}, stderr)
+		return emit(stdout, *format, map[string]any{"project_id": id, "name": name}, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown projects subcommand: %s\n", sub)
 		return 2
 	}
+}
+
+func (r *Runner) resolveProjectReference(ctx context.Context, projectID int64, projectTitle string) (int64, string, error) {
+	titleValue := strings.TrimSpace(projectTitle)
+	if projectID > 0 && titleValue != "" {
+		return 0, "", fmt.Errorf("use either --project-id or --project, not both")
+	}
+	projectsRes, err := r.App.Projects.ListAll(ctx, contracts.ProjectsListAllRequest{})
+	if err != nil {
+		return 0, "", err
+	}
+	projects := projectsRes.Projects
+	if projectID > 0 {
+		for _, project := range projects {
+			if project.ProjectID == projectID {
+				return project.ProjectID, project.Title, nil
+			}
+		}
+		return 0, "", domain.ErrProjectNotFound
+	}
+	if titleValue != "" {
+		for _, project := range projects {
+			if strings.EqualFold(strings.TrimSpace(project.Title), titleValue) {
+				return project.ProjectID, project.Title, nil
+			}
+		}
+		return 0, "", domain.ErrProjectNotFound
+	}
+	return 0, "", fmt.Errorf("project reference is required")
 }
 
 func (r *Runner) runReports(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -1197,7 +1428,7 @@ Commands:
   serve          Start web UI (HTMX)
   doctor         Print local paths, collector status, and known startup hints
   rules          Manage rules and auto-categorization suggestions
-  projects       Manage current project context
+  projects       Manage projects, activities, and current project context
   reports        Show report summaries (noise-filtered)
   settings       Manage configuration key-values
   review         Review/match/discard unmapped events
@@ -1219,6 +1450,10 @@ Examples:
   tt rules auto-apply --min-confidence 90 --apply-now
   tt rules bootstrap --date 2026-02-06 --format json
   tt rules label-group --date 2026-02-06 --app Arc --title "Daily standup" --activity development --create-rule --apply-now
+  tt projects create --title "time-tracker" --metadata "local repo"
+  tt projects add --project "time-tracker"
+  tt projects add-activity --project "time-tracker" --title development
+  tt projects activities --project "time-tracker" --format json
   tt review groups --date 2026-02-06 --format json
   tt reports --range week --format json
 `)

@@ -67,6 +67,12 @@ type Project struct {
 	Metadata  string `json:"metadata,omitempty" yaml:"metadata,omitempty"`
 }
 
+type Activity struct {
+	ActivityID int64  `json:"activity_id" yaml:"activity_id"`
+	ProjectID  int64  `json:"project_id" yaml:"project_id"`
+	Title      string `json:"title" yaml:"title"`
+}
+
 type Settings struct {
 	WorkWifis             []string `json:"work_wifis" yaml:"work_wifis"`
 	Enabled               bool     `json:"enabled" yaml:"enabled"`
@@ -176,6 +182,14 @@ func ProjectsFromDomain(items []domain.Project) []Project {
 	out := make([]Project, 0, len(items))
 	for _, item := range items {
 		out = append(out, Project{ProjectID: item.ProjectID, Title: item.Title, Metadata: item.Metadata})
+	}
+	return out
+}
+
+func ActivitiesFromDomain(items []domain.Activity) []Activity {
+	out := make([]Activity, 0, len(items))
+	for _, item := range items {
+		out = append(out, Activity{ActivityID: item.ActivityID, ProjectID: item.ProjectID, Title: item.Title})
 	}
 	return out
 }

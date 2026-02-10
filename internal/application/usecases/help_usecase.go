@@ -46,6 +46,20 @@ func NewHelpUsecase() *HelpUsecase {
 				"tt rules apply-rules --dry-run",
 			},
 		},
+		"projects": {
+			Command:     "projects",
+			Description: "Manage project context and project activities from CLI",
+			Usage:       "tt projects <list|create|activities|add-activity|add|end|clear|current>",
+			Flags:       []string{"--format text|json|yaml", "--scope active|all|archived", "--project-id N", "--project TITLE", "--title NAME", "--metadata TEXT", "--activate"},
+			SideEffects: []string{"reads database", "writes projects", "writes activities", "updates project assignments"},
+			Examples: []string{
+				"tt projects list --scope all --format json",
+				"tt projects create --title time-tracker --metadata \"local dev\"",
+				"tt projects add --project time-tracker",
+				"tt projects add-activity --project time-tracker --title development",
+				"tt projects activities --project time-tracker --format json",
+			},
+		},
 		"review": {
 			Command:     "review",
 			Description: "Review unmapped events by date/group and apply mappings",
