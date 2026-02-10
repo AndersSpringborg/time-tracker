@@ -202,7 +202,7 @@ func (r *Runner) runSchema(args []string, stdout, stderr io.Writer) int {
 
 func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: tt rules <list|add|delete|suggest|accept|reject|auto-apply|bootstrap|label-group|apply-rules>")
+		fmt.Fprintln(stderr, "usage: tt rules <list|targets|time-tracker|add|delete|suggest|accept|reject|auto-apply|bootstrap|label-group|apply-rules>")
 		return 2
 	}
 	sub := args[0]
@@ -227,6 +227,118 @@ func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.
 			return 0
 		}
 		return emit(stdout, format, map[string]any{"rules": clidto.RulesFromDomain(rules)}, stderr)
+	case "targets":
+		fs := flag.NewFlagSet("rules targets", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		format := fs.String("format", "text", "text|json|yaml")
+		if err := fs.Parse(args[1:]); err != nil {
+			return 2
+		}
+		targetsRes, err := r.App.Rules.ListAssignmentTargets(ctx, contracts.RulesAssignmentTargetsRequest{})
+		if err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return 1
+		}
+		targets := targetsRes.Targets
+		if *format == "text" {
+			if len(targets) == 0 {
+				fmt.Fprintln(stdout, "No assignment targets available")
+				return 0
+			}
+			for _, target := range targets {
+				fmt.Fprintln(stdout, target.DisplayPath())
+			}
+			return 0
+		}
+		return emit(stdout, *format, map[string]any{"targets": targets}, stderr)
+	case "time-tracker":
+		fs := flag.NewFlagSet("rules time-tracker", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		format := fs.String("format", "text", "text|json|yaml")
+		devActivity := fs.String("dev-activity", "development", "activity name for coding/dev work")
+		meetingActivity := fs.String("meeting-activity", "meeting", "activity name for meetings")
+		includeMeeting := fs.Bool("include-meeting", true, "include a communication app meeting rule")
+		dryRun := fs.Bool("dry-run", false, "preview without writing rules")
+		if err := fs.Parse(args[1:]); err != nil {
+			return 2
+		}
+
+		rules := buildTimeTrackerRulesPreset(*devActivity, *meetingActivity, *includeMeeting)
+		existingRes, err := r.App.Rules.ListRules(ctx, contracts.RulesListRequest{})
+		if err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return 1
+		}
+		existingKeys := make(map[string]struct{}, len(existingRes.Rules))
+		for _, existing := range existingRes.Rules {
+			key := strings.TrimSpace(existing.RuleKey)
+			if key == "" {
+				continue
+			}
+			existingKeys[key] = struct{}{}
+		}
+
+		type presetResult struct {
+			RuleKey string `json:"rule_key" yaml:"rule_key"`
+			Status  string `json:"status" yaml:"status"`
+			RuleID  int64  `json:"rule_id,omitempty" yaml:"rule_id,omitempty"`
+			Target  string `json:"target" yaml:"target"`
+		}
+		results := make([]presetResult, 0, len(rules))
+		created := 0
+		skipped := 0
+
+		for _, rule := range rules {
+			if _, ok := existingKeys[rule.RuleKey]; ok {
+				results = append(results, presetResult{
+					RuleKey: rule.RuleKey,
+					Status:  "skipped_existing",
+					Target:  fmt.Sprintf("Current project > %s", rule.ActionActivityName),
+				})
+				skipped++
+				continue
+			}
+			if *dryRun {
+				results = append(results, presetResult{
+					RuleKey: rule.RuleKey,
+					Status:  "would_create",
+					Target:  fmt.Sprintf("Current project > %s", rule.ActionActivityName),
+				})
+				created++
+				continue
+			}
+
+			addRes, err := r.App.Rules.AddRule(ctx, contracts.RulesAddRequest{Rule: rule})
+			if err != nil {
+				fmt.Fprintf(stderr, "error creating %s: %v\n", rule.RuleKey, err)
+				return 1
+			}
+			results = append(results, presetResult{
+				RuleKey: rule.RuleKey,
+				Status:  "created",
+				RuleID:  addRes.RuleID,
+				Target:  fmt.Sprintf("Current project > %s", rule.ActionActivityName),
+			})
+			created++
+		}
+
+		if *format == "text" {
+			for _, item := range results {
+				if item.RuleID > 0 {
+					fmt.Fprintf(stdout, "%s rule_key=%s rule_id=%d target=%s\n", item.Status, item.RuleKey, item.RuleID, item.Target)
+					continue
+				}
+				fmt.Fprintf(stdout, "%s rule_key=%s target=%s\n", item.Status, item.RuleKey, item.Target)
+			}
+			fmt.Fprintf(stdout, "time-tracker preset: %s=%d skipped=%d\n", map[bool]string{true: "would_create", false: "created"}[*dryRun], created, skipped)
+			return 0
+		}
+		return emit(stdout, *format, map[string]any{
+			"dry_run":      *dryRun,
+			"created":      created,
+			"skipped":      skipped,
+			"preset_rules": results,
+		}, stderr)
 	case "add":
 		fs := flag.NewFlagSet("rules add", flag.ContinueOnError)
 		fs.SetOutput(stderr)
@@ -579,6 +691,60 @@ func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.
 		fmt.Fprintf(stderr, "unknown rules subcommand: %s\n", sub)
 		return 2
 	}
+}
+
+func buildTimeTrackerRulesPreset(devActivity, meetingActivity string, includeMeeting bool) []domain.RuleInput {
+	devActivity = strings.TrimSpace(devActivity)
+	if devActivity == "" {
+		devActivity = "development"
+	}
+	meetingActivity = strings.TrimSpace(meetingActivity)
+	if meetingActivity == "" {
+		meetingActivity = "meeting"
+	}
+
+	titlePattern := "(?i)^.*time[- ]tracker.*$"
+	rules := []domain.RuleInput{
+		{
+			RuleKey:            "preset.time_tracker.editor_development",
+			Source:             domain.RuleSourceUser,
+			Priority:           330,
+			AppPattern:         "(?i)^(Code|Cursor|VSCodium|Codium|Zed|IntelliJ IDEA|GoLand)$",
+			TitlePattern:       titlePattern,
+			ActionType:         domain.RuleActionAssignActivityCurrent,
+			ActionActivityName: devActivity,
+		},
+		{
+			RuleKey:            "preset.time_tracker.terminal_development",
+			Source:             domain.RuleSourceUser,
+			Priority:           320,
+			AppPattern:         "(?i)^(Terminal|iTerm2|Warp|Ghostty|Alacritty|kitty|WezTerm)$",
+			TitlePattern:       titlePattern,
+			ActionType:         domain.RuleActionAssignActivityCurrent,
+			ActionActivityName: devActivity,
+		},
+		{
+			RuleKey:            "preset.time_tracker.browser_development",
+			Source:             domain.RuleSourceUser,
+			Priority:           310,
+			AppPattern:         "(?i)^(Arc|Firefox|Google Chrome|Chrome|Safari)$",
+			TitlePattern:       titlePattern,
+			ActionType:         domain.RuleActionAssignActivityCurrent,
+			ActionActivityName: devActivity,
+		},
+	}
+	if includeMeeting {
+		rules = append(rules, domain.RuleInput{
+			RuleKey:            "preset.time_tracker.communication_meeting",
+			Source:             domain.RuleSourceUser,
+			Priority:           300,
+			AppPattern:         "(?i)^(Slack|Microsoft Teams|zoom\\.us|Zoom)$",
+			TitlePattern:       titlePattern,
+			ActionType:         domain.RuleActionAssignActivityCurrent,
+			ActionActivityName: meetingActivity,
+		})
+	}
+	return rules
 }
 
 func (r *Runner) runProjects(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -1046,6 +1212,9 @@ Global conventions for LLM/tooling:
 Examples:
   tt help rules --format json
   tt schema rules
+  tt rules targets --format json
+  tt rules time-tracker --dry-run
+  tt rules time-tracker --dev-activity development --meeting-activity meeting
   tt rules suggest --format json --limit 20 --min-evidence 2
   tt rules auto-apply --min-confidence 90 --apply-now
   tt rules bootstrap --date 2026-02-06 --format json

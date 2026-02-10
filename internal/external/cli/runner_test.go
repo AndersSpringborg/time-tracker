@@ -99,3 +99,36 @@ func TestRunnerInstallPrintsAccessibilityHint(t *testing.T) {
 		t.Fatalf("expected accessibility hint, got: %s", got)
 	}
 }
+
+func TestBuildTimeTrackerRulesPresetDefaults(t *testing.T) {
+	rules := buildTimeTrackerRulesPreset("", "", true)
+	if len(rules) != 4 {
+		t.Fatalf("expected 4 rules, got %d", len(rules))
+	}
+	for _, rule := range rules {
+		if !strings.HasPrefix(rule.RuleKey, "preset.time_tracker.") {
+			t.Fatalf("unexpected rule key: %s", rule.RuleKey)
+		}
+		if rule.ActionType != domain.RuleActionAssignActivityCurrent {
+			t.Fatalf("expected assign_activity_in_current_project action, got %s", rule.ActionType)
+		}
+		if rule.ActionActivityName == "" {
+			t.Fatalf("expected action activity name for %s", rule.RuleKey)
+		}
+	}
+}
+
+func TestBuildTimeTrackerRulesPresetCustomActivitiesAndNoMeeting(t *testing.T) {
+	rules := buildTimeTrackerRulesPreset("coding", "sync", false)
+	if len(rules) != 3 {
+		t.Fatalf("expected 3 rules when meeting disabled, got %d", len(rules))
+	}
+	for _, rule := range rules {
+		if strings.Contains(rule.RuleKey, "meeting") {
+			t.Fatalf("did not expect meeting rule when disabled")
+		}
+		if rule.ActionActivityName != "coding" {
+			t.Fatalf("expected coding activity, got %s", rule.ActionActivityName)
+		}
+	}
+}
