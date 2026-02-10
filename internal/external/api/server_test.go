@@ -506,6 +506,32 @@ func TestReportsApplyRulesRendersSummary(t *testing.T) {
 	}
 }
 
+func TestReportsApplyRulesPreviewRendersMatchedGroups(t *testing.T) {
+	app := &usecases.App{
+		Reports: usecases.NewReportsUsecase(&fakeReportsRepoForAPI{}, fakeProjectsRepoForAPI{}, fakeSettingsRepoForAPI{}),
+		Rules:   usecases.NewRulesUsecase(&fakeRulesRepo{}),
+	}
+	s, err := New(app)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/reports/apply-rules-preview?date=2026-02-10", nil)
+	rr := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "Rules Preview") {
+		t.Fatalf("expected preview title, got %s", body)
+	}
+	if !strings.Contains(body, "2026-02-10") {
+		t.Fatalf("expected date in response, got %s", body)
+	}
+}
+
 func TestProjectsPartialRendersActivitiesPerProject(t *testing.T) {
 	app := &usecases.App{
 		Projects: usecases.NewProjectsUsecase(fakeProjectsRepoForAPI{}),

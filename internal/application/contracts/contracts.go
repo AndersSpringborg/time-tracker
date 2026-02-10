@@ -133,6 +133,21 @@ type RulesApplyResponse struct {
 	Result domain.ApplyRulesResult
 }
 
+type RulesApplyPreviewRequest struct {
+	Date          *string
+	MinDurationMS int64
+}
+type RulesApplyPreviewResponse struct {
+	Matches           []domain.GroupedEventMatch
+	UnmappedCount     int64
+	MatchedCount      int64
+	TotalDurationMS   int64
+	MatchedDurationMS int64
+	AssignmentTargets []domain.RuleAssignmentTarget
+	Date              string
+	MinDurationMS     int64
+}
+
 type RulesAssignmentTargetsRequest struct{}
 type RulesAssignmentTargetsResponse struct {
 	Targets []domain.RuleAssignmentTarget

@@ -1,0 +1,121 @@
+{{define "partials/apply_rules_preview"}}
+{{if .RuleSummary}}
+<div class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{{.RuleSummary}}</div>
+{{end}}
+
+<section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+  <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h3 class="text-lg font-semibold text-tt-ink">Rules Preview for {{.ReportDate}}</h3>
+      <p class="text-sm text-slate-600">
+        {{.RulesPreview.MatchedCount}} of {{len .RulesPreview.Matches}} groups matched
+        ({{formatDuration .RulesPreview.MatchedDurationMS}} of {{formatDuration .RulesPreview.TotalDurationMS}})
+      </p>
+    </div>
+    <div class="flex items-center gap-2">
+      <form hx-post="/reports/apply-rules" hx-target="#apply-rules-panel" hx-swap="innerHTML">
+        <input type="hidden" name="date" value="{{.ReportDate}}">
+        <input type="hidden" name="range" value="today">
+        <button type="submit" {{if eq .RulesPreview.MatchedCount 0}}disabled{{end}} class="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50">Apply Rules to {{.ReportDate}}</button>
+      </form>
+      <button type="button" onclick="document.getElementById('add-rule-form').classList.toggle('hidden')" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">+ Add Rule</button>
+    </div>
+  </div>
+
+  <!-- Add Rule Form (hidden by default) -->
+  <div id="add-rule-form" class="mb-6 hidden rounded-xl border border-slate-200 bg-slate-50 p-4">
+    <h4 class="mb-3 text-sm font-semibold text-tt-ink">Add New Rule</h4>
+    <form class="grid gap-4 md:grid-cols-2 lg:grid-cols-3" hx-post="/reports/add-rule" hx-target="#apply-rules-panel" hx-swap="innerHTML">
+      <input type="hidden" name="date" value="{{.ReportDate}}">
+      <input type="hidden" name="min_duration_ms" value="{{.DraftMinDuration}}">
+      <label class="flex flex-col gap-1">
+        <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Priority</span>
+        <input type="number" name="priority" value="150" class="rounded-lg border-slate-300 text-sm">
+      </label>
+      <label class="flex flex-col gap-1">
+        <span class="text-xs font-medium uppercase tracking-wide text-slate-500">App Pattern (regex)</span>
+        <input type="text" name="app_pattern" placeholder="(?i)^(Firefox|Arc)$" class="rounded-lg border-slate-300 text-sm">
+      </label>
+      <label class="flex flex-col gap-1">
+        <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Title Pattern (regex)</span>
+        <input type="text" name="title_pattern" placeholder="(?i)^.*project.*$" class="rounded-lg border-slate-300 text-sm">
+      </label>
+      <label class="flex flex-col gap-1">
+        <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Action</span>
+        <select name="action_type" class="rounded-lg border-slate-300 text-sm">
+          <option value="assign_explicit">Assign explicit project/activity</option>
+          <option value="follow_current_context">Follow current project/activity</option>
+          <option value="assign_activity_in_current_project">Set activity in current project</option>
+          <option value="assign_project_activity_by_title">Set project+activity by title</option>
+        </select>
+      </label>
+      <label class="flex flex-col gap-1">
+        <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Project + Activity</span>
+        <select name="target_path" class="rounded-lg border-slate-300 text-sm">
+          <option value="">Select target</option>
+          {{range .RuleTargets}}
+            <option value="{{.Value}}">{{.Label}}</option>
+          {{end}}
+        </select>
+      </label>
+      <div class="flex items-end md:col-span-2 lg:col-span-1">
+        <button type="submit" class="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800">Add Rule</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Preview Table -->
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b border-slate-200">
+          <th class="py-2 text-left font-medium text-slate-600 w-8"></th>
+          <th class="py-2 text-left font-medium text-slate-600">App</th>
+          <th class="py-2 text-left font-medium text-slate-600">Window Title</th>
+          <th class="py-2 text-right font-medium text-slate-600">Events</th>
+          <th class="py-2 text-right font-medium text-slate-600">Duration</th>
+          <th class="py-2 text-left font-medium text-slate-600">Matched Rule</th>
+          <th class="py-2 text-left font-medium text-slate-600">Target</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+      {{range .RulesPreview.Matches}}
+        <tr class="{{if .MatchedRule}}bg-emerald-50/50{{else}}bg-amber-50/50{{end}} hover:bg-slate-50">
+          <td class="py-2">
+            {{if .MatchedRule}}
+              <span class="inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-100 text-emerald-600" title="Matched">
+                <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>
+              </span>
+            {{else}}
+              <span class="inline-flex h-5 w-5 items-center justify-center rounded-full bg-amber-100 text-amber-600" title="Unmatched">
+                <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+              </span>
+            {{end}}
+          </td>
+          <td class="py-2 text-slate-800">{{.AppName}}</td>
+          <td class="py-2 text-slate-700 max-w-xs truncate" title="{{.WindowTitle}}">{{.WindowTitle}}</td>
+          <td class="py-2 text-right text-slate-700">{{.EventCount}}</td>
+          <td class="py-2 text-right font-medium text-slate-700">{{formatDuration .TotalDurationMS}}</td>
+          <td class="py-2">
+            {{if .MatchedRule}}
+              <code class="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-700" title="{{.MatchedRule.AppPattern}} / {{.MatchedRule.TitlePattern}}">Rule #{{.MatchedRule.ID}}</code>
+            {{else}}
+              <span class="text-amber-600">-</span>
+            {{end}}
+          </td>
+          <td class="py-2 text-slate-700">
+            {{if .TargetDisplay}}
+              {{.TargetDisplay}}
+            {{else}}
+              <span class="text-amber-600">Unmatched</span>
+            {{end}}
+          </td>
+        </tr>
+      {{else}}
+        <tr><td colspan="7" class="py-4 text-center text-slate-500">No unmapped events for this date.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+  </div>
+</section>
+{{end}}

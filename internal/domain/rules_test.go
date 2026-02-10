@@ -343,3 +343,141 @@ func TestMatchSuggestionToEvents(t *testing.T) {
 		t.Fatalf("expected event 1 to match")
 	}
 }
+
+func TestMatchGroupedEventsToRulesReturnsMatchedGroups(t *testing.T) {
+	projectID := int64(10)
+	activityID := int64(100)
+	rules := []Rule{
+		{
+			ID:            1,
+			Priority:      100,
+			AppPattern:    "(?i)^Firefox$",
+			TitlePattern:  matchAnyRegex,
+			ProjectID:     &projectID,
+			ActivityID:    &activityID,
+			DisplayTarget: "Project A > Development",
+		},
+	}
+	groups := []GroupedEvent{
+		{AppName: "Firefox", WindowTitle: "GitHub", TotalDurationMS: 5000, EventCount: 3},
+		{AppName: "Slack", WindowTitle: "#general", TotalDurationMS: 2000, EventCount: 2},
+	}
+
+	matches := MatchGroupedEventsToRules(groups, rules, nil, nil)
+	if len(matches) != 2 {
+		t.Fatalf("expected 2 matches, got %d", len(matches))
+	}
+
+	// First group should match
+	if matches[0].AppName != "Firefox" {
+		t.Fatalf("expected Firefox first, got %s", matches[0].AppName)
+	}
+	if matches[0].MatchedRule == nil {
+		t.Fatalf("expected Firefox to have matched rule")
+	}
+	if matches[0].MatchedRule.ID != 1 {
+		t.Fatalf("expected matched rule ID 1, got %d", matches[0].MatchedRule.ID)
+	}
+	if matches[0].TargetDisplay != "Project A > Development" {
+		t.Fatalf("unexpected target display: %s", matches[0].TargetDisplay)
+	}
+
+	// Second group should not match
+	if matches[1].AppName != "Slack" {
+		t.Fatalf("expected Slack second, got %s", matches[1].AppName)
+	}
+	if matches[1].MatchedRule != nil {
+		t.Fatalf("expected Slack to have no matched rule")
+	}
+	if matches[1].TargetDisplay != "" {
+		t.Fatalf("expected empty target display for unmatched, got %s", matches[1].TargetDisplay)
+	}
+}
+
+func TestMatchGroupedEventsToRulesWithNoRulesReturnsUnmatched(t *testing.T) {
+	groups := []GroupedEvent{
+		{AppName: "Firefox", WindowTitle: "GitHub", TotalDurationMS: 5000, EventCount: 3},
+	}
+
+	matches := MatchGroupedEventsToRules(groups, nil, nil, nil)
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(matches))
+	}
+	if matches[0].MatchedRule != nil {
+		t.Fatalf("expected no matched rule")
+	}
+}
+
+func TestMatchGroupedEventsToRulesWithEmptyGroupsReturnsEmpty(t *testing.T) {
+	projectID := int64(10)
+	activityID := int64(100)
+	rules := []Rule{
+		{ID: 1, Priority: 100, AppPattern: "(?i)^Firefox$", TitlePattern: matchAnyRegex, ProjectID: &projectID, ActivityID: &activityID},
+	}
+
+	matches := MatchGroupedEventsToRules(nil, rules, nil, nil)
+	if len(matches) != 0 {
+		t.Fatalf("expected 0 matches for empty groups, got %d", len(matches))
+	}
+}
+
+func TestMatchGroupedEventsToRulesUsesHighestPriorityRule(t *testing.T) {
+	projectA := int64(10)
+	activityA := int64(100)
+	projectB := int64(20)
+	activityB := int64(200)
+	rules := []Rule{
+		{
+			ID:            1,
+			Priority:      100,
+			AppPattern:    "(?i)^Firefox$",
+			TitlePattern:  matchAnyRegex,
+			ProjectID:     &projectA,
+			ActivityID:    &activityA,
+			DisplayTarget: "Low Priority",
+		},
+		{
+			ID:            2,
+			Priority:      200,
+			AppPattern:    "(?i)^Firefox$",
+			TitlePattern:  "(?i)^.*GitHub.*$",
+			ProjectID:     &projectB,
+			ActivityID:    &activityB,
+			DisplayTarget: "High Priority",
+		},
+	}
+	groups := []GroupedEvent{
+		{AppName: "Firefox", WindowTitle: "GitHub Issues", TotalDurationMS: 5000, EventCount: 3},
+	}
+
+	matches := MatchGroupedEventsToRules(groups, rules, nil, nil)
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(matches))
+	}
+	if matches[0].MatchedRule == nil {
+		t.Fatalf("expected matched rule")
+	}
+	if matches[0].MatchedRule.ID != 2 {
+		t.Fatalf("expected high priority rule (ID 2), got %d", matches[0].MatchedRule.ID)
+	}
+	if matches[0].TargetDisplay != "High Priority" {
+		t.Fatalf("unexpected target display: %s", matches[0].TargetDisplay)
+	}
+}
+
+func TestMatchGroupedEventsToRulesPreservesGroupData(t *testing.T) {
+	groups := []GroupedEvent{
+		{AppName: "Firefox", WindowTitle: "GitHub", TotalDurationMS: 12345, EventCount: 42},
+	}
+
+	matches := MatchGroupedEventsToRules(groups, nil, nil, nil)
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(matches))
+	}
+	if matches[0].TotalDurationMS != 12345 {
+		t.Fatalf("expected duration 12345, got %d", matches[0].TotalDurationMS)
+	}
+	if matches[0].EventCount != 42 {
+		t.Fatalf("expected event count 42, got %d", matches[0].EventCount)
+	}
+}
