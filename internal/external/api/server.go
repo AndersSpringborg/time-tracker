@@ -72,6 +72,7 @@ type pageData struct {
 	DraftGroups       []domain.GroupedEvent
 	RuleTargets       []ruleTargetOption
 	RuleSummary       string
+	RulesPreview      contracts.RulesApplyPreviewResponse
 	TidsregCustomers  []tidsregmodel.Customer
 	TidsregProjects   []tidsregmodel.Project
 	TidsregPreview    tidsregmodel.ImportPreview
@@ -115,6 +116,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/reports", s.handleReports)
 	mux.HandleFunc("/partials/reports", s.handleReportsPartial)
 	mux.HandleFunc("/reports/apply-rules", s.handleReportsApplyRules)
+	mux.HandleFunc("/reports/apply-rules-preview", s.handleReportsApplyRulesPreview)
+	mux.HandleFunc("/reports/add-rule", s.handleReportsAddRule)
 	mux.HandleFunc("/rules", s.handleRules)
 	mux.HandleFunc("/partials/rules", s.handleRulesPartial)
 	mux.HandleFunc("/rules/draft/add", s.handleRulesDraftAdd)
@@ -343,6 +346,114 @@ func (s *Server) renderReportsTable(w http.ResponseWriter, r *http.Request, rang
 		PrevReportDate:    usecases.PreviousDate(reportDate),
 		NextReportDate:    usecases.NextDate(reportDate),
 		RulesApplySummary: applySummary,
+	})
+}
+
+func (s *Server) handleReportsApplyRulesPreview(w http.ResponseWriter, r *http.Request) {
+	if s.app == nil || s.app.Rules == nil {
+		http.Error(w, "rules usecase is not configured", 500)
+		return
+	}
+
+	date := r.URL.Query().Get("date")
+	var datePtr *string
+	if date != "" {
+		datePtr = &date
+	}
+
+	minDurationMS := int64(0)
+	if v := r.URL.Query().Get("min_duration_ms"); v != "" {
+		if parsed, err := strconv.ParseInt(v, 10, 64); err == nil {
+			minDurationMS = parsed
+		}
+	}
+
+	previewRes, err := s.app.Rules.ApplyRulesPreview(r.Context(), contracts.RulesApplyPreviewRequest{
+		Date:          datePtr,
+		MinDurationMS: minDurationMS,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	s.render(w, "partials/apply_rules_preview", pageData{
+		RulesPreview:     previewRes,
+		ReportDate:       previewRes.Date,
+		RuleTargets:      buildRuleTargetOptions(previewRes.AssignmentTargets),
+		DraftMinDuration: minDurationMS,
+	})
+}
+
+func (s *Server) handleReportsAddRule(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	if s.app == nil || s.app.Rules == nil {
+		http.Error(w, "rules usecase is not configured", 500)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", 400)
+		return
+	}
+
+	in, targetProjectName, targetActivityName, err := parseRuleDraftInput(r)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+
+	// Add rule directly (not to draft)
+	if _, err := s.app.Rules.AddRule(r.Context(), contracts.RulesAddRequest{
+		Rule: in,
+	}); err != nil {
+		// Try with target resolution
+		if _, err := s.app.Rules.AddRuleToDraftFromForm(r.Context(), contracts.RulesDraftAddFromFormRequest{
+			Rule:              in,
+			TargetProjectName: targetProjectName,
+			TargetActivity:    targetActivityName,
+		}); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		// Save the draft immediately
+		if _, err := s.app.Rules.SaveDraft(r.Context(), contracts.RulesDraftSaveRequest{}); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+	}
+
+	// Refresh the preview
+	date := r.Form.Get("date")
+	var datePtr *string
+	if date != "" {
+		datePtr = &date
+	}
+
+	minDurationMS := int64(0)
+	if v := r.Form.Get("min_duration_ms"); v != "" {
+		if parsed, err := strconv.ParseInt(v, 10, 64); err == nil {
+			minDurationMS = parsed
+		}
+	}
+
+	previewRes, err := s.app.Rules.ApplyRulesPreview(r.Context(), contracts.RulesApplyPreviewRequest{
+		Date:          datePtr,
+		MinDurationMS: minDurationMS,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	s.render(w, "partials/apply_rules_preview", pageData{
+		RulesPreview:     previewRes,
+		ReportDate:       previewRes.Date,
+		RuleTargets:      buildRuleTargetOptions(previewRes.AssignmentTargets),
+		DraftMinDuration: minDurationMS,
+		RuleSummary:      "Rule added successfully",
 	})
 }
 
@@ -1239,6 +1350,17 @@ func encodeRuleTargetPath(projectTitle, activityTitle string) string {
 		return ""
 	}
 	return url.QueryEscape(projectTitle) + "|" + url.QueryEscape(activityTitle)
+}
+
+func buildRuleTargetOptions(targets []domain.RuleAssignmentTarget) []ruleTargetOption {
+	options := make([]ruleTargetOption, 0, len(targets))
+	for _, target := range targets {
+		options = append(options, ruleTargetOption{
+			Value: encodeRuleTargetPath(target.ProjectTitle, target.ActivityTitle),
+			Label: target.DisplayPath(),
+		})
+	}
+	return options
 }
 
 func decodeRuleTargetPath(raw string) (string, string, error) {

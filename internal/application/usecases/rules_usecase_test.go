@@ -537,3 +537,104 @@ func TestRulesUsecaseRejectSuggestionRecordsFeedback(t *testing.T) {
 		t.Fatalf("expected rejected action")
 	}
 }
+
+func TestRulesUsecaseApplyRulesPreviewReturnsGroupedMatches(t *testing.T) {
+	projectID := int64(10)
+	activityID := int64(100)
+	repo := &fakeRulesRepo{
+		rules: []domain.Rule{
+			{
+				ID:            1,
+				Priority:      100,
+				AppPattern:    "(?i)^Code$",
+				TitlePattern:  "(?i)^.*$",
+				ProjectID:     &projectID,
+				ActivityID:    &activityID,
+				ActionType:    domain.RuleActionAssignExplicit,
+				DisplayTarget: "Project A > Development",
+			},
+		},
+		grouped: []domain.GroupedEvent{
+			{AppName: "Code", WindowTitle: "main.go", TotalDurationMS: 5000, EventCount: 3},
+			{AppName: "Slack", WindowTitle: "#general", TotalDurationMS: 2000, EventCount: 2},
+		},
+		projects: []domain.Project{{ProjectID: 10, Title: "Project A"}},
+		activities: map[int64][]domain.Activity{
+			10: {{ActivityID: 100, ProjectID: 10, Title: "Development"}},
+		},
+	}
+	uc := NewRulesUsecase(repo)
+
+	date := "2026-02-10"
+	res, err := uc.ApplyRulesPreview(context.Background(), contracts.RulesApplyPreviewRequest{
+		Date:          &date,
+		MinDurationMS: 0,
+	})
+	if err != nil {
+		t.Fatalf("apply rules preview failed: %v", err)
+	}
+
+	if len(res.Matches) != 2 {
+		t.Fatalf("expected 2 matches, got %d", len(res.Matches))
+	}
+	if res.MatchedCount != 1 {
+		t.Fatalf("expected 1 matched group, got %d", res.MatchedCount)
+	}
+	if res.UnmappedCount != 1 {
+		t.Fatalf("expected 1 unmatched group, got %d", res.UnmappedCount)
+	}
+	if res.TotalDurationMS != 7000 {
+		t.Fatalf("expected total duration 7000, got %d", res.TotalDurationMS)
+	}
+	if res.MatchedDurationMS != 5000 {
+		t.Fatalf("expected matched duration 5000, got %d", res.MatchedDurationMS)
+	}
+
+	// First match should be Code (matched)
+	if res.Matches[0].AppName != "Code" {
+		t.Fatalf("expected Code first, got %s", res.Matches[0].AppName)
+	}
+	if res.Matches[0].MatchedRule == nil {
+		t.Fatalf("expected Code to have matched rule")
+	}
+
+	// Second match should be Slack (unmatched)
+	if res.Matches[1].AppName != "Slack" {
+		t.Fatalf("expected Slack second, got %s", res.Matches[1].AppName)
+	}
+	if res.Matches[1].MatchedRule != nil {
+		t.Fatalf("expected Slack to have no matched rule")
+	}
+
+	// Assignment targets should be included
+	if len(res.AssignmentTargets) != 1 {
+		t.Fatalf("expected 1 assignment target, got %d", len(res.AssignmentTargets))
+	}
+
+	if res.Date != date {
+		t.Fatalf("expected date %s, got %s", date, res.Date)
+	}
+}
+
+func TestRulesUsecaseApplyRulesPreviewWithNoGroups(t *testing.T) {
+	repo := &fakeRulesRepo{
+		grouped: []domain.GroupedEvent{},
+	}
+	uc := NewRulesUsecase(repo)
+
+	date := "2026-02-10"
+	res, err := uc.ApplyRulesPreview(context.Background(), contracts.RulesApplyPreviewRequest{
+		Date:          &date,
+		MinDurationMS: 0,
+	})
+	if err != nil {
+		t.Fatalf("apply rules preview failed: %v", err)
+	}
+
+	if len(res.Matches) != 0 {
+		t.Fatalf("expected 0 matches, got %d", len(res.Matches))
+	}
+	if res.MatchedCount != 0 || res.UnmappedCount != 0 {
+		t.Fatalf("expected zero counts")
+	}
+}

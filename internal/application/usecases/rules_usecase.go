@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"time-tracker/internal/application/contracts"
 	"time-tracker/internal/application/ports"
@@ -506,6 +507,68 @@ func (u *RulesUsecase) ApplyRules(ctx context.Context, req contracts.RulesApplyR
 		return contracts.RulesApplyResponse{}, err
 	}
 	return contracts.RulesApplyResponse{Result: res}, nil
+}
+
+func (u *RulesUsecase) ApplyRulesPreview(ctx context.Context, req contracts.RulesApplyPreviewRequest) (contracts.RulesApplyPreviewResponse, error) {
+	// Get date string for grouping query
+	date := ""
+	if req.Date != nil {
+		date = *req.Date
+	} else {
+		date = time.Now().Format("2006-01-02")
+	}
+
+	// Get grouped unmapped events
+	groups, err := u.repo.ListGroupedUnmappedEvents(ctx, date, req.MinDurationMS)
+	if err != nil {
+		return contracts.RulesApplyPreviewResponse{}, err
+	}
+
+	// Get rules
+	rules, err := u.repo.ListRules(ctx)
+	if err != nil {
+		return contracts.RulesApplyPreviewResponse{}, err
+	}
+
+	// Get current project ID
+	currentProjectID, err := u.repo.CurrentProjectID(ctx)
+	if err != nil {
+		return contracts.RulesApplyPreviewResponse{}, err
+	}
+
+	// Match groups to rules
+	resolver := newRuleResolver(ctx, u.repo)
+	matches := domain.MatchGroupedEventsToRules(groups, rules, currentProjectID, resolver)
+
+	// Calculate counts
+	var matchedCount, unmappedCount int64
+	var totalDuration, matchedDuration int64
+	for _, m := range matches {
+		totalDuration += m.TotalDurationMS
+		if m.MatchedRule != nil {
+			matchedCount++
+			matchedDuration += m.TotalDurationMS
+		} else {
+			unmappedCount++
+		}
+	}
+
+	// Get assignment targets for the inline add-rule form
+	targetsRes, err := u.ListAssignmentTargets(ctx, contracts.RulesAssignmentTargetsRequest{})
+	if err != nil {
+		return contracts.RulesApplyPreviewResponse{}, err
+	}
+
+	return contracts.RulesApplyPreviewResponse{
+		Matches:           matches,
+		MatchedCount:      matchedCount,
+		UnmappedCount:     unmappedCount,
+		TotalDurationMS:   totalDuration,
+		MatchedDurationMS: matchedDuration,
+		AssignmentTargets: targetsRes.Targets,
+		Date:              date,
+		MinDurationMS:     req.MinDurationMS,
+	}, nil
 }
 
 func (u *RulesUsecase) ListAssignmentTargets(ctx context.Context, _ contracts.RulesAssignmentTargetsRequest) (contracts.RulesAssignmentTargetsResponse, error) {

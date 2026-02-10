@@ -263,6 +263,16 @@ type ApplyRulesResult struct {
 	MatchedEvents  int64
 }
 
+// GroupedEventMatch represents a group of events with matching rule info for preview
+type GroupedEventMatch struct {
+	AppName         string
+	WindowTitle     string
+	TotalDurationMS int64
+	EventCount      int64
+	MatchedRule     *Rule  // nil if no rule matched
+	TargetDisplay   string // "Project > Activity" or empty if unmatched
+}
+
 type EventMappingUpdate struct {
 	EventID    int64
 	ProjectID  int64

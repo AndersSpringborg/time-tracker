@@ -535,6 +535,45 @@ func MatchSuggestionToEvents(events []Event, suggestion RuleSuggestion) []EventM
 	return updates
 }
 
+// MatchGroupedEventsToRules matches grouped events to rules and returns detailed results.
+// For each group, it creates a synthetic event to test against rules and returns
+// which rule (if any) matched, along with the target display string.
+func MatchGroupedEventsToRules(groups []GroupedEvent, rules []Rule, currentProjectID *int64, resolver RuleTargetResolver) []GroupedEventMatch {
+	if len(groups) == 0 {
+		return nil
+	}
+
+	sortedRules := make([]Rule, len(rules))
+	copy(sortedRules, rules)
+	sortRules(sortedRules)
+
+	matches := make([]GroupedEventMatch, 0, len(groups))
+	for _, group := range groups {
+		match := GroupedEventMatch{
+			AppName:         group.AppName,
+			WindowTitle:     group.WindowTitle,
+			TotalDurationMS: group.TotalDurationMS,
+			EventCount:      group.EventCount,
+		}
+
+		// Create a synthetic event to match against rules
+		syntheticEvent := Event{
+			AppName:     group.AppName,
+			WindowTitle: group.WindowTitle,
+		}
+
+		rule := findFirstMatchingRule(sortedRules, syntheticEvent, currentProjectID)
+		if rule != nil {
+			match.MatchedRule = rule
+			match.TargetDisplay = rule.DisplayTargetText()
+		}
+
+		matches = append(matches, match)
+	}
+
+	return matches
+}
+
 func findFirstMatchingRule(rules []Rule, event Event, currentProjectID *int64) *Rule {
 	for idx := range rules {
 		rule := &rules[idx]
