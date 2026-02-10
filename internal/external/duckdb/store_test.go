@@ -2,6 +2,8 @@ package duckdb
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -25,6 +27,8 @@ func seedProjectActivity(t *testing.T, s *Store) {
 		"INSERT INTO projects (project_id, customer_id, name, title, metadata) VALUES (10, 1, 'web-app', 'web-app', 'notes')",
 		"INSERT INTO activities (activity_id, project_id, name, title) VALUES (100, 10, 'development', 'development')",
 		"INSERT INTO activities (activity_id, project_id, name, title) VALUES (101, 10, 'meeting', 'meeting')",
+		"INSERT INTO project_activities (project_id, activity_id) VALUES (10, 100)",
+		"INSERT INTO project_activities (project_id, activity_id) VALUES (10, 101)",
 	}
 	for _, q := range queries {
 		if _, err := s.db.ExecContext(ctx, q); err != nil {
@@ -268,6 +272,238 @@ func TestListActivitiesByProject(t *testing.T) {
 	}
 	if activities[0].Title != "development" || activities[1].Title != "meeting" {
 		t.Fatalf("unexpected activity order: %+v", activities)
+	}
+}
+
+func TestListActivitiesByProjectUsesCompositeLinks(t *testing.T) {
+	s := openTestStore(t)
+	defer s.Close()
+	ctx := context.Background()
+
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO customers (customer_id, name) VALUES (1, 'internal')`); err != nil {
+		t.Fatalf("seed customer failed: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO projects (project_id, customer_id, name, title, metadata) VALUES (10, 1, 'web-app', 'web-app', '')`); err != nil {
+		t.Fatalf("seed project failed: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO projects (project_id, customer_id, name, title, metadata) VALUES (11, 1, 'service', 'service', '')`); err != nil {
+		t.Fatalf("seed project 11 failed: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO activities (activity_id, project_id, name, title) VALUES (100, 0, 'development', 'development')`); err != nil {
+		t.Fatalf("seed activity failed: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO project_activities (project_id, activity_id) VALUES (10, 100)`); err != nil {
+		t.Fatalf("seed composite link 10 failed: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO project_activities (project_id, activity_id) VALUES (11, 100)`); err != nil {
+		t.Fatalf("seed composite link 11 failed: %v", err)
+	}
+
+	activities, err := s.ListActivitiesByProject(ctx, 11)
+	if err != nil {
+		t.Fatalf("list activities by project failed: %v", err)
+	}
+	if len(activities) != 1 || activities[0].ActivityID != 100 {
+		t.Fatalf("expected linked shared activity for project 11, got %+v", activities)
+	}
+}
+
+func TestAddRuleStoresProjectActivityCompositeKey(t *testing.T) {
+	s := openTestStore(t)
+	defer s.Close()
+	seedProjectActivity(t, s)
+	ctx := context.Background()
+
+	projectID := int64(10)
+	activityID := int64(100)
+	_, err := s.AddRule(ctx, domain.RuleInput{
+		RuleKey:      "rule.composite",
+		Source:       domain.RuleSourceUser,
+		Priority:     100,
+		AppPattern:   "(?i)^Code$",
+		TitlePattern: "(?i)^.*$",
+		ProjectID:    &projectID,
+		ActivityID:   &activityID,
+		ActionType:   domain.RuleActionAssignExplicit,
+	})
+	if err != nil {
+		t.Fatalf("add rule failed: %v", err)
+	}
+
+	var projectActivityID sql.NullInt64
+	if err := s.db.QueryRowContext(ctx, `SELECT project_activity_id FROM mapping_rules WHERE rule_key = 'rule.composite'`).Scan(&projectActivityID); err != nil {
+		t.Fatalf("query mapping rule failed: %v", err)
+	}
+	if !projectActivityID.Valid || projectActivityID.Int64 <= 0 {
+		t.Fatalf("expected project_activity_id to be stored, got %+v", projectActivityID)
+	}
+}
+
+func TestRemoveActivityFromProjectKeepsSharedActivityForOtherProjects(t *testing.T) {
+	s := openTestStore(t)
+	defer s.Close()
+	ctx := context.Background()
+
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO customers (customer_id, name) VALUES (1, 'internal')`); err != nil {
+		t.Fatalf("seed customer failed: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO projects (project_id, customer_id, name, title, metadata) VALUES (10, 1, 'web-app', 'web-app', '')`); err != nil {
+		t.Fatalf("seed project 10 failed: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO projects (project_id, customer_id, name, title, metadata) VALUES (11, 1, 'api', 'api', '')`); err != nil {
+		t.Fatalf("seed project 11 failed: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO activities (activity_id, project_id, name, title) VALUES (100, 0, 'development', 'development')`); err != nil {
+		t.Fatalf("seed shared activity failed: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO project_activities (project_id, activity_id) VALUES (10, 100)`); err != nil {
+		t.Fatalf("seed link 10->100 failed: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO project_activities (project_id, activity_id) VALUES (11, 100)`); err != nil {
+		t.Fatalf("seed link 11->100 failed: %v", err)
+	}
+
+	if err := s.RemoveActivityFromProject(ctx, 10, 100); err != nil {
+		t.Fatalf("remove activity from project failed: %v", err)
+	}
+
+	activities, err := s.ListActivitiesByProject(ctx, 10)
+	if err != nil {
+		t.Fatalf("list project 10 activities failed: %v", err)
+	}
+	if len(activities) != 0 {
+		t.Fatalf("expected no activities for project 10, got %+v", activities)
+	}
+
+	activities, err = s.ListActivitiesByProject(ctx, 11)
+	if err != nil {
+		t.Fatalf("list project 11 activities failed: %v", err)
+	}
+	if len(activities) != 1 || activities[0].ActivityID != 100 {
+		t.Fatalf("expected shared activity to remain for project 11, got %+v", activities)
+	}
+}
+
+func TestCreateArchiveRestoreProjectLifecycle(t *testing.T) {
+	s := openTestStore(t)
+	defer s.Close()
+	ctx := context.Background()
+
+	project, err := s.CreateProject(ctx, "Portal", "customer-facing app")
+	if err != nil {
+		t.Fatalf("create project failed: %v", err)
+	}
+	if project.Title != "Portal" {
+		t.Fatalf("expected Portal title, got %q", project.Title)
+	}
+
+	allProjects, err := s.ListAllProjects(ctx)
+	if err != nil {
+		t.Fatalf("list all projects failed: %v", err)
+	}
+	foundPortal := false
+	for _, item := range allProjects {
+		if item.ProjectID == project.ProjectID {
+			foundPortal = true
+			break
+		}
+	}
+	if !foundPortal {
+		t.Fatalf("expected created project in active list")
+	}
+
+	if err := s.ArchiveProject(ctx, project.ProjectID); err != nil {
+		t.Fatalf("archive project failed: %v", err)
+	}
+	allProjects, err = s.ListAllProjects(ctx)
+	if err != nil {
+		t.Fatalf("list all projects after archive failed: %v", err)
+	}
+	for _, item := range allProjects {
+		if item.ProjectID == project.ProjectID {
+			t.Fatalf("expected archived project to be hidden from active list")
+		}
+	}
+	archivedProjects, err := s.ListArchivedProjects(ctx)
+	if err != nil {
+		t.Fatalf("list archived projects failed: %v", err)
+	}
+	foundArchived := false
+	for _, item := range archivedProjects {
+		if item.ProjectID == project.ProjectID {
+			foundArchived = true
+			break
+		}
+	}
+	if !foundArchived {
+		t.Fatalf("expected project in archived list")
+	}
+
+	if err := s.RestoreProject(ctx, project.ProjectID); err != nil {
+		t.Fatalf("restore project failed: %v", err)
+	}
+	allProjects, err = s.ListAllProjects(ctx)
+	if err != nil {
+		t.Fatalf("list all projects after restore failed: %v", err)
+	}
+	foundRestored := false
+	for _, item := range allProjects {
+		if item.ProjectID == project.ProjectID {
+			foundRestored = true
+			break
+		}
+	}
+	if !foundRestored {
+		t.Fatalf("expected restored project in active list")
+	}
+}
+
+func TestAddActivityRejectsDuplicates(t *testing.T) {
+	s := openTestStore(t)
+	defer s.Close()
+	ctx := context.Background()
+	seedProjectActivity(t, s)
+
+	_, err := s.AddActivity(ctx, 10, "planning")
+	if err != nil {
+		t.Fatalf("first add activity failed: %v", err)
+	}
+	_, err = s.AddActivity(ctx, 10, " Planning ")
+	if !errors.Is(err, domain.ErrActivityTitleConflict) {
+		t.Fatalf("expected duplicate activity error, got %v", err)
+	}
+}
+
+func TestDeleteActivityGuardWhenReferencedByRule(t *testing.T) {
+	s := openTestStore(t)
+	defer s.Close()
+	ctx := context.Background()
+	seedProjectActivity(t, s)
+
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO mapping_rules (activity_id) VALUES (100)`); err != nil {
+		t.Fatalf("insert mapping rule failed: %v", err)
+	}
+	err := s.DeleteActivity(ctx, 100)
+	if !errors.Is(err, domain.ErrActivityInUse) {
+		t.Fatalf("expected in-use error, got %v", err)
+	}
+}
+
+func TestDeleteActivityGuardWhenReferencedByEvents(t *testing.T) {
+	s := openTestStore(t)
+	defer s.Close()
+	ctx := context.Background()
+	seedProjectActivity(t, s)
+
+	if _, err := s.db.ExecContext(ctx, `
+INSERT INTO events (timestamp_ms, app_name, window_title, duration_ms, project_id, activity_id, manually_mapped)
+VALUES (1, 'Code', 'main.go', 60000, 10, 101, true)
+`); err != nil {
+		t.Fatalf("insert mapped event failed: %v", err)
+	}
+	err := s.DeleteActivity(ctx, 101)
+	if !errors.Is(err, domain.ErrActivityInUse) {
+		t.Fatalf("expected in-use error, got %v", err)
 	}
 }
 

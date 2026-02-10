@@ -161,10 +161,64 @@ type ProjectsListAllResponse struct {
 	Projects []domain.Project
 }
 
+type ProjectsListArchivedRequest struct{}
+type ProjectsListArchivedResponse struct {
+	Projects []domain.Project
+}
+
+type ProjectsCreateRequest struct {
+	Title    string
+	Metadata string
+}
+type ProjectsCreateResponse struct {
+	Project domain.Project
+}
+
+type ProjectsListActivitiesRequest struct {
+	ProjectID int64
+}
+type ProjectsListActivitiesResponse struct {
+	Activities []domain.Activity
+}
+
+type ProjectsListAllActivitiesRequest struct{}
+type ProjectsListAllActivitiesResponse struct {
+	Activities []domain.Activity
+}
+
+type ProjectsAddActivityRequest struct {
+	ProjectID int64
+	Title     string
+}
+type ProjectsAddActivityResponse struct {
+	Activity domain.Activity
+}
+
+type ProjectsDeleteActivityRequest struct {
+	ActivityID int64
+}
+type ProjectsDeleteActivityResponse struct{}
+
+type ProjectsRemoveActivityFromProjectRequest struct {
+	ProjectID  int64
+	ActivityID int64
+}
+type ProjectsRemoveActivityFromProjectResponse struct{}
+
 type ProjectsActivateRequest struct {
 	ProjectID int64
 }
 type ProjectsActivateResponse struct{}
+
+type ProjectsArchiveRequest struct {
+	ProjectID int64
+}
+type ProjectsArchiveResponse struct{}
+
+type ProjectsRestoreRequest struct {
+	ProjectID int64
+}
+type ProjectsRestoreResponse struct{}
 
 type ProjectsEndRequest struct {
 	ProjectID int64

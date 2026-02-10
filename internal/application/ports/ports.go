@@ -39,7 +39,16 @@ type ReportsRepository interface {
 type ProjectsRepository interface {
 	ListActiveProjects(ctx context.Context) ([]domain.Project, error)
 	ListAllProjects(ctx context.Context) ([]domain.Project, error)
+	ListArchivedProjects(ctx context.Context) ([]domain.Project, error)
+	CreateProject(ctx context.Context, title, metadata string) (domain.Project, error)
+	ListActivitiesByProject(ctx context.Context, projectID int64) ([]domain.Activity, error)
+	ListAllActivities(ctx context.Context) ([]domain.Activity, error)
+	AddActivity(ctx context.Context, projectID int64, title string) (domain.Activity, error)
+	DeleteActivity(ctx context.Context, activityID int64) error
+	RemoveActivityFromProject(ctx context.Context, projectID, activityID int64) error
 	ActivateProject(ctx context.Context, projectID int64) error
+	ArchiveProject(ctx context.Context, projectID int64) error
+	RestoreProject(ctx context.Context, projectID int64) error
 	EndProject(ctx context.Context, projectID int64) error
 	EndAllProjects(ctx context.Context) error
 	CurrentProject(ctx context.Context) (string, *int64, error)

@@ -76,8 +76,8 @@ SELECT
   mr.priority,
   COALESCE(mr.app_pattern, ''),
   COALESCE(mr.title_pattern, ''),
-  mr.project_id,
-  mr.activity_id,
+  COALESCE(pa.project_id, mr.project_id),
+  COALESCE(pa.activity_id, mr.activity_id),
   COALESCE(mr.follow_previous, false),
   COALESCE(mr.action_type, 'assign_explicit'),
   COALESCE(mr.action_project_title, ''),
@@ -85,8 +85,9 @@ SELECT
   COALESCE(p.title, ''),
   COALESCE(a.title, '')
 FROM mapping_rules mr
-LEFT JOIN projects p ON p.project_id = mr.project_id
-LEFT JOIN activities a ON a.activity_id = mr.activity_id
+LEFT JOIN project_activities pa ON pa.project_activity_id = mr.project_activity_id
+LEFT JOIN projects p ON p.project_id = COALESCE(pa.project_id, mr.project_id)
+LEFT JOIN activities a ON a.activity_id = COALESCE(pa.activity_id, mr.activity_id)
 ORDER BY mr.priority DESC, mr.id DESC
 `)
 	if err != nil {
@@ -146,15 +147,81 @@ func buildDisplayTarget(rule domain.Rule, projectTitle, activityTitle string) st
 	return strings.Join(parts, " > ")
 }
 
+type queryExecer interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func ensureProjectActivityLink(ctx context.Context, q queryExecer, projectID, activityID int64) (int64, error) {
+	var id int64
+	err := q.QueryRowContext(ctx, `
+SELECT project_activity_id
+FROM project_activities
+WHERE project_id = ? AND activity_id = ?
+LIMIT 1
+`, projectID, activityID).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, err
+	}
+
+	var projectExists int64
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM projects WHERE project_id = ?`, projectID).Scan(&projectExists); err != nil {
+		return 0, err
+	}
+	if projectExists == 0 {
+		return 0, domain.ErrProjectNotFound
+	}
+
+	var activityExists int64
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM activities WHERE activity_id = ?`, activityID).Scan(&activityExists); err != nil {
+		return 0, err
+	}
+	if activityExists == 0 {
+		return 0, domain.ErrActivityNotFound
+	}
+
+	if _, err := q.ExecContext(ctx, `
+INSERT INTO project_activities (project_id, activity_id)
+SELECT ?, ?
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM project_activities
+  WHERE project_id = ? AND activity_id = ?
+)
+`, projectID, activityID, projectID, activityID); err != nil {
+		return 0, err
+	}
+	if err := q.QueryRowContext(ctx, `
+SELECT project_activity_id
+FROM project_activities
+WHERE project_id = ? AND activity_id = ?
+LIMIT 1
+`, projectID, activityID).Scan(&id); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
 func (s *Store) AddRule(ctx context.Context, in domain.RuleInput) (int64, error) {
 	in = domain.NormalizeRuleInput(in)
+	var projectActivityID *int64
+	if in.ActionType == domain.RuleActionAssignExplicit && in.ProjectID != nil && in.ActivityID != nil {
+		id, err := ensureProjectActivityLink(ctx, s.db, *in.ProjectID, *in.ActivityID)
+		if err != nil {
+			return 0, err
+		}
+		projectActivityID = &id
+	}
 	res, err := s.db.ExecContext(ctx, `
 INSERT INTO mapping_rules (
-  rule_key, source, priority, app_pattern, title_pattern, project_id, activity_id, follow_previous,
+  rule_key, source, priority, app_pattern, title_pattern, project_activity_id, project_id, activity_id, follow_previous,
   action_type, action_project_title, action_activity_title, pattern_format
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'regex')
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'regex')
 `, nullIfEmpty(in.RuleKey), string(orDefaultSource(in.Source)), in.Priority, nullIfEmpty(in.AppPattern), nullIfEmpty(in.TitlePattern),
-		in.ProjectID, in.ActivityID, in.FollowPrevious, string(in.ActionType), nullIfEmpty(in.ActionProjectTitle), nullIfEmpty(in.ActionActivityName))
+		projectActivityID, in.ProjectID, in.ActivityID, in.FollowPrevious, string(in.ActionType), nullIfEmpty(in.ActionProjectTitle), nullIfEmpty(in.ActionActivityName))
 	if err != nil {
 		return 0, err
 	}
@@ -164,14 +231,22 @@ INSERT INTO mapping_rules (
 
 func (s *Store) UpdateRule(ctx context.Context, id int64, in domain.RuleInput) error {
 	in = domain.NormalizeRuleInput(in)
+	var projectActivityID *int64
+	if in.ActionType == domain.RuleActionAssignExplicit && in.ProjectID != nil && in.ActivityID != nil {
+		value, err := ensureProjectActivityLink(ctx, s.db, *in.ProjectID, *in.ActivityID)
+		if err != nil {
+			return err
+		}
+		projectActivityID = &value
+	}
 	_, err := s.db.ExecContext(ctx, `
 UPDATE mapping_rules
 SET rule_key = ?, source = ?, priority = ?, app_pattern = ?, title_pattern = ?,
-    project_id = ?, activity_id = ?, follow_previous = ?, action_type = ?,
+    project_activity_id = ?, project_id = ?, activity_id = ?, follow_previous = ?, action_type = ?,
     action_project_title = ?, action_activity_title = ?, pattern_format = 'regex'
 WHERE id = ?
 `, nullIfEmpty(in.RuleKey), string(orDefaultSource(in.Source)), in.Priority, nullIfEmpty(in.AppPattern), nullIfEmpty(in.TitlePattern),
-		in.ProjectID, in.ActivityID, in.FollowPrevious, string(in.ActionType), nullIfEmpty(in.ActionProjectTitle), nullIfEmpty(in.ActionActivityName), id)
+		projectActivityID, in.ProjectID, in.ActivityID, in.FollowPrevious, string(in.ActionType), nullIfEmpty(in.ActionProjectTitle), nullIfEmpty(in.ActionActivityName), id)
 	return err
 }
 
@@ -200,14 +275,22 @@ func (s *Store) ApplyRulesetChanges(ctx context.Context, in domain.RulesetChange
 	updated := 0
 	for _, item := range in.Updates {
 		inRule := domain.NormalizeRuleInput(item.Rule)
+		var projectActivityID *int64
+		if inRule.ActionType == domain.RuleActionAssignExplicit && inRule.ProjectID != nil && inRule.ActivityID != nil {
+			value, err := ensureProjectActivityLink(ctx, tx, *inRule.ProjectID, *inRule.ActivityID)
+			if err != nil {
+				return domain.RulesetApplyResult{}, err
+			}
+			projectActivityID = &value
+		}
 		res, err := tx.ExecContext(ctx, `
 UPDATE mapping_rules
 SET rule_key = ?, source = ?, priority = ?, app_pattern = ?, title_pattern = ?,
-    project_id = ?, activity_id = ?, follow_previous = ?, action_type = ?,
+    project_activity_id = ?, project_id = ?, activity_id = ?, follow_previous = ?, action_type = ?,
     action_project_title = ?, action_activity_title = ?, pattern_format = 'regex'
 WHERE id = ?
 `, nullIfEmpty(inRule.RuleKey), string(orDefaultSource(inRule.Source)), inRule.Priority, nullIfEmpty(inRule.AppPattern), nullIfEmpty(inRule.TitlePattern),
-			inRule.ProjectID, inRule.ActivityID, inRule.FollowPrevious, string(inRule.ActionType), nullIfEmpty(inRule.ActionProjectTitle), nullIfEmpty(inRule.ActionActivityName), item.ID)
+			projectActivityID, inRule.ProjectID, inRule.ActivityID, inRule.FollowPrevious, string(inRule.ActionType), nullIfEmpty(inRule.ActionProjectTitle), nullIfEmpty(inRule.ActionActivityName), item.ID)
 		if err != nil {
 			return domain.RulesetApplyResult{}, err
 		}
@@ -218,13 +301,21 @@ WHERE id = ?
 	added := 0
 	for _, item := range in.Adds {
 		inRule := domain.NormalizeRuleInput(item)
+		var projectActivityID *int64
+		if inRule.ActionType == domain.RuleActionAssignExplicit && inRule.ProjectID != nil && inRule.ActivityID != nil {
+			value, err := ensureProjectActivityLink(ctx, tx, *inRule.ProjectID, *inRule.ActivityID)
+			if err != nil {
+				return domain.RulesetApplyResult{}, err
+			}
+			projectActivityID = &value
+		}
 		res, err := tx.ExecContext(ctx, `
 INSERT INTO mapping_rules (
-  rule_key, source, priority, app_pattern, title_pattern, project_id, activity_id, follow_previous,
+  rule_key, source, priority, app_pattern, title_pattern, project_activity_id, project_id, activity_id, follow_previous,
   action_type, action_project_title, action_activity_title, pattern_format
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'regex')
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'regex')
 `, nullIfEmpty(inRule.RuleKey), string(orDefaultSource(inRule.Source)), inRule.Priority, nullIfEmpty(inRule.AppPattern), nullIfEmpty(inRule.TitlePattern),
-			inRule.ProjectID, inRule.ActivityID, inRule.FollowPrevious, string(inRule.ActionType), nullIfEmpty(inRule.ActionProjectTitle), nullIfEmpty(inRule.ActionActivityName))
+			projectActivityID, inRule.ProjectID, inRule.ActivityID, inRule.FollowPrevious, string(inRule.ActionType), nullIfEmpty(inRule.ActionProjectTitle), nullIfEmpty(inRule.ActionActivityName))
 		if err != nil {
 			return domain.RulesetApplyResult{}, err
 		}
@@ -246,7 +337,10 @@ func (s *Store) ListUnmappedEvents(ctx context.Context, date *string, minDuratio
 	query := `
 SELECT id, timestamp_ms, app_name, window_title, duration_ms
 FROM events
-WHERE project_id IS NULL AND activity_id IS NULL AND manually_mapped = false
+WHERE project_activity_id IS NULL
+  AND project_id IS NULL
+  AND activity_id IS NULL
+  AND manually_mapped = false
 `
 	args := make([]any, 0, 2)
 	if minDurationMS > 0 {
@@ -289,7 +383,8 @@ func (s *Store) ListAppSuggestions(ctx context.Context, q domain.SuggestionQuery
 WITH mapped AS (
   SELECT app_name, project_id, activity_id, COUNT(*) AS cnt, MAX(timestamp_ms) AS last_seen_ms
   FROM events
-  WHERE project_id IS NOT NULL AND activity_id IS NOT NULL
+  WHERE project_activity_id IS NOT NULL
+     OR (project_id IS NOT NULL AND activity_id IS NOT NULL)
   GROUP BY app_name, project_id, activity_id
 ), app_totals AS (
   SELECT app_name, SUM(cnt) AS total_cnt, COUNT(*) AS target_count, MAX(last_seen_ms) AS last_seen_ms
@@ -384,7 +479,10 @@ func (s *Store) ListTitleSuggestions(ctx context.Context, q domain.SuggestionQue
 WITH mapped_title AS (
   SELECT app_name, window_title, project_id, activity_id, COUNT(*) AS cnt, MAX(timestamp_ms) AS last_seen_ms
   FROM events
-  WHERE project_id IS NOT NULL AND activity_id IS NOT NULL AND window_title <> ''
+  WHERE (
+      project_activity_id IS NOT NULL
+      OR (project_id IS NOT NULL AND activity_id IS NOT NULL)
+  ) AND window_title <> ''
   GROUP BY app_name, window_title, project_id, activity_id
 ), title_totals AS (
   SELECT app_name, window_title, SUM(cnt) AS total_cnt, COUNT(*) AS target_count
@@ -470,7 +568,7 @@ LIMIT ?
 }
 
 func buildSuggestionWhereClause(q domain.SuggestionQuery) (string, []any) {
-	where := "WHERE project_id IS NULL AND activity_id IS NULL AND manually_mapped = false"
+	where := "WHERE project_activity_id IS NULL AND project_id IS NULL AND activity_id IS NULL AND manually_mapped = false"
 	args := make([]any, 0, 4+len(q.ExcludeApps))
 	if q.MinDurationMS > 0 {
 		where += " AND duration_ms >= ?"
@@ -580,9 +678,9 @@ func (s *Store) ApplyEventMappings(ctx context.Context, updates []domain.EventMa
 
 	stmt, err := tx.PrepareContext(ctx, `
 UPDATE events
-SET project_id = ?, activity_id = ?, manually_mapped = ?,
+SET project_id = ?, activity_id = ?, project_activity_id = ?, manually_mapped = ?,
     label_source = CASE WHEN ? THEN 'suggestion_apply' ELSE 'rules_apply' END
-WHERE id = ? AND project_id IS NULL AND activity_id IS NULL
+WHERE id = ? AND project_activity_id IS NULL AND project_id IS NULL AND activity_id IS NULL
 `)
 	if err != nil {
 		return 0, err
@@ -591,7 +689,11 @@ WHERE id = ? AND project_id IS NULL AND activity_id IS NULL
 
 	var affected int64
 	for _, update := range updates {
-		res, err := stmt.ExecContext(ctx, update.ProjectID, update.ActivityID, manuallyMapped, manuallyMapped, update.EventID)
+		projectActivityID, err := ensureProjectActivityLink(ctx, tx, update.ProjectID, update.ActivityID)
+		if err != nil {
+			return affected, err
+		}
+		res, err := stmt.ExecContext(ctx, update.ProjectID, update.ActivityID, projectActivityID, manuallyMapped, manuallyMapped, update.EventID)
 		if err != nil {
 			return affected, err
 		}
@@ -676,10 +778,11 @@ LIMIT 1
 func (s *Store) FindActivityIDByTitle(ctx context.Context, projectID int64, title string) (*int64, error) {
 	var id int64
 	err := s.db.QueryRowContext(ctx, `
-SELECT activity_id
-FROM activities
-WHERE project_id = ? AND LOWER(title) = LOWER(?)
-ORDER BY activity_id ASC
+SELECT a.activity_id
+FROM project_activities pa
+JOIN activities a ON a.activity_id = pa.activity_id
+WHERE pa.project_id = ? AND LOWER(a.title) = LOWER(?)
+ORDER BY a.activity_id ASC
 LIMIT 1
 `, projectID, strings.TrimSpace(title)).Scan(&id)
 	if err != nil {
@@ -750,6 +853,9 @@ SELECT p.project_id, p.title, COALESCE(p.metadata, '')
 FROM project_assignments pa
 JOIN projects p ON p.project_id = pa.project_id
 WHERE pa.ended_at IS NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM archived_projects ap WHERE ap.project_id = p.project_id
+  )
 ORDER BY pa.started_at DESC
 `)
 	if err != nil {
@@ -772,6 +878,9 @@ func (s *Store) ListAllProjects(ctx context.Context) ([]domain.Project, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT project_id, title, COALESCE(metadata, '')
 FROM projects
+WHERE NOT EXISTS (
+  SELECT 1 FROM archived_projects ap WHERE ap.project_id = projects.project_id
+)
 ORDER BY title
 `)
 	if err != nil {
@@ -790,12 +899,73 @@ ORDER BY title
 	return out, rows.Err()
 }
 
+func (s *Store) ListArchivedProjects(ctx context.Context) ([]domain.Project, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT p.project_id, p.title, COALESCE(p.metadata, '')
+FROM archived_projects ap
+JOIN projects p ON p.project_id = ap.project_id
+ORDER BY ap.archived_at DESC, p.title ASC
+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]domain.Project, 0)
+	for rows.Next() {
+		var project domain.Project
+		if err := rows.Scan(&project.ProjectID, &project.Title, &project.Metadata); err != nil {
+			return nil, err
+		}
+		out = append(out, project)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) CreateProject(ctx context.Context, title, metadata string) (domain.Project, error) {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return domain.Project{}, domain.ErrProjectTitleRequired
+	}
+	metadata = strings.TrimSpace(metadata)
+
+	var duplicateCount int64
+	if err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM projects
+WHERE LOWER(TRIM(title)) = LOWER(TRIM(?))
+`, title).Scan(&duplicateCount); err != nil {
+		return domain.Project{}, err
+	}
+	if duplicateCount > 0 {
+		return domain.Project{}, domain.ErrProjectTitleConflict
+	}
+
+	nextID, err := s.nextProjectID(ctx)
+	if err != nil {
+		return domain.Project{}, err
+	}
+	if _, err := s.db.ExecContext(ctx, `
+INSERT INTO projects (project_id, customer_id, name, title, metadata)
+VALUES (?, 0, ?, ?, ?)
+`, nextID, title, title, metadata); err != nil {
+		return domain.Project{}, err
+	}
+
+	return domain.Project{
+		ProjectID: nextID,
+		Title:     title,
+		Metadata:  metadata,
+	}, nil
+}
+
 func (s *Store) ListActivitiesByProject(ctx context.Context, projectID int64) ([]domain.Activity, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT activity_id, project_id, title
-FROM activities
-WHERE project_id = ?
-ORDER BY title ASC, activity_id ASC
+SELECT a.activity_id, pa.project_id, a.title
+FROM project_activities pa
+JOIN activities a ON a.activity_id = pa.activity_id
+WHERE pa.project_id = ?
+ORDER BY a.title ASC, a.activity_id ASC
 `, projectID)
 	if err != nil {
 		return nil, err
@@ -813,7 +983,186 @@ ORDER BY title ASC, activity_id ASC
 	return out, rows.Err()
 }
 
+func (s *Store) ListAllActivities(ctx context.Context) ([]domain.Activity, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT a.activity_id, pa.project_id, a.title
+FROM project_activities pa
+JOIN activities a ON a.activity_id = pa.activity_id
+ORDER BY pa.project_id ASC, a.title ASC, a.activity_id ASC
+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]domain.Activity, 0)
+	for rows.Next() {
+		var activity domain.Activity
+		if err := rows.Scan(&activity.ActivityID, &activity.ProjectID, &activity.Title); err != nil {
+			return nil, err
+		}
+		out = append(out, activity)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) AddActivity(ctx context.Context, projectID int64, title string) (domain.Activity, error) {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return domain.Activity{}, domain.ErrActivityTitleRequired
+	}
+
+	var projectCount int64
+	if err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM projects
+WHERE project_id = ?
+  AND NOT EXISTS (
+    SELECT 1 FROM archived_projects ap WHERE ap.project_id = projects.project_id
+  )
+`, projectID).Scan(&projectCount); err != nil {
+		return domain.Activity{}, err
+	}
+	if projectCount == 0 {
+		return domain.Activity{}, domain.ErrProjectNotFound
+	}
+
+	var duplicateCount int64
+	if err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM project_activities pa
+JOIN activities a ON a.activity_id = pa.activity_id
+WHERE pa.project_id = ? AND LOWER(TRIM(a.title)) = LOWER(TRIM(?))
+`, projectID, title).Scan(&duplicateCount); err != nil {
+		return domain.Activity{}, err
+	}
+	if duplicateCount > 0 {
+		return domain.Activity{}, domain.ErrActivityTitleConflict
+	}
+
+	var activityID int64
+	err := s.db.QueryRowContext(ctx, `
+SELECT activity_id
+FROM activities
+WHERE LOWER(TRIM(title)) = LOWER(TRIM(?))
+ORDER BY activity_id ASC
+LIMIT 1
+`, title).Scan(&activityID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return domain.Activity{}, err
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		nextID, nextErr := s.nextActivityID(ctx)
+		if nextErr != nil {
+			return domain.Activity{}, nextErr
+		}
+		if _, insertErr := s.db.ExecContext(ctx, `
+INSERT INTO activities (activity_id, project_id, name, title)
+VALUES (?, 0, ?, ?)
+`, nextID, title, title); insertErr != nil {
+			return domain.Activity{}, insertErr
+		}
+		activityID = nextID
+	}
+
+	if _, err := ensureProjectActivityLink(ctx, s.db, projectID, activityID); err != nil {
+		return domain.Activity{}, err
+	}
+	return domain.Activity{
+		ActivityID: activityID,
+		ProjectID:  projectID,
+		Title:      title,
+	}, nil
+}
+
+func (s *Store) DeleteActivity(ctx context.Context, activityID int64) error {
+	var activityCount int64
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM activities WHERE activity_id = ?`, activityID).Scan(&activityCount); err != nil {
+		return err
+	}
+	if activityCount == 0 {
+		return domain.ErrActivityNotFound
+	}
+
+	for _, table := range []string{"mapping_rules", "events", "kinds"} {
+		query := `SELECT COUNT(*) FROM ` + table + ` WHERE activity_id = ?`
+		var count int64
+		if err := s.db.QueryRowContext(ctx, query, activityID).Scan(&count); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			return err
+		}
+		if count > 0 {
+			return domain.ErrActivityInUse
+		}
+	}
+
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM project_activities WHERE activity_id = ?`, activityID); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM activities WHERE activity_id = ?`, activityID)
+	return err
+}
+
+func (s *Store) RemoveActivityFromProject(ctx context.Context, projectID, activityID int64) error {
+	var projectActivityID int64
+	err := s.db.QueryRowContext(ctx, `
+SELECT project_activity_id
+FROM project_activities
+WHERE project_id = ? AND activity_id = ?
+LIMIT 1
+`, projectID, activityID).Scan(&projectActivityID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.ErrActivityNotFound
+		}
+		return err
+	}
+
+	var blocked int64
+	if err := s.db.QueryRowContext(ctx, `
+SELECT (
+  (SELECT COUNT(*) FROM mapping_rules mr WHERE mr.project_activity_id = ? OR (mr.project_id = ? AND mr.activity_id = ?))
+  +
+  (SELECT COUNT(*) FROM events e WHERE e.project_activity_id = ? OR (e.project_id = ? AND e.activity_id = ?))
+  +
+  (SELECT COUNT(*) FROM kinds k WHERE k.activity_id = ?)
+)
+`, projectActivityID, projectID, activityID, projectActivityID, projectID, activityID, activityID).Scan(&blocked); err != nil {
+		return err
+	}
+	if blocked > 0 {
+		return domain.ErrActivityInUse
+	}
+
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM project_activities WHERE project_activity_id = ?`, projectActivityID); err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `
+DELETE FROM activities
+WHERE activity_id = ?
+  AND NOT EXISTS (SELECT 1 FROM project_activities pa WHERE pa.activity_id = activities.activity_id)
+`, activityID)
+	return err
+}
+
 func (s *Store) ActivateProject(ctx context.Context, projectID int64) error {
+	var projectCount int64
+	if err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM projects
+WHERE project_id = ?
+  AND NOT EXISTS (
+    SELECT 1 FROM archived_projects ap WHERE ap.project_id = projects.project_id
+  )
+`, projectID).Scan(&projectCount); err != nil {
+		return err
+	}
+	if projectCount == 0 {
+		return domain.ErrProjectNotFound
+	}
+
 	var count int64
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM project_assignments WHERE project_id = ? AND ended_at IS NULL`, projectID).Scan(&count); err != nil {
 		return err
@@ -822,6 +1171,44 @@ func (s *Store) ActivateProject(ctx context.Context, projectID int64) error {
 		return nil
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO project_assignments (project_id) VALUES (?)`, projectID)
+	return err
+}
+
+func (s *Store) ArchiveProject(ctx context.Context, projectID int64) error {
+	var projectCount int64
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM projects WHERE project_id = ?`, projectID).Scan(&projectCount); err != nil {
+		return err
+	}
+	if projectCount == 0 {
+		return domain.ErrProjectNotFound
+	}
+
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM archived_projects WHERE project_id = ?`, projectID); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `
+INSERT INTO archived_projects (project_id, archived_at)
+VALUES (?, current_timestamp)
+`, projectID); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `
+UPDATE project_assignments
+SET ended_at = current_timestamp
+WHERE project_id = ? AND ended_at IS NULL
+`, projectID)
+	return err
+}
+
+func (s *Store) RestoreProject(ctx context.Context, projectID int64) error {
+	var projectCount int64
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM projects WHERE project_id = ?`, projectID).Scan(&projectCount); err != nil {
+		return err
+	}
+	if projectCount == 0 {
+		return domain.ErrProjectNotFound
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM archived_projects WHERE project_id = ?`, projectID)
 	return err
 }
 
@@ -843,6 +1230,9 @@ SELECT pa.project_id, p.title
 FROM project_assignments pa
 JOIN projects p ON p.project_id = pa.project_id
 WHERE pa.ended_at IS NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM archived_projects ap WHERE ap.project_id = p.project_id
+  )
 ORDER BY pa.started_at DESC
 LIMIT 1
 `).Scan(&id, &title)
@@ -859,7 +1249,11 @@ func (s *Store) ListUnmappedDates(ctx context.Context, minDurationMS int64) ([]s
 	rows, err := s.db.QueryContext(ctx, `
 SELECT DISTINCT CAST(DATE(TO_TIMESTAMP(timestamp_ms / 1000)) AS VARCHAR)
 FROM events
-WHERE project_id IS NULL AND activity_id IS NULL AND manually_mapped = false AND duration_ms >= ?
+WHERE project_activity_id IS NULL
+  AND project_id IS NULL
+  AND activity_id IS NULL
+  AND manually_mapped = false
+  AND duration_ms >= ?
 ORDER BY 1 DESC
 `, minDurationMS)
 	if err != nil {
@@ -882,7 +1276,10 @@ func (s *Store) ListGroupedUnmappedEvents(ctx context.Context, date string, minD
 	rows, err := s.db.QueryContext(ctx, `
 SELECT app_name, window_title, COALESCE(SUM(duration_ms), 0), COUNT(*)
 FROM events
-WHERE project_id IS NULL AND activity_id IS NULL AND manually_mapped = false
+WHERE project_activity_id IS NULL
+  AND project_id IS NULL
+  AND activity_id IS NULL
+  AND manually_mapped = false
   AND duration_ms >= ?
   AND DATE(TO_TIMESTAMP(timestamp_ms / 1000)) = ?
 GROUP BY app_name, window_title
@@ -912,13 +1309,20 @@ func (s *Store) MapEventsByGroupWithLabel(ctx context.Context, date, appName, wi
 	if strings.TrimSpace(labelSource) == "" {
 		labelSource = "manual_review"
 	}
+	projectActivityID, err := ensureProjectActivityLink(ctx, s.db, projectID, activityID)
+	if err != nil {
+		return 0, err
+	}
 	res, err := s.db.ExecContext(ctx, `
 UPDATE events
-SET project_id = ?, activity_id = ?, manually_mapped = true, label_source = ?
-WHERE project_id IS NULL AND activity_id IS NULL AND manually_mapped = false
+SET project_id = ?, activity_id = ?, project_activity_id = ?, manually_mapped = true, label_source = ?
+WHERE project_activity_id IS NULL
+  AND project_id IS NULL
+  AND activity_id IS NULL
+  AND manually_mapped = false
   AND DATE(TO_TIMESTAMP(timestamp_ms / 1000)) = ?
   AND app_name = ? AND window_title = ?
-`, projectID, activityID, labelSource, date, appName, windowTitle)
+`, projectID, activityID, projectActivityID, labelSource, date, appName, windowTitle)
 	if err != nil {
 		return 0, err
 	}
@@ -930,7 +1334,10 @@ func (s *Store) DiscardEventsByGroup(ctx context.Context, date, appName, windowT
 	res, err := s.db.ExecContext(ctx, `
 UPDATE events
 SET manually_mapped = true, label_source = 'manual_review'
-WHERE project_id IS NULL AND activity_id IS NULL AND manually_mapped = false
+WHERE project_activity_id IS NULL
+  AND project_id IS NULL
+  AND activity_id IS NULL
+  AND manually_mapped = false
   AND DATE(TO_TIMESTAMP(timestamp_ms / 1000)) = ?
   AND app_name = ? AND window_title = ?
 `, date, appName, windowTitle)
@@ -968,7 +1375,8 @@ func (s *Store) CountMappedEvents(ctx context.Context) (int64, error) {
 	if err := s.db.QueryRowContext(ctx, `
 SELECT COUNT(*)
 FROM events
-WHERE project_id IS NOT NULL AND activity_id IS NOT NULL
+WHERE project_activity_id IS NOT NULL
+   OR (project_id IS NOT NULL AND activity_id IS NOT NULL)
 `).Scan(&count); err != nil {
 		return 0, err
 	}
@@ -1044,7 +1452,6 @@ INSERT INTO projects (
 
 func (s *Store) SyncImportedActivities(ctx context.Context, projectID int64, activities []domain.ImportedActivityUpsert) (domain.ImportedActivitySyncResult, error) {
 	const source = "tidsreg"
-	externalIDs := make([]int64, 0, len(activities))
 	seenExternal := make(map[int64]struct{}, len(activities))
 	result := domain.ImportedActivitySyncResult{}
 
@@ -1056,7 +1463,6 @@ func (s *Store) SyncImportedActivities(ctx context.Context, projectID int64, act
 			continue
 		}
 		seenExternal[activity.ExternalActivityID] = struct{}{}
-		externalIDs = append(externalIDs, activity.ExternalActivityID)
 
 		var (
 			activityID int64
@@ -1075,6 +1481,9 @@ LIMIT 1
 				}
 				result.Updated++
 			}
+			if _, err := ensureProjectActivityLink(ctx, s.db, projectID, activityID); err != nil {
+				return result, err
+			}
 			continue
 		}
 		if err != sql.ErrNoRows {
@@ -1092,30 +1501,71 @@ INSERT INTO activities (
 `, nextID, projectID, activity.Title, activity.Title, source, activity.ExternalActivityID); err != nil {
 			return result, err
 		}
+		if _, err := ensureProjectActivityLink(ctx, s.db, projectID, nextID); err != nil {
+			return result, err
+		}
 		result.Created++
 	}
 
-	deleteQuery := `
-DELETE FROM activities
+	rows, err := s.db.QueryContext(ctx, `
+SELECT activity_id, external_activity_id
+FROM activities
 WHERE project_id = ? AND source = ?
-  AND NOT EXISTS (SELECT 1 FROM mapping_rules mr WHERE mr.activity_id = activities.activity_id)
-`
-	deleteArgs := make([]any, 0, 2+len(externalIDs))
-	deleteArgs = append(deleteArgs, projectID, source)
-	if len(externalIDs) > 0 {
-		placeholders := make([]string, 0, len(externalIDs))
-		for _, id := range externalIDs {
-			placeholders = append(placeholders, "?")
-			deleteArgs = append(deleteArgs, id)
-		}
-		deleteQuery += ` AND external_activity_id NOT IN (` + strings.Join(placeholders, ",") + `)`
-	}
-	delRes, err := s.db.ExecContext(ctx, deleteQuery, deleteArgs...)
+`, projectID, source)
 	if err != nil {
 		return result, err
 	}
-	deleted, _ := delRes.RowsAffected()
-	result.Deleted = int(deleted)
+	defer rows.Close()
+
+	toDelete := make([]int64, 0)
+	for rows.Next() {
+		var (
+			activityID int64
+			externalID sql.NullInt64
+		)
+		if err := rows.Scan(&activityID, &externalID); err != nil {
+			return result, err
+		}
+		if !externalID.Valid {
+			continue
+		}
+		if _, ok := seenExternal[externalID.Int64]; ok {
+			continue
+		}
+		var blocked int64
+		if err := s.db.QueryRowContext(ctx, `
+SELECT (
+  (SELECT COUNT(*) FROM mapping_rules mr WHERE mr.activity_id = ?)
+  +
+  (SELECT COUNT(*) FROM events e WHERE e.activity_id = ?)
+  +
+  (SELECT COUNT(*) FROM kinds k WHERE k.activity_id = ?)
+)
+`, activityID, activityID, activityID).Scan(&blocked); err != nil {
+			return result, err
+		}
+		if blocked > 0 {
+			continue
+		}
+		toDelete = append(toDelete, activityID)
+	}
+	if err := rows.Err(); err != nil {
+		return result, err
+	}
+
+	for _, activityID := range toDelete {
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM project_activities WHERE project_id = ? AND activity_id = ?`, projectID, activityID); err != nil {
+			return result, err
+		}
+		if _, err := s.db.ExecContext(ctx, `
+DELETE FROM activities
+WHERE activity_id = ?
+  AND NOT EXISTS (SELECT 1 FROM project_activities pa WHERE pa.activity_id = activities.activity_id)
+`, activityID); err != nil {
+			return result, err
+		}
+		result.Deleted++
+	}
 	return result, nil
 }
 
