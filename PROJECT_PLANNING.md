@@ -1,227 +1,181 @@
-# Project Planning for Release 1.0
+# Release 1.0 Project Planning (Aligned with `ROADMAP.md`)
 
 Last updated: 2026-02-10
 
-## Goal
+## 1. Planning Inputs
 
-Ship a stable **1.0** release of the current Swift + Zig + Go + DuckDB architecture with:
+This plan is aligned to the current roadmap in `ROADMAP.md` and focuses on shipping a stable 1.0 from the existing architecture (Swift bridge + Zig worker + Go CLI/API + DuckDB).
 
-- Safe upgrades and migration consistency.
-- Reliable event persistence during runtime and shutdown.
-- Better release diagnostics and observability.
-- Stronger WiFi-based work-site determination.
+Key roadmap alignment:
 
-## Execution Model
+- Keep architecture as-is (no rewrite).
+- Focus 1.0 on reliability + operational safety + WiFi work-site determination.
+- Deliver mapping intelligence V1 (heuristic improvements).
+- Move Bayesian/ML classification to release 2.
 
-- Keep tasks small and isolated.
-- Prefer parallel work across independent workstreams.
-- Every task must include tests or explicit manual verification steps.
+## 2. Release 1.0 Scope
 
-## Workstream A: Release Safety (P0)
+### In scope for 1.0
 
-### A1. Zig/Go migration parity
+- Migration and upgrade safety.
+- Event persistence reliability (including shutdown behavior).
+- WiFi work-site detection quality and visibility.
+- Idle/AFK detection.
+- Time-proximity heuristic mapping.
+- Observability and release readiness checks.
+
+### Explicitly out of scope for 1.0
+
+- Bayesian/ML classifier (release 2).
+- Large architectural rewrite.
+
+## 3. Task Board (Small, Isolated, Parallelizable)
+
+Each task is intentionally small so a developer can start immediately.
+
+## Track A: Release Safety (P0)
+
+### A1. Zig migration parity to v18
 - Priority: P0
-- Why: Prevent schema mismatch when worker migrates DB.
-- Scope:
-  - Add SQL migrations `014`-`018` to Zig migration pipeline.
-  - Align migration version assertions with Go side.
-- Files:
-  - `src/external/duckdb/migrations.zig`
-  - `src/external/duckdb/migrations_test.zig`
-- Acceptance:
-  - Zig migration tests pass with final version matching Go (`18`).
-  - Fresh DB and migrated legacy DB both succeed under Zig worker.
-- Dependencies: None
+- Scope: Add migrations `014`-`018` to Zig migration runner.
+- Files: `src/external/duckdb/migrations.zig`, `src/external/duckdb/migrations_test.zig`
+- Acceptance: Zig migration version equals Go migration version (`18`), tests pass.
 
 ### A2. Migration drift guard test
 - Priority: P0
-- Why: Prevent future divergence between Go and Zig migration sets.
-- Scope:
-  - Add automated test that compares migration filenames and contents across both stacks.
-- Files:
-  - `migrations/migrations_test.go`
-- Acceptance:
-  - Test fails if any migration is missing or differs.
-- Dependencies: A1 recommended first
+- Scope: Add test to compare migration sets between Go and Zig.
+- Files: `migrations/migrations_test.go`
+- Acceptance: test fails on missing/changed migration file across stacks.
+- Depends on: A1
 
-### A3. Pre-migration DB backup
+### A3. Pre-migration backup (file DB)
 - Priority: P0
-- Why: Safe rollback path for user DBs during upgrades.
-- Scope:
-  - Before applying migrations to file-based DB, create timestamped backup.
-  - Document backup location/retention behavior.
-- Files:
-  - `internal/external/duckdb/open.go`
-  - `src/external/duckdb/legacy_repository.zig`
-  - `internal/external/api/content/getting-started.md`
-- Acceptance:
-  - Backup file is created before schema changes for non-`:memory:` DBs.
-  - Tests verify backup creation path.
-- Dependencies: None
+- Scope: Create timestamped DB backup before schema migration for file-based DB.
+- Files: `internal/external/duckdb/open.go`, `src/external/duckdb/legacy_repository.zig`
+- Acceptance: backup created before migration; behavior documented.
 
-## Workstream B: Reliability (P0)
+## Track B: Runtime Reliability (P0)
 
-### B1. Buffered write failure handling
+### B1. Buffered write error retention
 - Priority: P0
-- Why: Avoid silent event loss on transient DB errors.
-- Scope:
-  - Make buffered save path propagate write errors.
-  - Keep failed events in buffer and retry on next flush.
-- Files:
-  - `src/external/duckdb/legacy_repository.zig`
-  - `src/external/duckdb/buffered_repository.zig`
-  - `src/external/duckdb/buffered_repository_test.zig`
-- Acceptance:
-  - Simulated insert failures do not drop events.
-  - Events are persisted after retry when DB is healthy.
-- Dependencies: None
+- Scope: Do not drop buffered events on write failure; keep for retry.
+- Files: `src/external/duckdb/legacy_repository.zig`, `src/external/duckdb/buffered_repository.zig`, `src/external/duckdb/buffered_repository_test.zig`
+- Acceptance: simulated insert failures do not lose events.
 
-### B2. Graceful shutdown flush
+### B2. Graceful stop flush
 - Priority: P0
-- Why: Ensure in-memory events are not lost on stop/restart.
-- Scope:
-  - Add worker shutdown flow that flushes buffer before process exit.
-  - Coordinate bridge stop and worker stop semantics.
-- Files:
-  - `src/entrypoint/main.zig`
-  - `src/external/duckdb/buffered_repository.zig`
-  - `src/bridge/macos_bridge.swift`
-- Acceptance:
-  - On controlled stop, pending events are flushed.
-  - Integration test verifies persisted events after shutdown.
-- Dependencies: B1
+- Scope: Flush buffered events during controlled shutdown.
+- Files: `src/entrypoint/main.zig`, `src/external/duckdb/buffered_repository.zig`, `src/bridge/macos_bridge.swift`
+- Acceptance: pending events persist after stop/restart.
+- Depends on: B1
 
-## Workstream C: WiFi Work-Site Determination (P0/P1)
+## Track C: WiFi Work-Site Determination (P0/P1)
 
-### C1. Periodic WiFi refresh independent of app changes
+### C1. Periodic WiFi refresh loop
 - Priority: P0
-- Why: WiFi changes currently can be missed until app/title changes.
-- Scope:
-  - Add timer-based refresh calling SSID detection + tracking state update.
-- Files:
-  - `src/bridge/macos_bridge.swift`
-- Acceptance:
-  - Tracking state reacts to WiFi changes even while focused app/title is unchanged.
-- Dependencies: None
+- Scope: Update WiFi/track-state on timer, not only on app/title changes.
+- Files: `src/bridge/macos_bridge.swift`
+- Acceptance: state changes when WiFi changes without focus change.
 
-### C2. Unknown WiFi state semantics
+### C2. Unknown WiFi semantics
 - Priority: P0
-- Why: Empty SSID handling should be explicit and diagnosable.
-- Scope:
-  - Define explicit `(unknown)` WiFi handling and tracking behavior.
-  - Add clear logs/status for permission/fallback failure.
-- Files:
-  - `src/bridge/macos_bridge.swift`
-- Acceptance:
-  - User can distinguish “not on work site” from “WiFi unknown”.
-  - Behavior is deterministic when patterns are configured.
-- Dependencies: None
+- Scope: Define and surface explicit unknown state (`(unknown)`), not silent non-match.
+- Files: `src/bridge/macos_bridge.swift`
+- Acceptance: user can distinguish "unknown" vs "not work site".
 
-### C3. Menu/status visibility for current WiFi + work-site state
+### C3. Work-site status in menu
 - Priority: P1
-- Why: Users need immediate confidence in work-site detection.
-- Scope:
-  - Show current SSID and site status in menu bar status text/menu item.
-- Files:
-  - `src/bridge/macos_bridge.swift`
-- Acceptance:
-  - Status text shows one of: `tracking`, `paused (non-work WiFi)`, `unknown WiFi`.
-  - Includes current SSID when available.
-- Dependencies: C1, C2
+- Scope: Show current SSID + tracking/work-site state in menu/status.
+- Files: `src/bridge/macos_bridge.swift`
+- Acceptance: menu clearly shows `tracking`, `paused (non-work WiFi)`, or `unknown WiFi`.
+- Depends on: C1, C2
 
-### C4. Optional WiFi-change event boundary
+### C4. WiFi transition boundary support
 - Priority: P1
-- Why: Improve historical “where was I working” fidelity.
-- Scope:
-  - Treat WiFi changes as event boundaries or annotate events with transition markers.
-- Files:
-  - `src/domain/event.zig`
-  - `src/application/services/tracker.zig`
-  - `src/bridge/macos_bridge.swift`
-- Acceptance:
-  - Timeline can distinguish sessions across different work sites.
-  - No regression in event coalescing behavior.
-- Dependencies: C1
+- Scope: Treat WiFi transitions as event/session boundary (or explicit marker).
+- Files: `src/domain/event.zig`, `src/application/services/tracker.zig`, `src/bridge/macos_bridge.swift`
+- Acceptance: history can show where work happened per session/site.
+- Depends on: C1
 
-## Workstream D: Observability + Operability (P1)
+## Track D: Mapping Intelligence V1 (P1)
 
-### D1. API request ID + health endpoint
+### D1. Idle/AFK detection
 - Priority: P1
-- Why: Improve production diagnostics and readiness checks.
-- Scope:
-  - Add request ID middleware.
-  - Add `/healthz` endpoint with basic readiness signal.
-- Files:
-  - `internal/external/api/server.go`
-  - `internal/external/api/server_test.go`
-- Acceptance:
-  - Every API log line includes request ID.
-  - `/healthz` returns 200 when service is ready.
-- Dependencies: None
+- Scope: Add configurable inactivity threshold and state handling.
+- Files: `src/bridge/macos_bridge.swift`, `internal/domain/types.go` (if state exposed), `internal/external/api/templates/settings.html` (if configurable)
+- Acceptance: inactivity is reflected and prevents false active tracking.
 
-### D2. Install/upgrade path for worker replacement
+### D2. Time-proximity heuristic mapping
 - Priority: P1
-- Why: 1.0 needs explicit upgrade path for trusted worker binary updates.
-- Scope:
-  - Add `install --replace-worker` (or `--force`) behavior.
-  - Document expected Accessibility/permission implications.
-- Files:
-  - `internal/external/cli/runner.go`
-  - `internal/external/launchd/service.go`
-  - `internal/application/usecases/help_usecase.go`
-  - `internal/external/api/content/getting-started.md`
-- Acceptance:
-  - User can force worker refresh during upgrade.
-  - CLI help and docs clearly describe behavior.
-- Dependencies: None
+- Scope: Map short unmapped events between same-project mapped events.
+- Files: `internal/application/usecases/rules_usecase.go`, `internal/domain/rules.go`, `internal/application/usecases/rules_usecase_test.go`
+- Acceptance: measurable reduction of short unmapped context-switch events.
 
-## Workstream E: Test Completion for 1.0 Confidence (P1)
-
-### E1. Review usecase tests
+### D3. Heuristic explainability
 - Priority: P1
-- Why: Core manual correction flow needs direct usecase coverage.
-- Scope:
-  - Add tests for list dates/groups, map-group, discard-group and error paths.
-- Files:
-  - `internal/application/usecases/review_usecase_test.go`
-- Acceptance:
-  - All review usecase methods are covered for success and failure.
-- Dependencies: None
+- Scope: Include reason/confidence metadata for heuristic assignments.
+- Files: `internal/domain/types.go`, `internal/external/api/templates/partials/report_table.html`, `internal/external/api/server.go`
+- Acceptance: user can inspect why an event was auto-assigned.
+- Depends on: D2
 
-### E2. Lifecycle and settings usecase tests
+## Track E: Observability + Operability (P1)
+
+### E1. Request IDs and `/healthz`
 - Priority: P1
-- Why: Startup/runtime controls are critical for release quality.
-- Scope:
-  - Add tests for lifecycle actions and settings load/save error propagation.
-- Files:
-  - `internal/application/usecases/lifecycle_usecase_test.go`
-  - `internal/application/usecases/settings_usecase_test.go`
-- Acceptance:
-  - Usecase boundaries fully covered with port fakes.
-- Dependencies: None
+- Scope: Add request-id middleware and health endpoint.
+- Files: `internal/external/api/server.go`, `internal/external/api/server_test.go`
+- Acceptance: each request log includes request ID; health endpoint returns ready status.
 
-### E3. CLI review/settings/reports command tests
+### E2. Worker replacement upgrade path
 - Priority: P1
-- Why: 1.0 CLI should be dependable for both users and LLM tooling.
-- Scope:
-  - Expand parser/output/exit-code coverage for review, settings, and reports commands.
-- Files:
-  - `internal/external/cli/runner_test.go`
-- Acceptance:
-  - Commands return deterministic outputs for `text|json|yaml` and fail clearly on invalid inputs.
-- Dependencies: None
+- Scope: Add `install --replace-worker` (or `--force`) for safe worker upgrades.
+- Files: `internal/external/cli/runner.go`, `internal/external/launchd/service.go`, `internal/application/usecases/help_usecase.go`, `internal/external/api/content/getting-started.md`
+- Acceptance: user can explicitly refresh worker binary during upgrade.
 
-## Suggested Parallel Assignment (First Sprint)
+## Track F: Test Completion for 1.0 Confidence (P1)
 
-- Developer 1: A1 + A2
-- Developer 2: B1 + B2
-- Developer 3: C1 + C2
-- Developer 4: D1 + E1
-- Developer 5: D2 + E2 + E3
+### F1. Review usecase test suite
+- Priority: P1
+- Scope: Add success/error tests for list/map/discard review flows.
+- Files: `internal/application/usecases/review_usecase_test.go`
+- Acceptance: review usecase fully covered.
 
-## Definition of Done for 1.0
+### F2. Lifecycle/settings usecase tests
+- Priority: P1
+- Scope: Add tests for lifecycle operations and settings load/save errors.
+- Files: `internal/application/usecases/lifecycle_usecase_test.go`, `internal/application/usecases/settings_usecase_test.go`
+- Acceptance: full usecase boundary coverage.
 
-- All P0 tasks completed.
-- P1 tasks completed or explicitly deferred with documented risk acceptance.
-- `go test -mod=readonly ./...` and Zig test suites pass in CI.
-- Release notes include upgrade/backward-compatibility notes and WiFi work-site behavior.
+### F3. CLI review/settings/reports coverage
+- Priority: P1
+- Scope: Expand CLI parser/output/exit-code tests.
+- Files: `internal/external/cli/runner_test.go`
+- Acceptance: deterministic behavior across `text|json|yaml` and invalid input handling.
+
+## 4. Suggested Team Start Plan (Parallel)
+
+- Dev 1: A1, A2
+- Dev 2: B1, B2
+- Dev 3: C1, C2
+- Dev 4: D1, F1
+- Dev 5: D2, D3
+- Dev 6: E1, F2, F3
+- Dev 7: E2, C3, C4
+
+## 5. Release Gates
+
+## Gate G1 (must pass before beta)
+- A1, A2, A3 complete.
+- B1, B2 complete.
+- C1, C2 complete.
+
+## Gate G2 (must pass before 1.0 tag)
+- D1 and D2 complete.
+- E1 complete.
+- F1/F2/F3 complete.
+- `go test -mod=readonly ./...` and Zig test suites green in CI.
+
+## 6. Post-1.0 Backlog (Release 2)
+
+- Bayesian/ML classifier for suggestion quality improvements.
+- Broader integration intelligence (git/calendar auto-context expansion).
