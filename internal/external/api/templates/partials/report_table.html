@@ -3,6 +3,7 @@
 <div class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{{.RulesApplySummary}}</div>
 {{end}}
 
+<!-- Summary Cards -->
 <div class="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
   <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
     <p class="text-xs uppercase tracking-wide text-slate-500">{{if .ReportDateActive}}Date{{else}}Range{{end}}</p>
@@ -10,7 +11,7 @@
   </div>
   <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
     <p class="text-xs uppercase tracking-wide text-slate-500">Total Tracked</p>
-    <p class="mt-1 text-lg font-semibold text-tt-accent">{{formatDuration .Report.TotalMS}}</p>
+    <p class="mt-1 text-lg font-semibold text-teal-700">{{formatDuration .Report.TotalMS}}</p>
   </div>
   <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
     <p class="text-xs uppercase tracking-wide text-slate-500">Mapped</p>
@@ -24,13 +25,71 @@
   </div>
 </div>
 
-<div class="mb-4 flex flex-wrap gap-4 text-sm text-slate-600">
+<div class="mb-6 flex flex-wrap gap-4 text-sm text-slate-600">
   <span>Total events: <strong class="text-tt-ink">{{.Report.TotalEvents}}</strong></span>
   <span>Included: <strong class="text-tt-ink">{{.Report.IncludedEvents}}</strong></span>
   <span class="text-slate-500">Excluded noisy: {{.Report.ExcludedEvents}}</span>
 </div>
 
-<div class="grid gap-6 lg:grid-cols-3">
+<!-- Mapped Events Details (Expandable) -->
+{{if .Report.MappedDetails}}
+<div class="mb-6 rounded-xl border border-slate-200 bg-white p-4">
+  <h3 class="mb-4 text-base font-semibold text-tt-ink">Mapped Events by Project</h3>
+  <div class="space-y-3">
+    {{range .Report.MappedDetails}}
+    <details class="group rounded-lg border border-slate-200">
+      <summary class="flex cursor-pointer items-center justify-between bg-slate-50 px-4 py-3 hover:bg-slate-100">
+        <div class="flex items-center gap-3">
+          <svg class="h-4 w-4 text-slate-400 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+          <span class="font-medium text-slate-800">{{.ProjectTitle}}</span>
+          <span class="text-sm text-slate-500">({{len .Activities}} activities)</span>
+        </div>
+        <span class="font-semibold text-teal-700">{{formatDuration .TotalMS}}</span>
+      </summary>
+      <div class="divide-y divide-slate-100 px-4">
+        {{range .Activities}}
+        <details class="group/activity py-2">
+          <summary class="flex cursor-pointer items-center justify-between py-2 hover:bg-slate-50">
+            <div class="flex items-center gap-3 pl-4">
+              <svg class="h-3 w-3 text-slate-400 transition-transform group-open/activity:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+              <span class="text-slate-700">{{.ActivityName}}</span>
+              <span class="text-xs text-slate-400">({{len .Events}} events)</span>
+            </div>
+            <span class="font-medium text-slate-600">{{formatDuration .TotalMS}}</span>
+          </summary>
+          <div class="ml-8 mt-2 overflow-x-auto">
+            <table class="w-full text-xs">
+              <thead>
+                <tr class="border-b border-slate-100 text-slate-500">
+                  <th class="py-1 text-left font-medium">Time</th>
+                  <th class="py-1 text-left font-medium">App</th>
+                  <th class="py-1 text-left font-medium">Window</th>
+                  <th class="py-1 text-right font-medium">Duration</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-50">
+                {{range .Events}}
+                <tr class="hover:bg-slate-50">
+                  <td class="py-1 text-slate-600">{{formatTimestamp .TimestampMS}}</td>
+                  <td class="py-1 text-slate-700">{{.AppName}}</td>
+                  <td class="py-1 text-slate-600 max-w-xs truncate" title="{{.WindowTitle}}">{{.WindowTitle}}</td>
+                  <td class="py-1 text-right text-slate-600">{{formatDuration .DurationMS}}</td>
+                </tr>
+                {{end}}
+              </tbody>
+            </table>
+          </div>
+        </details>
+        {{end}}
+      </div>
+    </details>
+    {{end}}
+  </div>
+</div>
+{{end}}
+
+<!-- Tables: By Project, By Activity, By App, Top Window Titles -->
+<div class="grid gap-6 lg:grid-cols-2">
   <div class="rounded-xl border border-slate-200 bg-white p-4">
     <h3 class="mb-3 text-base font-semibold text-tt-ink">By Project</h3>
     <div class="overflow-x-auto">
@@ -43,6 +102,30 @@
         </thead>
         <tbody class="divide-y divide-slate-100">
         {{range .Report.ByProject}}
+          <tr>
+            <td class="py-2 text-slate-800">{{.Name}}</td>
+            <td class="py-2 text-right font-medium text-slate-700">{{formatDuration .TotalMS}}</td>
+          </tr>
+        {{else}}
+          <tr><td colspan="2" class="py-4 text-center text-slate-500">No rows</td></tr>
+        {{end}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="rounded-xl border border-slate-200 bg-white p-4">
+    <h3 class="mb-3 text-base font-semibold text-tt-ink">By Activity</h3>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-slate-200">
+            <th class="py-2 text-left font-medium text-slate-600">Activity</th>
+            <th class="py-2 text-right font-medium text-slate-600">Duration</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+        {{range .Report.ByActivity}}
           <tr>
             <td class="py-2 text-slate-800">{{.Name}}</td>
             <td class="py-2 text-right font-medium text-slate-700">{{formatDuration .TotalMS}}</td>

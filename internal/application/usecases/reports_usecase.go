@@ -52,6 +52,18 @@ func (u *ReportsUsecase) Dashboard(ctx context.Context, _ contracts.ReportsDashb
 	if len(out.TopApps) > 8 {
 		out.TopApps = out.TopApps[:8]
 	}
+	out.ByProject = summarize(items, mask, func(e domain.Event) string {
+		if strings.TrimSpace(e.ProjectTitle) == "" {
+			return "Unmapped"
+		}
+		return e.ProjectTitle
+	})
+	out.ByActivity = summarize(items, mask, func(e domain.Event) string {
+		if strings.TrimSpace(e.ActivityName) == "" {
+			return "Unmapped"
+		}
+		return e.ActivityName
+	})
 	return contracts.ReportsDashboardResponse{Dashboard: out}, nil
 }
 
@@ -94,6 +106,12 @@ func (u *ReportsUsecase) Report(ctx context.Context, req contracts.ReportsBuildR
 		}
 		return e.ProjectTitle
 	})
+	out.ByActivity = summarize(items, mask, func(e domain.Event) string {
+		if strings.TrimSpace(e.ActivityName) == "" {
+			return "Unmapped"
+		}
+		return e.ActivityName
+	})
 	out.ByApp = summarize(items, mask, func(e domain.Event) string { return e.AppName })
 	out.ByWindow = summarize(items, mask, func(e domain.Event) string {
 		app := strings.TrimSpace(e.AppName)
@@ -109,6 +127,10 @@ func (u *ReportsUsecase) Report(ctx context.Context, req contracts.ReportsBuildR
 	if len(out.ByWindow) > 12 {
 		out.ByWindow = out.ByWindow[:12]
 	}
+
+	// Build mapped details: project -> activity -> events
+	out.MappedDetails = buildMappedDetails(items, mask)
+
 	return contracts.ReportsBuildResponse{Report: out}, nil
 }
 
@@ -149,6 +171,92 @@ func summarize(events []domain.Event, excluded []bool, groupBy func(domain.Event
 		return out[i].TotalMS > out[j].TotalMS
 	})
 	return out
+}
+
+// buildMappedDetails creates a hierarchical structure of project -> activity -> events
+// for mapped events only (events with both project and activity assigned)
+func buildMappedDetails(events []domain.Event, excluded []bool) []domain.ProjectDetail {
+	// Key: projectID -> activityID -> events
+	type activityKey struct {
+		projectID  int64
+		activityID int64
+	}
+
+	projectMap := make(map[int64]*domain.ProjectDetail)
+	activityMap := make(map[activityKey]*domain.ActivityDetail)
+
+	for i, e := range events {
+		if excluded[i] || e.DurationMS <= 0 {
+			continue
+		}
+		// Only include mapped events
+		if e.ProjectID == nil || e.ActivityID == nil {
+			continue
+		}
+
+		projID := *e.ProjectID
+		actID := *e.ActivityID
+
+		// Get or create project
+		proj, ok := projectMap[projID]
+		if !ok {
+			proj = &domain.ProjectDetail{
+				ProjectID:    projID,
+				ProjectTitle: e.ProjectTitle,
+				Activities:   []domain.ActivityDetail{},
+			}
+			projectMap[projID] = proj
+		}
+		proj.TotalMS += e.DurationMS
+
+		// Get or create activity
+		aKey := activityKey{projID, actID}
+		act, ok := activityMap[aKey]
+		if !ok {
+			act = &domain.ActivityDetail{
+				ActivityID:   actID,
+				ActivityName: e.ActivityName,
+				Events:       []domain.MappedEventDetail{},
+			}
+			activityMap[aKey] = act
+		}
+		act.TotalMS += e.DurationMS
+
+		// Add event detail
+		act.Events = append(act.Events, domain.MappedEventDetail{
+			TimestampMS: e.TimestampMS,
+			DurationMS:  e.DurationMS,
+			AppName:     e.AppName,
+			WindowTitle: e.WindowTitle,
+		})
+	}
+
+	// Build result slice and associate activities with projects
+	result := make([]domain.ProjectDetail, 0, len(projectMap))
+	for projID, proj := range projectMap {
+		// Find all activities for this project
+		for aKey, act := range activityMap {
+			if aKey.projectID == projID {
+				// Sort events by timestamp
+				sort.Slice(act.Events, func(i, j int) bool {
+					return act.Events[i].TimestampMS < act.Events[j].TimestampMS
+				})
+				proj.Activities = append(proj.Activities, *act)
+			}
+		}
+		// Sort activities by total duration descending
+		sort.Slice(proj.Activities, func(i, j int) bool {
+			return proj.Activities[i].TotalMS > proj.Activities[j].TotalMS
+		})
+		result = append(result, *proj)
+	}
+
+	// Sort projects by total duration descending
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].TotalMS > result[j].TotalMS
+	})
+
+	return result
 }
 
 func NormalizeRange(v string) string {

@@ -809,9 +809,11 @@ SELECT
   e.window_title,
   e.project_id,
   e.activity_id,
-  COALESCE(p.title, '') AS project_title
+  COALESCE(p.title, '') AS project_title,
+  COALESCE(a.title, '') AS activity_name
 FROM events e
 LEFT JOIN projects p ON p.project_id = e.project_id
+LEFT JOIN activities a ON a.activity_id = e.activity_id
 ` + where + `
 ORDER BY e.timestamp_ms ASC
 `
@@ -824,7 +826,7 @@ ORDER BY e.timestamp_ms ASC
 	out := make([]domain.Event, 0)
 	for rows.Next() {
 		var event domain.Event
-		if err := rows.Scan(&event.ID, &event.TimestampMS, &event.DurationMS, &event.AppName, &event.WindowTitle, &event.ProjectID, &event.ActivityID, &event.ProjectTitle); err != nil {
+		if err := rows.Scan(&event.ID, &event.TimestampMS, &event.DurationMS, &event.AppName, &event.WindowTitle, &event.ProjectID, &event.ActivityID, &event.ProjectTitle, &event.ActivityName); err != nil {
 			return nil, err
 		}
 		out = append(out, event)
