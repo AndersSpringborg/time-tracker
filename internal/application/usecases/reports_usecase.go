@@ -52,6 +52,18 @@ func (u *ReportsUsecase) Dashboard(ctx context.Context, _ contracts.ReportsDashb
 	if len(out.TopApps) > 8 {
 		out.TopApps = out.TopApps[:8]
 	}
+	out.ByProject = summarize(items, mask, func(e domain.Event) string {
+		if strings.TrimSpace(e.ProjectTitle) == "" {
+			return "Unmapped"
+		}
+		return e.ProjectTitle
+	})
+	out.ByActivity = summarize(items, mask, func(e domain.Event) string {
+		if strings.TrimSpace(e.ActivityName) == "" {
+			return "Unmapped"
+		}
+		return e.ActivityName
+	})
 	return contracts.ReportsDashboardResponse{Dashboard: out}, nil
 }
 

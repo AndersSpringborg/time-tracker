@@ -31,22 +31,6 @@
   <span class="text-slate-500">Excluded noisy: {{.Report.ExcludedEvents}}</span>
 </div>
 
-<!-- Donut Charts -->
-<div class="mb-6 grid gap-6 lg:grid-cols-2">
-  <div class="rounded-xl border border-slate-200 bg-white p-4">
-    <h3 class="mb-3 text-base font-semibold text-tt-ink">Time by Project</h3>
-    <div class="relative h-64">
-      <canvas id="projectChart"></canvas>
-    </div>
-  </div>
-  <div class="rounded-xl border border-slate-200 bg-white p-4">
-    <h3 class="mb-3 text-base font-semibold text-tt-ink">Time by Activity</h3>
-    <div class="relative h-64">
-      <canvas id="activityChart"></canvas>
-    </div>
-  </div>
-</div>
-
 <!-- Mapped Events Details (Expandable) -->
 {{if .Report.MappedDetails}}
 <div class="mb-6 rounded-xl border border-slate-200 bg-white p-4">
@@ -104,8 +88,56 @@
 </div>
 {{end}}
 
-<!-- Tables: By App and Top Window Titles -->
+<!-- Tables: By Project, By Activity, By App, Top Window Titles -->
 <div class="grid gap-6 lg:grid-cols-2">
+  <div class="rounded-xl border border-slate-200 bg-white p-4">
+    <h3 class="mb-3 text-base font-semibold text-tt-ink">By Project</h3>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-slate-200">
+            <th class="py-2 text-left font-medium text-slate-600">Project</th>
+            <th class="py-2 text-right font-medium text-slate-600">Duration</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+        {{range .Report.ByProject}}
+          <tr>
+            <td class="py-2 text-slate-800">{{.Name}}</td>
+            <td class="py-2 text-right font-medium text-slate-700">{{formatDuration .TotalMS}}</td>
+          </tr>
+        {{else}}
+          <tr><td colspan="2" class="py-4 text-center text-slate-500">No rows</td></tr>
+        {{end}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="rounded-xl border border-slate-200 bg-white p-4">
+    <h3 class="mb-3 text-base font-semibold text-tt-ink">By Activity</h3>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-slate-200">
+            <th class="py-2 text-left font-medium text-slate-600">Activity</th>
+            <th class="py-2 text-right font-medium text-slate-600">Duration</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+        {{range .Report.ByActivity}}
+          <tr>
+            <td class="py-2 text-slate-800">{{.Name}}</td>
+            <td class="py-2 text-right font-medium text-slate-700">{{formatDuration .TotalMS}}</td>
+          </tr>
+        {{else}}
+          <tr><td colspan="2" class="py-4 text-center text-slate-500">No rows</td></tr>
+        {{end}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
   <div class="rounded-xl border border-slate-200 bg-white p-4">
     <h3 class="mb-3 text-base font-semibold text-tt-ink">By App</h3>
     <div class="overflow-x-auto">
@@ -154,91 +186,4 @@
     </div>
   </div>
 </div>
-
-<!-- Chart.js Initialization -->
-<script>
-(function() {
-  const chartColors = [
-    '#0f766e', '#0891b2', '#7c3aed', '#db2777', '#ea580c',
-    '#16a34a', '#2563eb', '#9333ea', '#e11d48', '#d97706',
-    '#059669', '#0284c7', '#7c3aed', '#be185d', '#c2410c'
-  ];
-
-  // Project chart data
-  const projectData = {
-    labels: [{{range $i, $p := .Report.ByProject}}{{if $i}},{{end}}"{{$p.Name}}"{{end}}],
-    values: [{{range $i, $p := .Report.ByProject}}{{if $i}},{{end}}{{$p.TotalMS}}{{end}}]
-  };
-
-  // Activity chart data
-  const activityData = {
-    labels: [{{range $i, $a := .Report.ByActivity}}{{if $i}},{{end}}"{{$a.Name}}"{{end}}],
-    values: [{{range $i, $a := .Report.ByActivity}}{{if $i}},{{end}}{{$a.TotalMS}}{{end}}]
-  };
-
-  function formatDuration(ms) {
-    if (ms < 60000) return Math.round(ms / 1000) + 's';
-    const mins = Math.floor(ms / 60000);
-    if (mins < 60) return mins + 'm';
-    const hours = Math.floor(mins / 60);
-    const remainMins = mins % 60;
-    return hours + 'h ' + remainMins + 'm';
-  }
-
-  function createDonutChart(canvasId, data, title) {
-    const ctx = document.getElementById(canvasId);
-    if (!ctx || data.labels.length === 0) return;
-
-    new Chart(ctx, {
-      type: 'doughnut',
-      data: {
-        labels: data.labels,
-        datasets: [{
-          data: data.values,
-          backgroundColor: chartColors.slice(0, data.labels.length),
-          borderWidth: 2,
-          borderColor: '#fff'
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: {
-            position: 'right',
-            labels: {
-              boxWidth: 12,
-              padding: 8,
-              font: { size: 11 }
-            }
-          },
-          tooltip: {
-            callbacks: {
-              label: function(context) {
-                const label = context.label || '';
-                const value = context.raw || 0;
-                const total = context.dataset.data.reduce((a, b) => a + b, 0);
-                const percentage = total > 0 ? Math.round((value / total) * 100) : 0;
-                return label + ': ' + formatDuration(value) + ' (' + percentage + '%)';
-              }
-            }
-          }
-        },
-        cutout: '60%'
-      }
-    });
-  }
-
-  // Wait for Chart.js to load
-  if (typeof Chart !== 'undefined') {
-    createDonutChart('projectChart', projectData);
-    createDonutChart('activityChart', activityData);
-  } else {
-    window.addEventListener('load', function() {
-      createDonutChart('projectChart', projectData);
-      createDonutChart('activityChart', activityData);
-    });
-  }
-})();
-</script>
 {{end}}

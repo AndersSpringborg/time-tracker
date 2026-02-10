@@ -344,6 +344,8 @@ type Dashboard struct {
 	TrackedEvents    int64
 	ExcludedEvents   int64
 	TopApps          []SummaryRow
+	ByProject        []SummaryRow
+	ByActivity       []SummaryRow
 	CurrentProject   string
 	CurrentProjectID *int64
 }

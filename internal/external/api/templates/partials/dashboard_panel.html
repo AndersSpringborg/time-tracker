@@ -3,7 +3,7 @@
   <div class="space-y-4">
     <div>
       <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Today</p>
-      <p class="mt-1 text-3xl font-bold text-tt-accent">{{formatDuration .Dashboard.TodayTotalMS}}</p>
+      <p class="mt-1 text-3xl font-bold text-teal-700">{{formatDuration .Dashboard.TodayTotalMS}}</p>
     </div>
     <div class="grid gap-3 sm:grid-cols-2">
       <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
@@ -24,6 +24,35 @@
     <div class="text-sm text-slate-600">Loading collector status...</div>
   </div>
 </div>
+
+<!-- Charts Section -->
+<div class="mt-6 grid gap-6 lg:grid-cols-3">
+  <!-- Big Combined Chart -->
+  <div class="lg:col-span-2 rounded-xl border border-slate-200 bg-white p-4">
+    <h3 class="mb-3 text-base font-semibold text-tt-ink">Today's Time Distribution</h3>
+    <div class="relative h-72">
+      <canvas id="combinedChart"></canvas>
+    </div>
+  </div>
+  
+  <!-- Small Charts Column -->
+  <div class="space-y-4">
+    <div class="rounded-xl border border-slate-200 bg-white p-4">
+      <h3 class="mb-2 text-sm font-semibold text-tt-ink">By Project</h3>
+      <div class="relative h-32">
+        <canvas id="projectChart"></canvas>
+      </div>
+    </div>
+    <div class="rounded-xl border border-slate-200 bg-white p-4">
+      <h3 class="mb-2 text-sm font-semibold text-tt-ink">By Activity</h3>
+      <div class="relative h-32">
+        <canvas id="activityChart"></canvas>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Top Apps Table -->
 <div class="mt-6">
   <h3 class="text-lg font-semibold text-tt-ink">Top Apps</h3>
   <div class="mt-3 overflow-x-auto">
@@ -47,4 +76,153 @@
     </table>
   </div>
 </div>
+
+<!-- Chart.js Initialization -->
+<script>
+(function() {
+  const projectColors = [
+    '#0f766e', '#0891b2', '#7c3aed', '#db2777', '#ea580c',
+    '#16a34a', '#2563eb', '#9333ea', '#e11d48', '#d97706'
+  ];
+  const activityColors = [
+    '#059669', '#0284c7', '#8b5cf6', '#ec4899', '#f97316',
+    '#22c55e', '#3b82f6', '#a855f7', '#f43f5e', '#eab308'
+  ];
+
+  // Project data
+  const projectData = {
+    labels: [{{range $i, $p := .Dashboard.ByProject}}{{if $i}},{{end}}"{{$p.Name}}"{{end}}],
+    values: [{{range $i, $p := .Dashboard.ByProject}}{{if $i}},{{end}}{{$p.TotalMS}}{{end}}]
+  };
+
+  // Activity data
+  const activityData = {
+    labels: [{{range $i, $a := .Dashboard.ByActivity}}{{if $i}},{{end}}"{{$a.Name}}"{{end}}],
+    values: [{{range $i, $a := .Dashboard.ByActivity}}{{if $i}},{{end}}{{$a.TotalMS}}{{end}}]
+  };
+
+  function formatDuration(ms) {
+    if (ms < 60000) return Math.round(ms / 1000) + 's';
+    const mins = Math.floor(ms / 60000);
+    if (mins < 60) return mins + 'm';
+    const hours = Math.floor(mins / 60);
+    const remainMins = mins % 60;
+    return hours + 'h ' + remainMins + 'm';
+  }
+
+  function createDonutChart(canvasId, data, colors, showLegend) {
+    const ctx = document.getElementById(canvasId);
+    if (!ctx || data.labels.length === 0) return;
+
+    new Chart(ctx, {
+      type: 'doughnut',
+      data: {
+        labels: data.labels,
+        datasets: [{
+          data: data.values,
+          backgroundColor: colors.slice(0, data.labels.length),
+          borderWidth: 2,
+          borderColor: '#fff'
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            display: showLegend,
+            position: 'right',
+            labels: {
+              boxWidth: 10,
+              padding: 6,
+              font: { size: 10 }
+            }
+          },
+          tooltip: {
+            callbacks: {
+              label: function(context) {
+                const label = context.label || '';
+                const value = context.raw || 0;
+                const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                const percentage = total > 0 ? Math.round((value / total) * 100) : 0;
+                return label + ': ' + formatDuration(value) + ' (' + percentage + '%)';
+              }
+            }
+          }
+        },
+        cutout: '55%'
+      }
+    });
+  }
+
+  function createCombinedChart(canvasId, projectData, activityData) {
+    const ctx = document.getElementById(canvasId);
+    if (!ctx) return;
+    if (projectData.labels.length === 0 && activityData.labels.length === 0) return;
+
+    // Combine labels with prefixes
+    const combinedLabels = [
+      ...projectData.labels.map(l => 'Project: ' + l),
+      ...activityData.labels.map(l => 'Activity: ' + l)
+    ];
+    const combinedValues = [...projectData.values, ...activityData.values];
+    const combinedColors = [
+      ...projectColors.slice(0, projectData.labels.length),
+      ...activityColors.slice(0, activityData.labels.length)
+    ];
+
+    new Chart(ctx, {
+      type: 'doughnut',
+      data: {
+        labels: combinedLabels,
+        datasets: [{
+          data: combinedValues,
+          backgroundColor: combinedColors,
+          borderWidth: 2,
+          borderColor: '#fff'
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            position: 'right',
+            labels: {
+              boxWidth: 12,
+              padding: 8,
+              font: { size: 11 }
+            }
+          },
+          tooltip: {
+            callbacks: {
+              label: function(context) {
+                const label = context.label || '';
+                const value = context.raw || 0;
+                const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                const percentage = total > 0 ? Math.round((value / total) * 100) : 0;
+                return label + ': ' + formatDuration(value) + ' (' + percentage + '%)';
+              }
+            }
+          }
+        },
+        cutout: '50%'
+      }
+    });
+  }
+
+  // Wait for Chart.js to load
+  function initCharts() {
+    createCombinedChart('combinedChart', projectData, activityData);
+    createDonutChart('projectChart', projectData, projectColors, false);
+    createDonutChart('activityChart', activityData, activityColors, false);
+  }
+
+  if (typeof Chart !== 'undefined') {
+    initCharts();
+  } else {
+    window.addEventListener('load', initCharts);
+  }
+})();
+</script>
 {{end}}
