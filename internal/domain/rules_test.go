@@ -132,6 +132,21 @@ func TestRuleResolveTargetAssignProjectAndActivityByTitle(t *testing.T) {
 	}
 }
 
+func TestRuleDisplayTargetTextExplicitWithoutResolvedNamesUsesUnmapped(t *testing.T) {
+	projectID := int64(10)
+	activityID := int64(100)
+	rule := Rule{
+		ActionType:    RuleActionAssignExplicit,
+		ProjectID:     &projectID,
+		ActivityID:    &activityID,
+		DisplayTarget: "",
+	}
+
+	if got := rule.DisplayTargetText(); got != "Unmapped" {
+		t.Fatalf("expected Unmapped display target, got %q", got)
+	}
+}
+
 func TestMatchEventToRulesWithResolverUsesActionPriority(t *testing.T) {
 	currentProjectID := int64(10)
 	developmentID := int64(100)

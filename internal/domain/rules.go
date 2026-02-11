@@ -149,9 +149,6 @@ func (r Rule) DisplayTargetText() string {
 		}
 		return fmt.Sprintf("%s > %s", r.ActionProjectTitle, r.ActionActivityName)
 	default:
-		if r.ProjectID != nil && r.ActivityID != nil {
-			return "Mapped target"
-		}
 		return "Unmapped"
 	}
 }
