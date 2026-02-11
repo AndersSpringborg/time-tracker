@@ -9,23 +9,23 @@ This guide is for users of the system and explains the concepts you need to oper
 - Collects activity events from your Mac (app + active window title).
 - Stores events locally in DuckDB on your machine.
 - Applies rules to map events to projects and activities.
-- Shows results in Dashboard, Reports, Rules, Suggestions, Projects, and Settings.
+- Uses configured work WiFi patterns to calculate worked hours.
+- Shows results in Dashboard, Reports, Rules, Projects, and Settings.
 
 ## Core concepts
 
 - **Event**: one recorded activity item (for example, "Google Chrome" with a specific tab title).
 - **Rule**: a pattern that maps matching events to a project/activity.
-- **Suggestion**: a proposed rule based on repeated uncategorized behavior.
 - **Project**: a higher-level bucket for your work (customer, internal project, etc.).
 - **Activity**: what you did inside a project (coding, meeting, review, docs, etc.).
-- **Noise filtering**: optional filtering of apps/patterns you do not want included in reports.
+- **Work WiFi**: WiFi SSID pattern(s) used to define worked hours in reports.
 
 ## How data flows
 
 ```mermaid
 flowchart LR
     A[Mac Activity Sensor] --> B[Event Store<br/>DuckDB]
-    B --> C[Rules + Suggestions]
+    B --> C[Rules + Time-Proximity]
     C --> D[Dashboard]
     C --> E[Reports]
     C --> F[Projects]
@@ -72,24 +72,17 @@ sequenceDiagram
 
 1. **Track**: ensure collector is running (`./tracker status`).
 2. **Review**: check Dashboard and Reports.
-3. **Improve mapping**: refine Rules and accept Suggestions.
+3. **Improve mapping**: refine Rules.
 4. **Repeat**: reports get cleaner as rules improve.
 
 ```mermaid
 flowchart LR
     A[Track Activity] --> B[Review Reports]
     B --> C[Add or Adjust Rules]
-    C --> D[Accept Suggestions]
-    D --> B
+    C --> B
 ```
 
 ## Common tasks
-
-### Improve auto-categorization
-
-- Go to **Suggestions**.
-- Accept high-confidence suggestions first.
-- Re-check reports after applying.
 
 ### Fix uncategorized time
 
@@ -97,11 +90,11 @@ flowchart LR
 - Filter groups for a date with uncategorized time.
 - Add a rule from selected events and save draft.
 
-### Keep personal/noisy apps out of reports
+### Set work-hour detection
 
 - Go to **Settings**.
-- Update noise app patterns.
-- Re-open reports to verify filtered totals.
+- Set `work_wifis` patterns for your work site networks.
+- Re-open reports and verify worked totals.
 
 ### Focus work by project
 
