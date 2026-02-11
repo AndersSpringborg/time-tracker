@@ -47,7 +47,6 @@ type pageData struct {
 	PrevReportDate       string
 	NextReportDate       string
 	Config               domain.Settings
-	NoisePatternsText    string
 	WorkWifisText        string
 	Dashboard            domain.Dashboard
 	Report               domain.Report
@@ -1224,9 +1223,6 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		cfg.Enabled = r.Form.Get("enabled") != ""
 		cfg.WeightedBucketMinutes = parseIntDefault(r.Form.Get("weighted_bucket_minutes"), cfg.WeightedBucketMinutes)
 		cfg.WeightedSwitchMinutes = parseIntDefault(r.Form.Get("weighted_switch_minutes"), cfg.WeightedSwitchMinutes)
-		cfg.NoiseBucketMinutes = parseIntDefault(r.Form.Get("noise_bucket_minutes"), cfg.NoiseBucketMinutes)
-		cfg.NoiseSwitchMinutes = parseIntDefault(r.Form.Get("noise_switch_minutes"), cfg.NoiseSwitchMinutes)
-		cfg.NoiseAppPatterns = parseLines(r.Form.Get("noise_app_patterns"))
 		cfg.WorkWifis = parseLines(r.Form.Get("work_wifis"))
 		if _, err := s.app.Settings.Save(r.Context(), contracts.SettingsSaveRequest{Settings: cfg}); err != nil {
 			http.Error(w, err.Error(), 500)
@@ -1241,7 +1237,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := loadRes.Settings
-	pd := pageData{Title: "Settings", Page: "settings", Body: "settings", Flash: r.URL.Query().Get("flash"), Config: cfg, NoisePatternsText: strings.Join(cfg.NoiseAppPatterns, "\n"), WorkWifisText: strings.Join(cfg.WorkWifis, "\n")}
+	pd := pageData{Title: "Settings", Page: "settings", Body: "settings", Flash: r.URL.Query().Get("flash"), Config: cfg, WorkWifisText: strings.Join(cfg.WorkWifis, "\n")}
 	s.render(w, "layout", pd)
 }
 

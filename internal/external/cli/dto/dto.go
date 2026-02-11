@@ -78,9 +78,6 @@ type Settings struct {
 	Enabled               bool     `json:"enabled" yaml:"enabled"`
 	WeightedBucketMinutes int64    `json:"weighted_bucket_minutes" yaml:"weighted_bucket_minutes"`
 	WeightedSwitchMinutes int64    `json:"weighted_switch_minutes" yaml:"weighted_switch_minutes"`
-	NoiseAppPatterns      []string `json:"noise_app_patterns" yaml:"noise_app_patterns"`
-	NoiseBucketMinutes    int64    `json:"noise_bucket_minutes" yaml:"noise_bucket_minutes"`
-	NoiseSwitchMinutes    int64    `json:"noise_switch_minutes" yaml:"noise_switch_minutes"`
 }
 
 type GroupedEvent struct {
@@ -96,11 +93,13 @@ type SummaryRow struct {
 }
 
 type Report struct {
-	Range          string       `json:"range" yaml:"range"`
-	TotalMS        int64        `json:"total_ms" yaml:"total_ms"`
-	ExcludedEvents int          `json:"excluded_events" yaml:"excluded_events"`
-	ByProject      []SummaryRow `json:"by_project" yaml:"by_project"`
-	ByApp          []SummaryRow `json:"by_app" yaml:"by_app"`
+	Range       string       `json:"range" yaml:"range"`
+	TotalMS     int64        `json:"total_ms" yaml:"total_ms"`
+	WorkMS      int64        `json:"work_ms" yaml:"work_ms"`
+	TotalEvents int64        `json:"total_events" yaml:"total_events"`
+	WorkEvents  int64        `json:"work_events" yaml:"work_events"`
+	ByProject   []SummaryRow `json:"by_project" yaml:"by_project"`
+	ByApp       []SummaryRow `json:"by_app" yaml:"by_app"`
 }
 
 func SchemaFromContract(in contracts.HelpCommandSchema) CommandSchema {
@@ -200,9 +199,6 @@ func SettingsFromDomain(in domain.Settings) Settings {
 		Enabled:               in.Enabled,
 		WeightedBucketMinutes: in.WeightedBucketMinutes,
 		WeightedSwitchMinutes: in.WeightedSwitchMinutes,
-		NoiseAppPatterns:      in.NoiseAppPatterns,
-		NoiseBucketMinutes:    in.NoiseBucketMinutes,
-		NoiseSwitchMinutes:    in.NoiseSwitchMinutes,
 	}
 }
 
@@ -228,10 +224,12 @@ func ReportFromDomain(in domain.Report) Report {
 		return out
 	}
 	return Report{
-		Range:          in.Range,
-		TotalMS:        in.TotalMS,
-		ExcludedEvents: in.ExcludedEvents,
-		ByProject:      toSummary(in.ByProject),
-		ByApp:          toSummary(in.ByApp),
+		Range:       in.Range,
+		TotalMS:     in.TotalMS,
+		WorkMS:      in.WorkMS,
+		TotalEvents: in.TotalEvents,
+		WorkEvents:  in.WorkEvents,
+		ByProject:   toSummary(in.ByProject),
+		ByApp:       toSummary(in.ByApp),
 	}
 }

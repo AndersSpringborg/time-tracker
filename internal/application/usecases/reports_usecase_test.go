@@ -149,13 +149,13 @@ func TestReportsUsecaseReportBuildsDetailedMetrics(t *testing.T) {
 	activityID := int64(100)
 	repo := &fakeReportsRepo{
 		events: []domain.Event{
-			{ID: 1, TimestampMS: 1, DurationMS: 60_000, AppName: "Code", WindowTitle: "main.go", ProjectID: &projectID, ActivityID: &activityID, ProjectTitle: "project a"},
-			{ID: 2, TimestampMS: 2, DurationMS: 30_000, AppName: "Slack", WindowTitle: "chat"},
-			{ID: 3, TimestampMS: 3, DurationMS: 15_000, AppName: "Arc", WindowTitle: "daily standup"},
+			{ID: 1, TimestampMS: 1, DurationMS: 60_000, AppName: "Code", WindowTitle: "main.go", WifiSSID: "Office", ProjectID: &projectID, ActivityID: &activityID, ProjectTitle: "project a"},
+			{ID: 2, TimestampMS: 2, DurationMS: 30_000, AppName: "Slack", WindowTitle: "chat", WifiSSID: "Home"},
+			{ID: 3, TimestampMS: 3, DurationMS: 15_000, AppName: "Arc", WindowTitle: "daily standup", WifiSSID: "Office"},
 		},
 	}
 	uc := NewReportsUsecase(repo, fakeReportsProjectsRepo{}, fakeReportsSettingsRepoWithCfg{
-		cfg: domain.Settings{NoiseAppPatterns: []string{"Slack"}},
+		cfg: domain.Settings{WorkWifis: []string{"Office"}},
 	})
 
 	res, err := uc.Report(context.Background(), contracts.ReportsBuildRequest{RangeKey: "today"})
@@ -166,11 +166,11 @@ func TestReportsUsecaseReportBuildsDetailedMetrics(t *testing.T) {
 	if report.TotalEvents != 3 {
 		t.Fatalf("expected total events 3, got %d", report.TotalEvents)
 	}
-	if report.ExcludedEvents != 1 {
-		t.Fatalf("expected excluded events 1, got %d", report.ExcludedEvents)
+	if report.WorkEvents != 2 {
+		t.Fatalf("expected work events 2, got %d", report.WorkEvents)
 	}
-	if report.IncludedEvents != 2 {
-		t.Fatalf("expected included events 2, got %d", report.IncludedEvents)
+	if report.WorkMS != 75_000 {
+		t.Fatalf("unexpected work duration %d", report.WorkMS)
 	}
 	if report.MappedEvents != 1 || report.UnmappedEvents != 1 {
 		t.Fatalf("expected mapped/unmapped 1/1, got %d/%d", report.MappedEvents, report.UnmappedEvents)

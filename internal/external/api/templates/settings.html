@@ -4,7 +4,7 @@
     <div class="flex flex-wrap items-start justify-between gap-4">
       <div>
         <h1 class="text-2xl font-semibold text-tt-ink">Settings</h1>
-        <p class="mt-1 max-w-2xl text-sm text-slate-600">Configure tracking behavior, noise filtering, and work context detection.</p>
+        <p class="mt-1 max-w-2xl text-sm text-slate-600">Configure tracking behavior, time proximity, and work context detection.</p>
       </div>
     </div>
   </header>
@@ -33,25 +33,6 @@
           <label class="flex flex-col gap-1">
             <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Weighted Switch Minutes</span>
             <input type="number" name="weighted_switch_minutes" value="{{.Config.WeightedSwitchMinutes}}" class="rounded-lg border-slate-300 text-sm">
-          </label>
-        </div>
-      </div>
-
-      <div class="border-t border-slate-200 pt-6">
-        <h3 class="mb-4 text-base font-semibold text-tt-ink">Noise Filtering</h3>
-        <div class="grid gap-4 md:grid-cols-2">
-          <label class="flex flex-col gap-1">
-            <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Noise Bucket Minutes</span>
-            <input type="number" name="noise_bucket_minutes" value="{{.Config.NoiseBucketMinutes}}" class="rounded-lg border-slate-300 text-sm">
-          </label>
-          <label class="flex flex-col gap-1">
-            <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Noise Switch Minutes</span>
-            <input type="number" name="noise_switch_minutes" value="{{.Config.NoiseSwitchMinutes}}" class="rounded-lg border-slate-300 text-sm">
-          </label>
-          <label class="flex flex-col gap-1 md:col-span-2">
-            <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Noise App Patterns (one per line)</span>
-            <textarea name="noise_app_patterns" rows="5" class="rounded-lg border-slate-300 text-sm font-mono">{{.NoisePatternsText}}</textarea>
-            <span class="text-xs text-slate-500">Regex patterns to exclude apps from tracking</span>
           </label>
         </div>
       </div>

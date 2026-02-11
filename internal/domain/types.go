@@ -6,6 +6,7 @@ type Event struct {
 	DurationMS   int64
 	AppName      string
 	WindowTitle  string
+	WifiSSID     string
 	ProjectID    *int64
 	ActivityID   *int64
 	ProjectTitle string
@@ -292,9 +293,6 @@ type Settings struct {
 	Enabled               bool
 	WeightedBucketMinutes int64
 	WeightedSwitchMinutes int64
-	NoiseAppPatterns      []string
-	NoiseBucketMinutes    int64
-	NoiseSwitchMinutes    int64
 }
 
 type Project struct {
@@ -332,13 +330,13 @@ type ProjectDetail struct {
 type Report struct {
 	Range          string
 	TotalMS        int64
+	WorkMS         int64
 	TotalEvents    int64
-	IncludedEvents int64
+	WorkEvents     int64
 	MappedEvents   int64
 	UnmappedEvents int64
 	MappedMS       int64
 	UnmappedMS     int64
-	ExcludedEvents int
 	ByProject      []SummaryRow
 	ByActivity     []SummaryRow
 	ByApp          []SummaryRow
@@ -348,8 +346,9 @@ type Report struct {
 
 type Dashboard struct {
 	TodayTotalMS     int64
+	WorkTodayMS      int64
 	TrackedEvents    int64
-	ExcludedEvents   int64
+	WorkEvents       int64
 	TopApps          []SummaryRow
 	ByProject        []SummaryRow
 	ByActivity       []SummaryRow

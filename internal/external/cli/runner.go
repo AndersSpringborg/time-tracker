@@ -1081,7 +1081,7 @@ func (r *Runner) runReports(ctx context.Context, args []string, stdout, stderr i
 	}
 	rep := repRes.Report
 	if *format == "text" {
-		fmt.Fprintf(stdout, "range=%s total=%s excluded=%d\n", rep.Range, domain.FormatDuration(rep.TotalMS), rep.ExcludedEvents)
+		fmt.Fprintf(stdout, "range=%s total=%s worked=%s work_events=%d total_events=%d\n", rep.Range, domain.FormatDuration(rep.TotalMS), domain.FormatDuration(rep.WorkMS), rep.WorkEvents, rep.TotalEvents)
 		fmt.Fprintln(stdout, "By project:")
 		for _, p := range rep.ByProject {
 			fmt.Fprintf(stdout, "  %s: %s\n", p.Name, domain.FormatDuration(p.TotalMS))
@@ -1165,12 +1165,6 @@ func printSettingValue(stdout, stderr io.Writer, cfg domain.Settings, key string
 		fmt.Fprintln(stdout, cfg.WeightedBucketMinutes)
 	case "weighted_switch_minutes":
 		fmt.Fprintln(stdout, cfg.WeightedSwitchMinutes)
-	case "noise_bucket_minutes":
-		fmt.Fprintln(stdout, cfg.NoiseBucketMinutes)
-	case "noise_switch_minutes":
-		fmt.Fprintln(stdout, cfg.NoiseSwitchMinutes)
-	case "noise_app_patterns":
-		fmt.Fprintln(stdout, strings.Join(cfg.NoiseAppPatterns, ","))
 	case "work_wifis":
 		fmt.Fprintln(stdout, strings.Join(cfg.WorkWifis, ","))
 	default:
@@ -1196,20 +1190,6 @@ func setSetting(cfg *domain.Settings, key, value string) error {
 			return err
 		}
 		cfg.WeightedSwitchMinutes = v
-	case "noise_bucket_minutes":
-		v, err := strconv.ParseInt(value, 10, 64)
-		if err != nil {
-			return err
-		}
-		cfg.NoiseBucketMinutes = v
-	case "noise_switch_minutes":
-		v, err := strconv.ParseInt(value, 10, 64)
-		if err != nil {
-			return err
-		}
-		cfg.NoiseSwitchMinutes = v
-	case "noise_app_patterns":
-		cfg.NoiseAppPatterns = splitList(value)
 	case "work_wifis":
 		cfg.WorkWifis = splitList(value)
 	default:
@@ -1226,12 +1206,6 @@ func unsetSetting(cfg *domain.Settings, def domain.Settings, key string) error {
 		cfg.WeightedBucketMinutes = def.WeightedBucketMinutes
 	case "weighted_switch_minutes":
 		cfg.WeightedSwitchMinutes = def.WeightedSwitchMinutes
-	case "noise_bucket_minutes":
-		cfg.NoiseBucketMinutes = def.NoiseBucketMinutes
-	case "noise_switch_minutes":
-		cfg.NoiseSwitchMinutes = def.NoiseSwitchMinutes
-	case "noise_app_patterns":
-		cfg.NoiseAppPatterns = def.NoiseAppPatterns
 	case "work_wifis":
 		cfg.WorkWifis = def.WorkWifis
 	default:
@@ -1429,7 +1403,7 @@ Commands:
   doctor         Print local paths, collector status, and known startup hints
   rules          Manage rules and auto-categorization suggestions
   projects       Manage projects, activities, and current project context
-  reports        Show report summaries (noise-filtered)
+  reports        Show report summaries and WiFi work-hours
   settings       Manage configuration key-values
   review         Review/match/discard unmapped events
   help           Show help (supports --format json|yaml)

@@ -10,28 +10,16 @@ import (
 	"time-tracker/internal/domain"
 )
 
-var defaultNoisePatterns = []string{
-	"ControlCenter*",
-	"NotificationCenter*",
-	"Spotlight*",
-	"SystemUIServer*",
-}
-
 type Repository struct{}
 
 func New() *Repository { return &Repository{} }
 
 func defaultSettings() domain.Settings {
-	patterns := make([]string, len(defaultNoisePatterns))
-	copy(patterns, defaultNoisePatterns)
 	return domain.Settings{
 		WorkWifis:             []string{},
 		Enabled:               true,
 		WeightedBucketMinutes: 5,
 		WeightedSwitchMinutes: 10,
-		NoiseAppPatterns:      patterns,
-		NoiseBucketMinutes:    3,
-		NoiseSwitchMinutes:    8,
 	}
 }
 
@@ -44,17 +32,6 @@ func normalize(cfg domain.Settings) domain.Settings {
 	}
 	if cfg.WeightedSwitchMinutes <= 0 {
 		cfg.WeightedSwitchMinutes = 10
-	}
-	if cfg.NoiseBucketMinutes <= 0 {
-		cfg.NoiseBucketMinutes = 3
-	}
-	if cfg.NoiseSwitchMinutes <= 0 {
-		cfg.NoiseSwitchMinutes = 8
-	}
-	if len(cfg.NoiseAppPatterns) == 0 {
-		patterns := make([]string, len(defaultNoisePatterns))
-		copy(patterns, defaultNoisePatterns)
-		cfg.NoiseAppPatterns = patterns
 	}
 	return cfg
 }

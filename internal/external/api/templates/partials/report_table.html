@@ -14,6 +14,10 @@
     <p class="mt-1 text-lg font-semibold text-teal-700">{{formatDuration .Report.TotalMS}}</p>
   </div>
   <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+    <p class="text-xs uppercase tracking-wide text-slate-500">Worked (Work WiFi)</p>
+    <p class="mt-1 text-lg font-semibold text-emerald-700">{{formatDuration .Report.WorkMS}}</p>
+  </div>
+  <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
     <p class="text-xs uppercase tracking-wide text-slate-500">Mapped</p>
     <p class="mt-1 text-lg font-semibold text-emerald-600">{{.Report.MappedEvents}} events</p>
     <p class="text-sm text-slate-600">{{formatDuration .Report.MappedMS}}</p>
@@ -27,8 +31,7 @@
 
 <div class="mb-6 flex flex-wrap gap-4 text-sm text-slate-600">
   <span>Total events: <strong class="text-tt-ink">{{.Report.TotalEvents}}</strong></span>
-  <span>Included: <strong class="text-tt-ink">{{.Report.IncludedEvents}}</strong></span>
-  <span class="text-slate-500">Excluded noisy: {{.Report.ExcludedEvents}}</span>
+  <span>Work events: <strong class="text-tt-ink">{{.Report.WorkEvents}}</strong></span>
 </div>
 
 <!-- Mapped Events Details (Expandable) -->

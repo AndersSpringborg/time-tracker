@@ -106,6 +106,7 @@ func DTOToDomain(dto EventDTO) domain.Event {
 		DurationMS:  dto.DurationMS,
 		AppName:     dto.AppName,
 		WindowTitle: dto.WindowTitle,
+		WifiSSID:    dto.WifiSSID,
 	}
 	if dto.HasProjectID {
 		projectID := dto.ProjectID

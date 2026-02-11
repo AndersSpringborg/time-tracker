@@ -807,6 +807,7 @@ SELECT
   e.duration_ms,
   e.app_name,
   e.window_title,
+  COALESCE(e.wifi_ssid, ''),
   e.project_id,
   e.activity_id,
   COALESCE(p.title, '') AS project_title,
@@ -826,7 +827,7 @@ ORDER BY e.timestamp_ms ASC
 	out := make([]domain.Event, 0)
 	for rows.Next() {
 		var event domain.Event
-		if err := rows.Scan(&event.ID, &event.TimestampMS, &event.DurationMS, &event.AppName, &event.WindowTitle, &event.ProjectID, &event.ActivityID, &event.ProjectTitle, &event.ActivityName); err != nil {
+		if err := rows.Scan(&event.ID, &event.TimestampMS, &event.DurationMS, &event.AppName, &event.WindowTitle, &event.WifiSSID, &event.ProjectID, &event.ActivityID, &event.ProjectTitle, &event.ActivityName); err != nil {
 			return nil, err
 		}
 		out = append(out, event)

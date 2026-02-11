@@ -34,7 +34,7 @@ func (u *ReportsUsecase) Dashboard(ctx context.Context, _ contracts.ReportsDashb
 	if err != nil {
 		return contracts.ReportsDashboardResponse{}, err
 	}
-	mask := domain.BuildNoiseMask(items, cfg.NoiseAppPatterns, cfg.NoiseBucketMinutes, cfg.NoiseSwitchMinutes)
+	workMask := buildWorkMask(items, cfg.WorkWifis)
 
 	out := domain.Dashboard{CurrentProject: curName, CurrentProjectID: curID}
 	for i, e := range items {
@@ -42,23 +42,23 @@ func (u *ReportsUsecase) Dashboard(ctx context.Context, _ contracts.ReportsDashb
 			continue
 		}
 		out.TrackedEvents++
-		if mask[i] {
-			out.ExcludedEvents++
-			continue
-		}
 		out.TodayTotalMS += e.DurationMS
+		if workMask[i] {
+			out.WorkEvents++
+			out.WorkTodayMS += e.DurationMS
+		}
 	}
-	out.TopApps = summarize(items, mask, func(e domain.Event) string { return e.AppName })
+	out.TopApps = summarize(items, workMask, func(e domain.Event) string { return e.AppName })
 	if len(out.TopApps) > 8 {
 		out.TopApps = out.TopApps[:8]
 	}
-	out.ByProject = summarize(items, mask, func(e domain.Event) string {
+	out.ByProject = summarize(items, workMask, func(e domain.Event) string {
 		if strings.TrimSpace(e.ProjectTitle) == "" {
 			return "Unmapped"
 		}
 		return e.ProjectTitle
 	})
-	out.ByActivity = summarize(items, mask, func(e domain.Event) string {
+	out.ByActivity = summarize(items, workMask, func(e domain.Event) string {
 		if strings.TrimSpace(e.ActivityName) == "" {
 			return "Unmapped"
 		}
@@ -78,7 +78,7 @@ func (u *ReportsUsecase) Report(ctx context.Context, req contracts.ReportsBuildR
 	if err != nil {
 		return contracts.ReportsBuildResponse{}, err
 	}
-	mask := domain.BuildNoiseMask(items, cfg.NoiseAppPatterns, cfg.NoiseBucketMinutes, cfg.NoiseSwitchMinutes)
+	workMask := buildWorkMask(items, cfg.WorkWifis)
 
 	out := domain.Report{Range: rangeKey}
 	for i, e := range items {
@@ -86,12 +86,12 @@ func (u *ReportsUsecase) Report(ctx context.Context, req contracts.ReportsBuildR
 			continue
 		}
 		out.TotalEvents++
-		if mask[i] {
-			out.ExcludedEvents++
+		out.TotalMS += e.DurationMS
+		if !workMask[i] {
 			continue
 		}
-		out.IncludedEvents++
-		out.TotalMS += e.DurationMS
+		out.WorkEvents++
+		out.WorkMS += e.DurationMS
 		if e.ProjectID != nil && e.ActivityID != nil {
 			out.MappedEvents++
 			out.MappedMS += e.DurationMS
@@ -100,20 +100,20 @@ func (u *ReportsUsecase) Report(ctx context.Context, req contracts.ReportsBuildR
 			out.UnmappedMS += e.DurationMS
 		}
 	}
-	out.ByProject = summarize(items, mask, func(e domain.Event) string {
+	out.ByProject = summarize(items, workMask, func(e domain.Event) string {
 		if strings.TrimSpace(e.ProjectTitle) == "" {
 			return "Unmapped"
 		}
 		return e.ProjectTitle
 	})
-	out.ByActivity = summarize(items, mask, func(e domain.Event) string {
+	out.ByActivity = summarize(items, workMask, func(e domain.Event) string {
 		if strings.TrimSpace(e.ActivityName) == "" {
 			return "Unmapped"
 		}
 		return e.ActivityName
 	})
-	out.ByApp = summarize(items, mask, func(e domain.Event) string { return e.AppName })
-	out.ByWindow = summarize(items, mask, func(e domain.Event) string {
+	out.ByApp = summarize(items, workMask, func(e domain.Event) string { return e.AppName })
+	out.ByWindow = summarize(items, workMask, func(e domain.Event) string {
 		app := strings.TrimSpace(e.AppName)
 		if app == "" {
 			app = "Unknown App"
@@ -129,7 +129,7 @@ func (u *ReportsUsecase) Report(ctx context.Context, req contracts.ReportsBuildR
 	}
 
 	// Build mapped details: project -> activity -> events
-	out.MappedDetails = buildMappedDetails(items, mask)
+	out.MappedDetails = buildMappedDetails(items, workMask)
 
 	return contracts.ReportsBuildResponse{Report: out}, nil
 }
@@ -148,10 +148,10 @@ func shortenTitle(s string, max int) string {
 	return string(runes[:max-3]) + "..."
 }
 
-func summarize(events []domain.Event, excluded []bool, groupBy func(domain.Event) string) []domain.SummaryRow {
+func summarize(events []domain.Event, include []bool, groupBy func(domain.Event) string) []domain.SummaryRow {
 	acc := map[string]int64{}
 	for i, e := range events {
-		if excluded[i] || e.DurationMS <= 0 {
+		if !include[i] || e.DurationMS <= 0 {
 			continue
 		}
 		k := strings.TrimSpace(groupBy(e))
@@ -173,9 +173,17 @@ func summarize(events []domain.Event, excluded []bool, groupBy func(domain.Event
 	return out
 }
 
+func buildWorkMask(events []domain.Event, workWifis []string) []bool {
+	mask := make([]bool, len(events))
+	for i, e := range events {
+		mask[i] = domain.IsWorkWifi(e.WifiSSID, workWifis)
+	}
+	return mask
+}
+
 // buildMappedDetails creates a hierarchical structure of project -> activity -> events
 // for mapped events only (events with both project and activity assigned)
-func buildMappedDetails(events []domain.Event, excluded []bool) []domain.ProjectDetail {
+func buildMappedDetails(events []domain.Event, include []bool) []domain.ProjectDetail {
 	// Key: projectID -> activityID -> events
 	type activityKey struct {
 		projectID  int64
@@ -186,7 +194,7 @@ func buildMappedDetails(events []domain.Event, excluded []bool) []domain.Project
 	activityMap := make(map[activityKey]*domain.ActivityDetail)
 
 	for i, e := range events {
-		if excluded[i] || e.DurationMS <= 0 {
+		if !include[i] || e.DurationMS <= 0 {
 			continue
 		}
 		// Only include mapped events

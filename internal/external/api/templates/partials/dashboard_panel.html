@@ -2,8 +2,12 @@
 <div class="grid gap-6 lg:grid-cols-2">
   <div class="space-y-4">
     <div>
-      <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Today</p>
+      <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Total Tracked Today</p>
       <p class="mt-1 text-3xl font-bold text-teal-700">{{formatDuration .Dashboard.TodayTotalMS}}</p>
+    </div>
+    <div>
+      <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Worked Today (Work WiFi)</p>
+      <p class="mt-1 text-3xl font-bold text-emerald-700">{{formatDuration .Dashboard.WorkTodayMS}}</p>
     </div>
     <div class="grid gap-3 sm:grid-cols-2">
       <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
@@ -11,8 +15,8 @@
         <p class="mt-1 text-xl font-semibold text-tt-ink">{{.Dashboard.TrackedEvents}}</p>
       </div>
       <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
-        <p class="text-xs uppercase tracking-wide text-slate-500">Excluded as Noise</p>
-        <p class="mt-1 text-xl font-semibold text-tt-ink">{{.Dashboard.ExcludedEvents}}</p>
+        <p class="text-xs uppercase tracking-wide text-slate-500">Work Events</p>
+        <p class="mt-1 text-xl font-semibold text-tt-ink">{{.Dashboard.WorkEvents}}</p>
       </div>
     </div>
     <div class="rounded-xl border border-teal-200 bg-teal-50 px-4 py-3">
