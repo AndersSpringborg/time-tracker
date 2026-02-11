@@ -61,7 +61,7 @@ fn printUsage() void {
         \\Examples:
         \\  tt daemon
         \\  ./tracker help
-        \\  ./tracker rules suggest --format json
+        \\  ./tracker rules apply-rules --dry-run --format json
         \\  ./tracker reports --range week --format json
         \\  ./tracker review groups --format json
         \\ 
