@@ -10,6 +10,7 @@ import (
 )
 
 const matchAnyRegex = "(?i)^.*$"
+const defaultContextCarryMS int64 = 10 * 60 * 1000
 
 func NormalizeRuleInput(in RuleInput) RuleInput {
 	if in.Priority == 0 {
@@ -151,7 +152,7 @@ func (r Rule) DisplayTargetText() string {
 		return fmt.Sprintf("%s > %s", r.ActionProjectTitle, r.ActionActivityName)
 	default:
 		if r.ProjectID != nil && r.ActivityID != nil {
-			return fmt.Sprintf("%d > %d", *r.ProjectID, *r.ActivityID)
+			return "Mapped target"
 		}
 		return "Unmapped"
 	}
@@ -269,9 +270,17 @@ func DefaultFollowContextAppRules() []RuleInput {
 }
 
 func DefaultRules() []RuleInput {
-	defaults := make([]RuleInput, 0, len(DefaultBrowserRules())+len(DefaultFollowContextAppRules()))
+	defaults := make([]RuleInput, 0, len(DefaultBrowserRules())+len(DefaultFollowContextAppRules())+1)
 	defaults = append(defaults, DefaultBrowserRules()...)
 	defaults = append(defaults, DefaultFollowContextAppRules()...)
+	defaults = append(defaults, RuleInput{
+		RuleKey:      "default.fallback.follow_current_context",
+		Source:       RuleSourceDefault,
+		Priority:     1,
+		AppPattern:   matchAnyRegex,
+		TitlePattern: matchAnyRegex,
+		ActionType:   RuleActionFollowCurrentContext,
+	})
 	return defaults
 }
 
@@ -481,10 +490,19 @@ func MatchEventToRulesWithResolver(events []Event, rules []Rule, currentProjectI
 	updates := make([]EventMappingUpdate, 0)
 	var prevProjectID *int64
 	var prevActivityID *int64
+	var prevEventEndMS int64
 	skipped := 0
 	for _, event := range ordered {
+		if prevEventEndMS > 0 {
+			if gap := event.TimestampMS - prevEventEndMS; gap > defaultContextCarryMS {
+				prevProjectID = nil
+				prevActivityID = nil
+			}
+		}
+
 		rule := findFirstMatchingRule(sortedRules, event, currentProjectID)
 		if rule == nil {
+			prevEventEndMS = maxInt64(prevEventEndMS, event.TimestampMS+maxInt64(event.DurationMS, 0))
 			continue
 		}
 		target, err := rule.ResolveTarget(RuleContext{
@@ -508,8 +526,16 @@ func MatchEventToRulesWithResolver(events []Event, rules []Rule, currentProjectI
 		activityID := target.ActivityID
 		prevProjectID = &projectID
 		prevActivityID = &activityID
+		prevEventEndMS = maxInt64(prevEventEndMS, event.TimestampMS+maxInt64(event.DurationMS, 0))
 	}
 	return updates, skipped, nil
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func MatchSuggestionToEvents(events []Event, suggestion RuleSuggestion) []EventMappingUpdate {

@@ -228,14 +228,53 @@ func TestDefaultFollowContextAppRulesIncludesExpectedKeys(t *testing.T) {
 
 func TestDefaultRulesCombinesBrowserAndAppDefaults(t *testing.T) {
 	defaults := DefaultRules()
-	if len(defaults) != len(DefaultBrowserRules())+len(DefaultFollowContextAppRules()) {
+	if len(defaults) != len(DefaultBrowserRules())+len(DefaultFollowContextAppRules())+1 {
 		t.Fatalf("unexpected total defaults count: %d", len(defaults))
 	}
 	if defaults[0].RuleKey != "default.browser.project_a_development" {
 		t.Fatalf("expected browser defaults to come first")
 	}
-	if defaults[len(defaults)-1].RuleKey != "default.app.follow_current_context.notion" {
+	if defaults[len(defaults)-1].RuleKey != "default.fallback.follow_current_context" {
 		t.Fatalf("unexpected last combined key: %s", defaults[len(defaults)-1].RuleKey)
+	}
+}
+
+func TestMatchEventToRulesWithResolverResetsPreviousContextAfterLongGap(t *testing.T) {
+	projectID := int64(10)
+	activityID := int64(100)
+	rules := []Rule{
+		{
+			Priority:     200,
+			AppPattern:   "(?i)^Code$",
+			TitlePattern: matchAnyRegex,
+			ProjectID:    &projectID,
+			ActivityID:   &activityID,
+			ActionType:   RuleActionAssignExplicit,
+		},
+		{
+			Priority:     100,
+			AppPattern:   "(?i)^Slack$",
+			TitlePattern: matchAnyRegex,
+			ActionType:   RuleActionFollowCurrentContext,
+		},
+	}
+	events := []Event{
+		{ID: 1, AppName: "Code", WindowTitle: "main.go", TimestampMS: 0, DurationMS: 60_000},
+		{ID: 2, AppName: "Slack", WindowTitle: "standup", TimestampMS: 12 * 60 * 1000, DurationMS: 60_000},
+	}
+
+	updates, skipped, err := MatchEventToRulesWithResolver(events, rules, nil, nil)
+	if err != nil {
+		t.Fatalf("match returned error: %v", err)
+	}
+	if skipped != 1 {
+		t.Fatalf("expected second event to be skipped after context timeout, got %d skipped", skipped)
+	}
+	if len(updates) != 1 {
+		t.Fatalf("expected one mapped update, got %d", len(updates))
+	}
+	if updates[0].EventID != 1 {
+		t.Fatalf("expected first event to map, got event id %d", updates[0].EventID)
 	}
 }
 
