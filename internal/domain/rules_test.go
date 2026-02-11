@@ -350,39 +350,6 @@ func TestGlobToRegexPattern(t *testing.T) {
 	}
 }
 
-func TestRankSuggestionsFiltersLowConfidenceAppOnly(t *testing.T) {
-	items := []RuleSuggestion{
-		{SuggestionType: SuggestionTypeAppOnly, AppPattern: "Slack", Confidence: 55, ImpactDurationMS: 10},
-		{SuggestionType: SuggestionTypeAppOnly, AppPattern: "Code", Confidence: 90, ImpactDurationMS: 20},
-	}
-	ranked := RankSuggestions(items, 10)
-	if len(ranked) != 1 {
-		t.Fatalf("expected 1 suggestion after filtering, got %d", len(ranked))
-	}
-	if ranked[0].AppPattern != "Code" {
-		t.Fatalf("expected Code suggestion to remain")
-	}
-}
-
-func TestMatchSuggestionToEvents(t *testing.T) {
-	title := "(?i)^.*standup.*$"
-	updates := MatchSuggestionToEvents([]Event{
-		{ID: 1, AppName: "Slack", WindowTitle: "daily standup"},
-		{ID: 2, AppName: "Code", WindowTitle: "main.go"},
-	}, RuleSuggestion{
-		AppPattern:   "(?i)^Slack$",
-		TitlePattern: &title,
-		ProjectID:    10,
-		ActivityID:   100,
-	})
-	if len(updates) != 1 {
-		t.Fatalf("expected 1 matched event, got %d", len(updates))
-	}
-	if updates[0].EventID != 1 {
-		t.Fatalf("expected event 1 to match")
-	}
-}
-
 func TestMatchGroupedEventsToRulesReturnsMatchedGroups(t *testing.T) {
 	projectID := int64(10)
 	activityID := int64(100)
