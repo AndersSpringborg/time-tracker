@@ -16,15 +16,7 @@ type RulesRepository interface {
 	ListUnmappedEvents(ctx context.Context, date *string, minDurationMS int64) ([]domain.Event, error)
 	ListUnmappedDates(ctx context.Context, minDurationMS int64) ([]string, error)
 	ListGroupedUnmappedEvents(ctx context.Context, date string, minDurationMS int64) ([]domain.GroupedEvent, error)
-	ListBootstrapGroups(ctx context.Context, q domain.SuggestionQuery) ([]domain.GroupedEvent, error)
-	ListAppSuggestions(ctx context.Context, q domain.SuggestionQuery) ([]domain.RuleSuggestion, error)
-	ListTitleSuggestions(ctx context.Context, q domain.SuggestionQuery) ([]domain.RuleSuggestion, error)
 	ApplyEventMappings(ctx context.Context, updates []domain.EventMappingUpdate, manuallyMapped bool) (int64, error)
-	MapEventsByGroupWithLabel(ctx context.Context, date, appName, windowTitle string, projectID, activityID int64, labelSource string) (int64, error)
-	RecordSuggestionFeedback(ctx context.Context, in domain.SuggestionFeedback) error
-	RecordSuggestionRun(ctx context.Context, in domain.SuggestionRun) error
-	CountMappedEvents(ctx context.Context) (int64, error)
-	CountActivities(ctx context.Context) (int64, error)
 	CurrentProjectID(ctx context.Context) (*int64, error)
 	FindProjectIDByTitle(ctx context.Context, title string) (*int64, error)
 	FindActivityIDByTitle(ctx context.Context, projectID int64, title string) (*int64, error)
