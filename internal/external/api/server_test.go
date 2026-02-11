@@ -15,7 +15,9 @@ import (
 	"time-tracker/internal/domain"
 )
 
-type fakeRulesRepo struct{}
+type fakeRulesRepo struct {
+	grouped []domain.GroupedEvent
+}
 
 func (f *fakeRulesRepo) ListRules(context.Context) ([]domain.Rule, error)          { return nil, nil }
 func (f *fakeRulesRepo) AddRule(context.Context, domain.RuleInput) (int64, error)  { return 1, nil }
@@ -31,7 +33,7 @@ func (f *fakeRulesRepo) ListUnmappedDates(context.Context, int64) ([]string, err
 	return nil, nil
 }
 func (f *fakeRulesRepo) ListGroupedUnmappedEvents(context.Context, string, int64) ([]domain.GroupedEvent, error) {
-	return nil, nil
+	return f.grouped, nil
 }
 func (f *fakeRulesRepo) ApplyEventMappings(context.Context, []domain.EventMappingUpdate, bool) (int64, error) {
 	return 0, nil
@@ -67,6 +69,7 @@ func (f *fakeReportsRepoForAPI) ListReportEvents(context.Context, string, *strin
 			DurationMS:   60_000,
 			AppName:      "Code",
 			WindowTitle:  "main.go",
+			WifiSSID:     "Office",
 			ProjectID:    &projectID,
 			ActivityID:   &activityID,
 			ProjectTitle: "project a",
@@ -77,6 +80,7 @@ func (f *fakeReportsRepoForAPI) ListReportEvents(context.Context, string, *strin
 			DurationMS:  30_000,
 			AppName:     "Arc",
 			WindowTitle: "Daily standup",
+			WifiSSID:    "Home",
 		},
 	}, nil
 }
@@ -308,6 +312,9 @@ func TestRulesPartialRendersDraftActions(t *testing.T) {
 	if strings.Contains(body, "Project ID") {
 		t.Fatalf("expected rules editor not to render project id field")
 	}
+	if !strings.Contains(body, "WiFi") {
+		t.Fatalf("expected wifi column in rules editor")
+	}
 }
 
 func TestReportsPageRendersDayNavigationControls(t *testing.T) {
@@ -363,6 +370,9 @@ func TestReportsPartialShowsDateContext(t *testing.T) {
 	}
 	if !strings.Contains(body, "Top Window Titles") {
 		t.Fatalf("expected detailed windows table in reports partial")
+	}
+	if !strings.Contains(body, "By WiFi") {
+		t.Fatalf("expected wifi summary table in reports partial")
 	}
 }
 
@@ -420,9 +430,14 @@ func TestReportsApplyRulesRendersSummary(t *testing.T) {
 }
 
 func TestReportsApplyRulesPreviewRendersMatchedGroups(t *testing.T) {
+	rulesRepo := &fakeRulesRepo{
+		grouped: []domain.GroupedEvent{
+			{AppName: "Code", WindowTitle: "main.go", WifiSSID: "Office", TotalDurationMS: 1_000, EventCount: 1},
+		},
+	}
 	app := &usecases.App{
 		Reports: usecases.NewReportsUsecase(&fakeReportsRepoForAPI{}, fakeProjectsRepoForAPI{}, fakeSettingsRepoForAPI{}),
-		Rules:   usecases.NewRulesUsecase(&fakeRulesRepo{}),
+		Rules:   usecases.NewRulesUsecase(rulesRepo),
 	}
 	s, err := New(app)
 	if err != nil {
@@ -442,6 +457,9 @@ func TestReportsApplyRulesPreviewRendersMatchedGroups(t *testing.T) {
 	}
 	if !strings.Contains(body, "2026-02-10") {
 		t.Fatalf("expected date in response, got %s", body)
+	}
+	if !strings.Contains(body, "WiFi") || !strings.Contains(body, "Office") {
+		t.Fatalf("expected wifi data in apply-rules preview, got %s", body)
 	}
 }
 
@@ -839,6 +857,7 @@ func TestRulesDraftAddFromSelectionLogsFailureDetails(t *testing.T) {
 	form.Set("selected_idx", "0")
 	form.Set("group_app_0", "Google Chrome")
 	form.Set("group_title_0", "Daily standup")
+	form.Set("group_wifi_0", "Office")
 	form.Set("action_type", "assign_explicit")
 	form.Set("priority", "100")
 	form.Set("target_path", encodeRuleTargetPath("project a", "meeting"))

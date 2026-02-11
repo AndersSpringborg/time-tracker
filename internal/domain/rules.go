@@ -436,6 +436,7 @@ func MatchGroupedEventsToRules(groups []GroupedEvent, rules []Rule, currentProje
 		match := GroupedEventMatch{
 			AppName:         group.AppName,
 			WindowTitle:     group.WindowTitle,
+			WifiSSID:        group.WifiSSID,
 			TotalDurationMS: group.TotalDurationMS,
 			EventCount:      group.EventCount,
 		}

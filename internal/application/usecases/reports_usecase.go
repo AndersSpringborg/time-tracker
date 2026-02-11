@@ -113,6 +113,15 @@ func (u *ReportsUsecase) Report(ctx context.Context, req contracts.ReportsBuildR
 		return e.ActivityName
 	})
 	out.ByApp = summarize(items, workMask, func(e domain.Event) string { return e.AppName })
+	out.ByWifi = summarize(items, workMask, func(e domain.Event) string {
+		if strings.TrimSpace(e.WifiSSID) == "" {
+			return "(none)"
+		}
+		return e.WifiSSID
+	})
+	if len(out.ByWifi) > 12 {
+		out.ByWifi = out.ByWifi[:12]
+	}
 	out.ByWindow = summarize(items, workMask, func(e domain.Event) string {
 		app := strings.TrimSpace(e.AppName)
 		if app == "" {
@@ -236,6 +245,7 @@ func buildMappedDetails(events []domain.Event, include []bool) []domain.ProjectD
 			DurationMS:  e.DurationMS,
 			AppName:     e.AppName,
 			WindowTitle: e.WindowTitle,
+			WifiSSID:    e.WifiSSID,
 		})
 	}
 

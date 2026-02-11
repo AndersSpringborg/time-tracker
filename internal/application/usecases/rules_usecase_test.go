@@ -416,8 +416,8 @@ func TestRulesUsecaseApplyRulesPreviewReturnsGroupedMatches(t *testing.T) {
 			},
 		},
 		grouped: []domain.GroupedEvent{
-			{AppName: "Code", WindowTitle: "main.go", TotalDurationMS: 5000, EventCount: 3},
-			{AppName: "Slack", WindowTitle: "#general", TotalDurationMS: 2000, EventCount: 2},
+			{AppName: "Code", WindowTitle: "main.go", WifiSSID: "Office", TotalDurationMS: 5000, EventCount: 3},
+			{AppName: "Slack", WindowTitle: "#general", WifiSSID: "Home", TotalDurationMS: 2000, EventCount: 2},
 		},
 		projects: []domain.Project{{ProjectID: 10, Title: "Project A"}},
 		activities: map[int64][]domain.Activity{
@@ -458,6 +458,9 @@ func TestRulesUsecaseApplyRulesPreviewReturnsGroupedMatches(t *testing.T) {
 	if res.Matches[0].MatchedRule == nil {
 		t.Fatalf("expected Code to have matched rule")
 	}
+	if res.Matches[0].WifiSSID != "Office" {
+		t.Fatalf("expected matched group wifi to be preserved, got %q", res.Matches[0].WifiSSID)
+	}
 
 	// Second match should be Slack (unmatched)
 	if res.Matches[1].AppName != "Slack" {
@@ -465,6 +468,9 @@ func TestRulesUsecaseApplyRulesPreviewReturnsGroupedMatches(t *testing.T) {
 	}
 	if res.Matches[1].MatchedRule != nil {
 		t.Fatalf("expected Slack to have no matched rule")
+	}
+	if res.Matches[1].WifiSSID != "Home" {
+		t.Fatalf("expected unmatched group wifi to be preserved, got %q", res.Matches[1].WifiSSID)
 	}
 
 	// Assignment targets should be included

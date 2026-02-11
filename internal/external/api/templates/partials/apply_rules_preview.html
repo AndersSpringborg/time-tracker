@@ -72,6 +72,7 @@
           <th class="py-2 text-left font-medium text-slate-600 w-8"></th>
           <th class="py-2 text-left font-medium text-slate-600">App</th>
           <th class="py-2 text-left font-medium text-slate-600">Window Title</th>
+          <th class="py-2 text-left font-medium text-slate-600">WiFi</th>
           <th class="py-2 text-right font-medium text-slate-600">Events</th>
           <th class="py-2 text-right font-medium text-slate-600">Duration</th>
           <th class="py-2 text-left font-medium text-slate-600">Matched Rule</th>
@@ -94,6 +95,7 @@
           </td>
           <td class="py-2 text-slate-800">{{.AppName}}</td>
           <td class="py-2 text-slate-700 max-w-xs truncate" title="{{.WindowTitle}}">{{.WindowTitle}}</td>
+          <td class="py-2 text-slate-700">{{if .WifiSSID}}{{.WifiSSID}}{{else}}(none){{end}}</td>
           <td class="py-2 text-right text-slate-700">{{.EventCount}}</td>
           <td class="py-2 text-right font-medium text-slate-700">{{formatDuration .TotalDurationMS}}</td>
           <td class="py-2">
@@ -112,7 +114,7 @@
           </td>
         </tr>
       {{else}}
-        <tr><td colspan="7" class="py-4 text-center text-slate-500">No unmapped events for this date.</td></tr>
+        <tr><td colspan="8" class="py-4 text-center text-slate-500">No unmapped events for this date.</td></tr>
       {{end}}
       </tbody>
     </table>

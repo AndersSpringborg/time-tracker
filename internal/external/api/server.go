@@ -1193,12 +1193,14 @@ func parseSelectedGroups(r *http.Request) []domain.GroupedEvent {
 		}
 		app := r.Form.Get("group_app_" + idx)
 		title := r.Form.Get("group_title_" + idx)
+		wifi := r.Form.Get("group_wifi_" + idx)
 		if strings.TrimSpace(app) == "" {
 			continue
 		}
 		out = append(out, domain.GroupedEvent{
 			AppName:     app,
 			WindowTitle: title,
+			WifiSSID:    wifi,
 		})
 	}
 	return out
@@ -1216,7 +1218,7 @@ func summarizeGroups(groups []domain.GroupedEvent, limit int) string {
 		if i >= limit {
 			break
 		}
-		parts = append(parts, fmt.Sprintf("%s|%s", strings.TrimSpace(g.AppName), strings.TrimSpace(g.WindowTitle)))
+		parts = append(parts, fmt.Sprintf("%s|%s|%s", strings.TrimSpace(g.AppName), strings.TrimSpace(g.WindowTitle), strings.TrimSpace(g.WifiSSID)))
 	}
 	return strings.Join(parts, "; ")
 }

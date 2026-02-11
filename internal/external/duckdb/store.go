@@ -945,7 +945,15 @@ ORDER BY 1 DESC
 
 func (s *Store) ListGroupedUnmappedEvents(ctx context.Context, date string, minDurationMS int64) ([]domain.GroupedEvent, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT app_name, window_title, COALESCE(SUM(duration_ms), 0), COUNT(*)
+SELECT
+  app_name,
+  window_title,
+  CASE
+    WHEN COUNT(DISTINCT COALESCE(NULLIF(TRIM(wifi_ssid), ''), '(none)')) > 1 THEN '(multiple)'
+    ELSE MIN(COALESCE(NULLIF(TRIM(wifi_ssid), ''), '(none)'))
+  END AS wifi_ssid,
+  COALESCE(SUM(duration_ms), 0),
+  COUNT(*)
 FROM events
 WHERE project_activity_id IS NULL
   AND project_id IS NULL
@@ -954,7 +962,7 @@ WHERE project_activity_id IS NULL
   AND duration_ms >= ?
   AND DATE(TO_TIMESTAMP(timestamp_ms / 1000)) = ?
 GROUP BY app_name, window_title
-ORDER BY 3 DESC
+ORDER BY 4 DESC, app_name ASC, window_title ASC
 `, minDurationMS, date)
 	if err != nil {
 		return nil, err
@@ -964,7 +972,7 @@ ORDER BY 3 DESC
 	out := make([]domain.GroupedEvent, 0)
 	for rows.Next() {
 		var event domain.GroupedEvent
-		if err := rows.Scan(&event.AppName, &event.WindowTitle, &event.TotalDurationMS, &event.EventCount); err != nil {
+		if err := rows.Scan(&event.AppName, &event.WindowTitle, &event.WifiSSID, &event.TotalDurationMS, &event.EventCount); err != nil {
 			return nil, err
 		}
 		out = append(out, event)

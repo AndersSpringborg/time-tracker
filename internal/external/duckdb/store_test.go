@@ -562,6 +562,60 @@ func TestListReportEventsDateTakesPrecedenceOverRange(t *testing.T) {
 	}
 }
 
+func TestListGroupedUnmappedEventsIncludesWifiSummary(t *testing.T) {
+	s := openTestStore(t)
+	defer s.Close()
+	ctx := context.Background()
+
+	ts := time.Date(2026, time.February, 6, 12, 0, 0, 0, time.Local).UnixMilli()
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO events (id, timestamp_ms, app_name, window_title, wifi_ssid, duration_ms, manually_mapped) VALUES (100, ?, 'Code', 'main.go', 'Office', 60000, false)`, ts); err != nil {
+		t.Fatalf("insert first event: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO events (id, timestamp_ms, app_name, window_title, wifi_ssid, duration_ms, manually_mapped) VALUES (101, ?, 'Code', 'main.go', 'Home', 30000, false)`, ts+1); err != nil {
+		t.Fatalf("insert second event: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO events (id, timestamp_ms, app_name, window_title, wifi_ssid, duration_ms, manually_mapped) VALUES (102, ?, 'Slack', 'chat', '', 20000, false)`, ts+2); err != nil {
+		t.Fatalf("insert third event: %v", err)
+	}
+
+	groups, err := s.ListGroupedUnmappedEvents(ctx, "2026-02-06", 0)
+	if err != nil {
+		t.Fatalf("list grouped unmapped events: %v", err)
+	}
+	if len(groups) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(groups))
+	}
+
+	var codeGroup *domain.GroupedEvent
+	var slackGroup *domain.GroupedEvent
+	for i := range groups {
+		g := &groups[i]
+		if g.AppName == "Code" && g.WindowTitle == "main.go" {
+			codeGroup = g
+		}
+		if g.AppName == "Slack" && g.WindowTitle == "chat" {
+			slackGroup = g
+		}
+	}
+
+	if codeGroup == nil {
+		t.Fatalf("expected Code/main.go group")
+	}
+	if codeGroup.WifiSSID != "(multiple)" {
+		t.Fatalf("expected code group wifi summary '(multiple)', got %q", codeGroup.WifiSSID)
+	}
+	if codeGroup.EventCount != 2 || codeGroup.TotalDurationMS != 90_000 {
+		t.Fatalf("unexpected code group stats: %+v", *codeGroup)
+	}
+
+	if slackGroup == nil {
+		t.Fatalf("expected Slack/chat group")
+	}
+	if slackGroup.WifiSSID != "(none)" {
+		t.Fatalf("expected slack group wifi summary '(none)', got %q", slackGroup.WifiSSID)
+	}
+}
+
 func TestConvertLegacyGlobRules(t *testing.T) {
 	s := openTestStore(t)
 	defer s.Close()

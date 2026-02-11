@@ -16,6 +16,7 @@ type Event struct {
 type GroupedEvent struct {
 	AppName         string
 	WindowTitle     string
+	WifiSSID        string
 	TotalDurationMS int64
 	EventCount      int64
 }
@@ -154,6 +155,7 @@ type ApplyRulesResult struct {
 type GroupedEventMatch struct {
 	AppName         string
 	WindowTitle     string
+	WifiSSID        string
 	TotalDurationMS int64
 	EventCount      int64
 	MatchedRule     *Rule  // nil if no rule matched
@@ -188,6 +190,7 @@ type MappedEventDetail struct {
 	DurationMS  int64
 	AppName     string
 	WindowTitle string
+	WifiSSID    string
 }
 
 type ActivityDetail struct {
@@ -217,6 +220,7 @@ type Report struct {
 	ByProject      []SummaryRow
 	ByActivity     []SummaryRow
 	ByApp          []SummaryRow
+	ByWifi         []SummaryRow
 	ByWindow       []SummaryRow
 	MappedDetails  []ProjectDetail
 }

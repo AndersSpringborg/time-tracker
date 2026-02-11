@@ -173,6 +173,7 @@
             <th class="py-2 text-left font-medium text-slate-600 w-10"></th>
             <th class="py-2 text-left font-medium text-slate-600">App</th>
             <th class="py-2 text-left font-medium text-slate-600">Window Title</th>
+            <th class="py-2 text-left font-medium text-slate-600">WiFi</th>
             <th class="py-2 text-right font-medium text-slate-600">Events</th>
             <th class="py-2 text-right font-medium text-slate-600">Duration</th>
           </tr>
@@ -184,14 +185,16 @@
               <input type="checkbox" name="selected_idx" value="{{$i}}" class="rounded border-slate-300 text-teal-700 focus:ring-teal-700">
               <input type="hidden" name="group_app_{{$i}}" value="{{$g.AppName}}">
               <input type="hidden" name="group_title_{{$i}}" value="{{$g.WindowTitle}}">
+              <input type="hidden" name="group_wifi_{{$i}}" value="{{$g.WifiSSID}}">
             </td>
             <td class="py-2 text-slate-800">{{$g.AppName}}</td>
             <td class="py-2 text-slate-700 max-w-xs truncate" title="{{$g.WindowTitle}}">{{$g.WindowTitle}}</td>
+            <td class="py-2 text-slate-700">{{if $g.WifiSSID}}{{$g.WifiSSID}}{{else}}(none){{end}}</td>
             <td class="py-2 text-right text-slate-700">{{$g.EventCount}}</td>
             <td class="py-2 text-right font-medium text-slate-700">{{formatDuration $g.TotalDurationMS}}</td>
           </tr>
         {{else}}
-          <tr><td colspan="5" class="py-4 text-center text-slate-500">No unmapped groups for this date.</td></tr>
+          <tr><td colspan="6" class="py-4 text-center text-slate-500">No unmapped groups for this date.</td></tr>
         {{end}}
         </tbody>
       </table>

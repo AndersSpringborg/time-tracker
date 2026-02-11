@@ -488,7 +488,7 @@ func TestMatchGroupedEventsToRulesUsesHighestPriorityRule(t *testing.T) {
 
 func TestMatchGroupedEventsToRulesPreservesGroupData(t *testing.T) {
 	groups := []GroupedEvent{
-		{AppName: "Firefox", WindowTitle: "GitHub", TotalDurationMS: 12345, EventCount: 42},
+		{AppName: "Firefox", WindowTitle: "GitHub", WifiSSID: "Office", TotalDurationMS: 12345, EventCount: 42},
 	}
 
 	matches := MatchGroupedEventsToRules(groups, nil, nil, nil)
@@ -500,5 +500,8 @@ func TestMatchGroupedEventsToRulesPreservesGroupData(t *testing.T) {
 	}
 	if matches[0].EventCount != 42 {
 		t.Fatalf("expected event count 42, got %d", matches[0].EventCount)
+	}
+	if matches[0].WifiSSID != "Office" {
+		t.Fatalf("expected wifi Office, got %q", matches[0].WifiSSID)
 	}
 }

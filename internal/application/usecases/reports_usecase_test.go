@@ -178,8 +178,17 @@ func TestReportsUsecaseReportBuildsDetailedMetrics(t *testing.T) {
 	if report.MappedMS != 60_000 || report.UnmappedMS != 15_000 {
 		t.Fatalf("unexpected mapped/unmapped durations %d/%d", report.MappedMS, report.UnmappedMS)
 	}
+	if len(report.ByWifi) != 1 || report.ByWifi[0].Name != "Office" || report.ByWifi[0].TotalMS != 75_000 {
+		t.Fatalf("unexpected wifi summary: %+v", report.ByWifi)
+	}
 	if len(report.ByWindow) == 0 {
 		t.Fatalf("expected by-window details")
+	}
+	if len(report.MappedDetails) == 0 || len(report.MappedDetails[0].Activities) == 0 || len(report.MappedDetails[0].Activities[0].Events) == 0 {
+		t.Fatalf("expected mapped details with events")
+	}
+	if report.MappedDetails[0].Activities[0].Events[0].WifiSSID != "Office" {
+		t.Fatalf("expected mapped event wifi to be preserved, got %q", report.MappedDetails[0].Activities[0].Events[0].WifiSSID)
 	}
 }
 
@@ -206,6 +215,9 @@ func TestReportsUsecaseReportUsesAllEventsWhenWorkWifiNotConfigured(t *testing.T
 	}
 	if report.WorkMS != 90_000 {
 		t.Fatalf("expected work duration 90000, got %d", report.WorkMS)
+	}
+	if len(report.ByWifi) != 2 {
+		t.Fatalf("expected wifi summary for both wifi networks, got %+v", report.ByWifi)
 	}
 	if len(report.ByProject) == 0 || len(report.ByApp) == 0 {
 		t.Fatalf("expected populated summaries when work_wifis is empty")
