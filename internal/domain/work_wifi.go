@@ -6,6 +6,9 @@ import (
 )
 
 func IsWorkWifi(ssid string, patterns []string) bool {
+	if len(patterns) == 0 {
+		return true
+	}
 	ssid = strings.ToLower(strings.TrimSpace(ssid))
 	if ssid == "" {
 		return false

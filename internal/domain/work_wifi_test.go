@@ -28,10 +28,10 @@ func TestIsWorkWifi(t *testing.T) {
 			want:     false,
 		},
 		{
-			name:     "does not match when no pattern",
+			name:     "matches all when no patterns configured",
 			ssid:     "Office",
 			patterns: nil,
-			want:     false,
+			want:     true,
 		},
 	}
 

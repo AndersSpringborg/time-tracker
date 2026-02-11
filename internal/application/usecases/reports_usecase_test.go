@@ -182,3 +182,32 @@ func TestReportsUsecaseReportBuildsDetailedMetrics(t *testing.T) {
 		t.Fatalf("expected by-window details")
 	}
 }
+
+func TestReportsUsecaseReportUsesAllEventsWhenWorkWifiNotConfigured(t *testing.T) {
+	projectID := int64(10)
+	activityID := int64(100)
+	repo := &fakeReportsRepo{
+		events: []domain.Event{
+			{ID: 1, TimestampMS: 1, DurationMS: 60_000, AppName: "Code", WindowTitle: "main.go", WifiSSID: "Office", ProjectID: &projectID, ActivityID: &activityID, ProjectTitle: "project a"},
+			{ID: 2, TimestampMS: 2, DurationMS: 30_000, AppName: "Slack", WindowTitle: "chat", WifiSSID: "Home"},
+		},
+	}
+	uc := NewReportsUsecase(repo, fakeReportsProjectsRepo{}, fakeReportsSettingsRepoWithCfg{
+		cfg: domain.Settings{WorkWifis: nil},
+	})
+
+	res, err := uc.Report(context.Background(), contracts.ReportsBuildRequest{RangeKey: "today"})
+	if err != nil {
+		t.Fatalf("report failed: %v", err)
+	}
+	report := res.Report
+	if report.WorkEvents != 2 {
+		t.Fatalf("expected work events 2, got %d", report.WorkEvents)
+	}
+	if report.WorkMS != 90_000 {
+		t.Fatalf("expected work duration 90000, got %d", report.WorkMS)
+	}
+	if len(report.ByProject) == 0 || len(report.ByApp) == 0 {
+		t.Fatalf("expected populated summaries when work_wifis is empty")
+	}
+}
