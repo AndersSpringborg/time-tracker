@@ -5,13 +5,6 @@
 const std = @import("std");
 const glob = @import("glob");
 
-const default_noise_app_patterns = &[_][]const u8{
-    "ControlCenter*",
-    "NotificationCenter*",
-    "Spotlight*",
-    "SystemUIServer*",
-};
-
 /// Configuration settings for Time Tracker
 pub const Config = struct {
     /// List of WiFi patterns that trigger tracking (empty = track on all networks)
@@ -23,12 +16,6 @@ pub const Config = struct {
     weighted_bucket_minutes: i64 = 5,
     /// Minimum persistence in minutes before switching weighted project focus
     weighted_switch_minutes: i64 = 10,
-    /// App patterns considered noise in report views
-    noise_app_patterns: []const []const u8 = default_noise_app_patterns,
-    /// Bucket size in minutes for noise classification smoothing
-    noise_bucket_minutes: i64 = 3,
-    /// Minimum persistence in minutes before switching noise/non-noise state
-    noise_switch_minutes: i64 = 8,
 
     /// Free any allocated memory
     pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
@@ -39,8 +26,6 @@ pub const Config = struct {
             allocator.free(self.work_wifis);
         }
         self.work_wifis = &[_][]const u8{};
-
-        freeNoisePatterns(self, allocator);
     }
 
     /// Check if a WiFi SSID matches any configured work WiFi pattern
@@ -58,18 +43,6 @@ pub const Config = struct {
         return false;
     }
 };
-
-fn freeNoisePatterns(cfg: *Config, allocator: std.mem.Allocator) void {
-    if (cfg.noise_app_patterns.ptr == default_noise_app_patterns.ptr) return;
-
-    for (cfg.noise_app_patterns) |pattern| {
-        allocator.free(pattern);
-    }
-    if (cfg.noise_app_patterns.len > 0) {
-        allocator.free(cfg.noise_app_patterns);
-    }
-    cfg.noise_app_patterns = default_noise_app_patterns;
-}
 
 pub const ConfigError = error{
     OutOfMemory,
@@ -202,43 +175,6 @@ fn parseConfig(allocator: std.mem.Allocator, content: []const u8) ConfigError!Co
                 else => {},
             }
         }
-
-        if (obj.get("noise_app_patterns")) |patterns_value| {
-            if (patterns_value == .array) {
-                var pattern_list: std.ArrayListUnmanaged([]const u8) = .empty;
-                errdefer {
-                    for (pattern_list.items) |p| allocator.free(p);
-                    pattern_list.deinit(allocator);
-                }
-
-                for (patterns_value.array.items) |item| {
-                    if (item == .string) {
-                        const pattern = allocator.dupe(u8, item.string) catch return error.OutOfMemory;
-                        pattern_list.append(allocator, pattern) catch return error.OutOfMemory;
-                    }
-                }
-
-                config.noise_app_patterns = pattern_list.toOwnedSlice(allocator) catch return error.OutOfMemory;
-            }
-        }
-
-        if (obj.get("noise_bucket_minutes")) |bucket_value| {
-            switch (bucket_value) {
-                .integer => |v| {
-                    if (v > 0) config.noise_bucket_minutes = v;
-                },
-                else => {},
-            }
-        }
-
-        if (obj.get("noise_switch_minutes")) |switch_value| {
-            switch (switch_value) {
-                .integer => |v| {
-                    if (v > 0) config.noise_switch_minutes = v;
-                },
-                else => {},
-            }
-        }
     }
 
     return config;
@@ -298,40 +234,6 @@ pub fn save(allocator: std.mem.Allocator, cfg: Config) ConfigError!void {
     const switch_str = std.fmt.allocPrint(allocator, "{d}", .{cfg.weighted_switch_minutes}) catch return error.OutOfMemory;
     defer allocator.free(switch_str);
     content.appendSlice(allocator, switch_str) catch return error.OutOfMemory;
-    content.appendSlice(allocator, ",\n") catch return error.OutOfMemory;
-
-    // Add noise app patterns
-    content.appendSlice(allocator, "  \"noise_app_patterns\": [") catch return error.OutOfMemory;
-    for (cfg.noise_app_patterns, 0..) |pattern, i| {
-        if (i > 0) {
-            content.appendSlice(allocator, ", ") catch return error.OutOfMemory;
-        }
-        content.append(allocator, '"') catch return error.OutOfMemory;
-        for (pattern) |ch| {
-            switch (ch) {
-                '"' => content.appendSlice(allocator, "\\\"") catch return error.OutOfMemory,
-                '\\' => content.appendSlice(allocator, "\\\\") catch return error.OutOfMemory,
-                '\n' => content.appendSlice(allocator, "\\n") catch return error.OutOfMemory,
-                '\r' => content.appendSlice(allocator, "\\r") catch return error.OutOfMemory,
-                '\t' => content.appendSlice(allocator, "\\t") catch return error.OutOfMemory,
-                else => content.append(allocator, ch) catch return error.OutOfMemory,
-            }
-        }
-        content.append(allocator, '"') catch return error.OutOfMemory;
-    }
-    content.appendSlice(allocator, "],\n") catch return error.OutOfMemory;
-
-    // Add noise window settings
-    content.appendSlice(allocator, "  \"noise_bucket_minutes\": ") catch return error.OutOfMemory;
-    const noise_bucket_str = std.fmt.allocPrint(allocator, "{d}", .{cfg.noise_bucket_minutes}) catch return error.OutOfMemory;
-    defer allocator.free(noise_bucket_str);
-    content.appendSlice(allocator, noise_bucket_str) catch return error.OutOfMemory;
-    content.appendSlice(allocator, ",\n") catch return error.OutOfMemory;
-
-    content.appendSlice(allocator, "  \"noise_switch_minutes\": ") catch return error.OutOfMemory;
-    const noise_switch_str = std.fmt.allocPrint(allocator, "{d}", .{cfg.noise_switch_minutes}) catch return error.OutOfMemory;
-    defer allocator.free(noise_switch_str);
-    content.appendSlice(allocator, noise_switch_str) catch return error.OutOfMemory;
     content.appendSlice(allocator, "\n") catch return error.OutOfMemory;
 
     // Close JSON object
@@ -403,9 +305,6 @@ pub fn removeWorkWifi(allocator: std.mem.Allocator, pattern: []const u8) ConfigE
             .enabled = cfg.enabled,
             .weighted_bucket_minutes = cfg.weighted_bucket_minutes,
             .weighted_switch_minutes = cfg.weighted_switch_minutes,
-            .noise_app_patterns = cfg.noise_app_patterns,
-            .noise_bucket_minutes = cfg.noise_bucket_minutes,
-            .noise_switch_minutes = cfg.noise_switch_minutes,
         };
         try save(allocator, new_config);
     } else {
@@ -428,9 +327,6 @@ pub fn removeWorkWifi(allocator: std.mem.Allocator, pattern: []const u8) ConfigE
             .enabled = cfg.enabled,
             .weighted_bucket_minutes = cfg.weighted_bucket_minutes,
             .weighted_switch_minutes = cfg.weighted_switch_minutes,
-            .noise_app_patterns = cfg.noise_app_patterns,
-            .noise_bucket_minutes = cfg.noise_bucket_minutes,
-            .noise_switch_minutes = cfg.noise_switch_minutes,
         };
         try save(allocator, new_config);
 
@@ -503,29 +399,6 @@ pub fn getValue(allocator: std.mem.Allocator, key: []const u8) ConfigError!?[]co
         return std.fmt.allocPrint(allocator, "{d}", .{config.weighted_bucket_minutes}) catch return error.OutOfMemory;
     } else if (std.mem.eql(u8, key, "weighted-switch-minutes") or std.mem.eql(u8, key, "weighted_switch_minutes")) {
         return std.fmt.allocPrint(allocator, "{d}", .{config.weighted_switch_minutes}) catch return error.OutOfMemory;
-    } else if (std.mem.eql(u8, key, "noise-apps") or std.mem.eql(u8, key, "noise_apps") or std.mem.eql(u8, key, "noise-app-patterns")) {
-        if (config.noise_app_patterns.len == 0) {
-            return null;
-        }
-        var total_len: usize = 0;
-        for (config.noise_app_patterns) |pattern| {
-            total_len += pattern.len + 2;
-        }
-        var result = allocator.alloc(u8, total_len) catch return error.OutOfMemory;
-        var pos: usize = 0;
-        for (config.noise_app_patterns, 0..) |pattern, i| {
-            if (i > 0) {
-                @memcpy(result[pos..][0..2], ", ");
-                pos += 2;
-            }
-            @memcpy(result[pos..][0..pattern.len], pattern);
-            pos += pattern.len;
-        }
-        return result[0..pos];
-    } else if (std.mem.eql(u8, key, "noise-bucket-minutes") or std.mem.eql(u8, key, "noise_bucket_minutes")) {
-        return std.fmt.allocPrint(allocator, "{d}", .{config.noise_bucket_minutes}) catch return error.OutOfMemory;
-    } else if (std.mem.eql(u8, key, "noise-switch-minutes") or std.mem.eql(u8, key, "noise_switch_minutes")) {
-        return std.fmt.allocPrint(allocator, "{d}", .{config.noise_switch_minutes}) catch return error.OutOfMemory;
     }
 
     return null;
@@ -546,32 +419,6 @@ pub fn setValue(allocator: std.mem.Allocator, key: []const u8, value: []const u8
         const parsed = std.fmt.parseInt(i64, value, 10) catch return error.InvalidValue;
         if (parsed <= 0) return error.InvalidValue;
         config.weighted_switch_minutes = parsed;
-    } else if (std.mem.eql(u8, key, "noise-bucket-minutes") or std.mem.eql(u8, key, "noise_bucket_minutes")) {
-        const parsed = std.fmt.parseInt(i64, value, 10) catch return error.InvalidValue;
-        if (parsed <= 0) return error.InvalidValue;
-        config.noise_bucket_minutes = parsed;
-    } else if (std.mem.eql(u8, key, "noise-switch-minutes") or std.mem.eql(u8, key, "noise_switch_minutes")) {
-        const parsed = std.fmt.parseInt(i64, value, 10) catch return error.InvalidValue;
-        if (parsed <= 0) return error.InvalidValue;
-        config.noise_switch_minutes = parsed;
-    } else if (std.mem.eql(u8, key, "noise-apps") or std.mem.eql(u8, key, "noise_apps") or std.mem.eql(u8, key, "noise-app-patterns")) {
-        freeNoisePatterns(&config, allocator);
-
-        var list: std.ArrayListUnmanaged([]const u8) = .empty;
-        errdefer {
-            for (list.items) |item| allocator.free(item);
-            list.deinit(allocator);
-        }
-
-        var tokens = std.mem.tokenizeAny(u8, value, ",");
-        while (tokens.next()) |raw_token| {
-            const token = std.mem.trim(u8, raw_token, " \t\r\n");
-            if (token.len == 0) continue;
-            const dup = allocator.dupe(u8, token) catch return error.OutOfMemory;
-            list.append(allocator, dup) catch return error.OutOfMemory;
-        }
-
-        config.noise_app_patterns = list.toOwnedSlice(allocator) catch return error.OutOfMemory;
     }
     // Note: work_wifis should be managed via addWorkWifi/removeWorkWifi
 
@@ -597,13 +444,6 @@ pub fn unsetValue(allocator: std.mem.Allocator, key: []const u8) ConfigError!voi
         config.weighted_bucket_minutes = 5;
     } else if (std.mem.eql(u8, key, "weighted-switch-minutes") or std.mem.eql(u8, key, "weighted_switch_minutes")) {
         config.weighted_switch_minutes = 10;
-    } else if (std.mem.eql(u8, key, "noise-apps") or std.mem.eql(u8, key, "noise_apps") or std.mem.eql(u8, key, "noise-app-patterns")) {
-        freeNoisePatterns(&config, allocator);
-        config.noise_app_patterns = default_noise_app_patterns;
-    } else if (std.mem.eql(u8, key, "noise-bucket-minutes") or std.mem.eql(u8, key, "noise_bucket_minutes")) {
-        config.noise_bucket_minutes = 3;
-    } else if (std.mem.eql(u8, key, "noise-switch-minutes") or std.mem.eql(u8, key, "noise_switch_minutes")) {
-        config.noise_switch_minutes = 8;
     }
 
     try save(allocator, config);
@@ -617,7 +457,7 @@ pub fn listAll(allocator: std.mem.Allocator) ConfigError![]const ConfigEntry {
         mutable_config.deinit(allocator);
     }
 
-    var entries = allocator.alloc(ConfigEntry, 7) catch return error.OutOfMemory;
+    var entries = allocator.alloc(ConfigEntry, 4) catch return error.OutOfMemory;
 
     // Build work_wifis display string
     var work_wifis_str: ?[]const u8 = null;
@@ -666,43 +506,6 @@ pub fn listAll(allocator: std.mem.Allocator) ConfigError![]const ConfigEntry {
         .description = "Minutes required before switching project focus in weighted report",
     };
 
-    var noise_apps_str: ?[]const u8 = null;
-    if (config.noise_app_patterns.len > 0) {
-        var total_len: usize = 0;
-        for (config.noise_app_patterns) |pattern| {
-            total_len += pattern.len + 2;
-        }
-        var result = allocator.alloc(u8, total_len) catch return error.OutOfMemory;
-        var pos: usize = 0;
-        for (config.noise_app_patterns, 0..) |pattern, i| {
-            if (i > 0) {
-                @memcpy(result[pos..][0..2], ", ");
-                pos += 2;
-            }
-            @memcpy(result[pos..][0..pattern.len], pattern);
-            pos += pattern.len;
-        }
-        noise_apps_str = result[0..pos];
-    }
-
-    entries[4] = ConfigEntry{
-        .key = "noise-apps",
-        .value = noise_apps_str,
-        .description = "App patterns filtered as noise in reports (glob: * and ? supported)",
-    };
-
-    entries[5] = ConfigEntry{
-        .key = "noise-bucket-minutes",
-        .value = std.fmt.allocPrint(allocator, "{d}", .{config.noise_bucket_minutes}) catch return error.OutOfMemory,
-        .description = "Bucket size in minutes used to smooth report noise filtering",
-    };
-
-    entries[6] = ConfigEntry{
-        .key = "noise-switch-minutes",
-        .value = std.fmt.allocPrint(allocator, "{d}", .{config.noise_switch_minutes}) catch return error.OutOfMemory,
-        .description = "Minutes required before switching between noise and non-noise state",
-    };
-
     return entries;
 }
 
@@ -737,9 +540,6 @@ test "Config default values" {
     try std.testing.expect(config.enabled);
     try std.testing.expectEqual(@as(i64, 5), config.weighted_bucket_minutes);
     try std.testing.expectEqual(@as(i64, 10), config.weighted_switch_minutes);
-    try std.testing.expectEqual(@as(i64, 3), config.noise_bucket_minutes);
-    try std.testing.expectEqual(@as(i64, 8), config.noise_switch_minutes);
-    try std.testing.expectEqual(@as(usize, 4), config.noise_app_patterns.len);
 }
 
 test "Config.matchesWorkWifi empty list matches all" {
@@ -770,7 +570,6 @@ test "parseConfig empty content returns defaults" {
     const config = try parseConfig(std.testing.allocator, "");
     try std.testing.expectEqual(@as(usize, 0), config.work_wifis.len);
     try std.testing.expect(config.enabled);
-    try std.testing.expectEqual(@as(usize, 4), config.noise_app_patterns.len);
 }
 
 test "parseConfig work_wifis array" {
@@ -791,25 +590,6 @@ test "parseConfig work_wifis array" {
     try std.testing.expect(!config.enabled);
     try std.testing.expectEqual(@as(i64, 3), config.weighted_bucket_minutes);
     try std.testing.expectEqual(@as(i64, 7), config.weighted_switch_minutes);
-    try std.testing.expectEqual(@as(usize, 4), config.noise_app_patterns.len);
-}
-
-test "parseConfig custom noise settings" {
-    const json =
-        \\{
-        \\  "noise_app_patterns": ["Slack*", "Teams"],
-        \\  "noise_bucket_minutes": 2,
-        \\  "noise_switch_minutes": 6
-        \\}
-    ;
-    var config = try parseConfig(std.testing.allocator, json);
-    defer config.deinit(std.testing.allocator);
-
-    try std.testing.expectEqual(@as(usize, 2), config.noise_app_patterns.len);
-    try std.testing.expectEqualStrings("Slack*", config.noise_app_patterns[0]);
-    try std.testing.expectEqualStrings("Teams", config.noise_app_patterns[1]);
-    try std.testing.expectEqual(@as(i64, 2), config.noise_bucket_minutes);
-    try std.testing.expectEqual(@as(i64, 6), config.noise_switch_minutes);
 }
 
 test "parseConfig backwards compatibility with tracking_wifi" {
