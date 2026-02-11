@@ -2,7 +2,6 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -13,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -61,13 +59,6 @@ type pageData struct {
 	ProjectTargets       []string
 	ProjectSummary       string
 	ProjectError         string
-	Suggestions          []domain.RuleSuggestion
-	SuggestionStats      domain.SuggestionStats
-	SuggestionQuery      domain.SuggestionQuery
-	AutoApplySummary     string
-	BootstrapSummary     string
-	BootstrapGroups      []domain.GroupedEvent
-	SuggestionActivities []string
 	DraftPreview         domain.RuleDraftPreview
 	DraftDate            string
 	DraftMinDuration     int64
@@ -697,218 +688,6 @@ func (s *Server) handleRuleDelete(w http.ResponseWriter, r *http.Request) {
 	s.renderRulesEditor(w, r, "Rule deleted")
 }
 
-func (s *Server) handleSuggestionsPage(w http.ResponseWriter, r *http.Request) {
-	q := suggestionQueryFromRequest(r)
-	s.render(w, "layout", pageData{
-		Title:           "Suggestions",
-		Page:            "suggestions",
-		Body:            "suggestions",
-		SuggestionQuery: q,
-	})
-}
-
-func (s *Server) handleSuggestionsPartial(w http.ResponseWriter, r *http.Request) {
-	q := suggestionQueryFromRequest(r)
-	res, err := s.app.Rules.AnalyzeSuggestions(r.Context(), contracts.RulesAnalyzeSuggestionsRequest{Query: q})
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	s.render(w, "partials/suggestions_table", pageData{
-		Suggestions:     res.Suggestions,
-		SuggestionStats: res.Stats,
-		SuggestionQuery: q,
-	})
-}
-
-func (s *Server) handleSuggestionAccept(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.NotFound(w, r)
-		return
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid form", 400)
-		return
-	}
-	q := suggestionQueryFromForm(r)
-	sug, err := parseSuggestionFromForm(r)
-	if err != nil {
-		http.Error(w, err.Error(), 400)
-		return
-	}
-	var datePtr *string
-	if q.Date != nil {
-		dateCopy := strings.TrimSpace(*q.Date)
-		if dateCopy != "" {
-			datePtr = &dateCopy
-		}
-	}
-	acceptRes, err := s.app.Rules.AcceptSuggestion(r.Context(), contracts.RulesAcceptSuggestionRequest{Input: domain.ApplySuggestionInput{
-		Suggestion: sug,
-		ApplyNow:   r.Form.Get("apply_now") != "",
-		Date:       datePtr,
-	}})
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	summary := "Suggestion accepted"
-	if strings.TrimSpace(acceptRes.Result.Warning) != "" {
-		summary = summary + " " + strings.TrimSpace(acceptRes.Result.Warning)
-	}
-	suggestionsRes, _ := s.app.Rules.AnalyzeSuggestions(r.Context(), contracts.RulesAnalyzeSuggestionsRequest{Query: q})
-	s.render(w, "partials/suggestions_table", pageData{
-		Suggestions:      suggestionsRes.Suggestions,
-		SuggestionStats:  suggestionsRes.Stats,
-		SuggestionQuery:  q,
-		AutoApplySummary: summary,
-	})
-}
-
-func (s *Server) handleSuggestionReject(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.NotFound(w, r)
-		return
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid form", 400)
-		return
-	}
-	q := suggestionQueryFromForm(r)
-	sug, err := parseSuggestionFromForm(r)
-	if err != nil {
-		http.Error(w, err.Error(), 400)
-		return
-	}
-	if _, err := s.app.Rules.RejectSuggestion(r.Context(), contracts.RulesRejectSuggestionRequest{Input: sug}); err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	suggestionsRes, _ := s.app.Rules.AnalyzeSuggestions(r.Context(), contracts.RulesAnalyzeSuggestionsRequest{Query: q})
-	s.render(w, "partials/suggestions_table", pageData{
-		Suggestions:      suggestionsRes.Suggestions,
-		SuggestionStats:  suggestionsRes.Stats,
-		SuggestionQuery:  q,
-		AutoApplySummary: "Suggestion hidden for 7 days",
-	})
-}
-
-func (s *Server) handleSuggestionAutoApply(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.NotFound(w, r)
-		return
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid form", 400)
-		return
-	}
-	q := suggestionQueryFromForm(r)
-	minConf := int(parseIntDefault(r.Form.Get("min_confidence"), 85))
-	var datePtr *string
-	if q.Date != nil {
-		dateCopy := strings.TrimSpace(*q.Date)
-		if dateCopy != "" {
-			datePtr = &dateCopy
-		}
-	}
-	res, err := s.app.Rules.AutoApplySuggestions(r.Context(), contracts.RulesAutoApplySuggestionsRequest{Input: domain.AutoApplySuggestionsInput{
-		Date:          datePtr,
-		MinConfidence: minConf,
-		ApplyNow:      r.Form.Get("apply_now") != "",
-		MinDurationMS: q.MinDurationMS,
-		Limit:         q.Limit,
-	}})
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	suggestionsRes, _ := s.app.Rules.AnalyzeSuggestions(r.Context(), contracts.RulesAnalyzeSuggestionsRequest{Query: q})
-	summary := fmt.Sprintf("Analyzed %d suggestions, accepted %d, mapped %d events", res.Result.Analyzed, res.Result.Accepted, res.Result.MappedEvents)
-	s.render(w, "partials/suggestions_table", pageData{
-		Suggestions:      suggestionsRes.Suggestions,
-		SuggestionStats:  suggestionsRes.Stats,
-		SuggestionQuery:  q,
-		AutoApplySummary: summary,
-	})
-}
-
-func (s *Server) handleSuggestionsBootstrapPartial(w http.ResponseWriter, r *http.Request) {
-	q := suggestionQueryFromRequest(r)
-	q.Limit = int(parseIntDefault(r.URL.Query().Get("bootstrap_limit"), 20))
-	res, err := s.app.Rules.BootstrapGroups(r.Context(), contracts.RulesBootstrapGroupsRequest{Query: q})
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	activities, err := s.suggestionActivityNames(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	s.render(w, "partials/suggestions_bootstrap_table", pageData{
-		BootstrapGroups:      res.Groups,
-		SuggestionStats:      res.Stats,
-		SuggestionQuery:      q,
-		SuggestionActivities: activities,
-	})
-}
-
-func (s *Server) handleSuggestionsBootstrapMap(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.NotFound(w, r)
-		return
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid form", 400)
-		return
-	}
-	q := suggestionQueryFromForm(r)
-	q.Limit = int(parseIntDefault(r.Form.Get("bootstrap_limit"), 20))
-	activityName := strings.TrimSpace(r.Form.Get("activity_name"))
-	date := strings.TrimSpace(r.Form.Get("date"))
-	appName := strings.TrimSpace(r.Form.Get("app_name"))
-	windowTitle := r.Form.Get("window_title")
-	if date == "" || appName == "" || activityName == "" {
-		http.Error(w, "date, app_name and activity_name are required", 400)
-		return
-	}
-	labelRes, err := s.app.Rules.LabelBootstrapGroup(r.Context(), contracts.RulesBootstrapLabelRequest{
-		Input: domain.BootstrapLabelInput{
-			Date:         date,
-			AppName:      appName,
-			WindowTitle:  windowTitle,
-			ActivityName: activityName,
-			CreateRule:   r.Form.Get("create_rule") != "",
-			ApplyNow:     r.Form.Get("apply_now") != "",
-		},
-	})
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	res, err := s.app.Rules.BootstrapGroups(r.Context(), contracts.RulesBootstrapGroupsRequest{Query: q})
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	activities, err := s.suggestionActivityNames(r.Context())
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	summary := fmt.Sprintf("Bootstrap label applied: target Current project > %s, mapped %d events, rule created=%v", activityName, labelRes.Result.MappedEvents, labelRes.Result.RuleCreated)
-	if strings.TrimSpace(labelRes.Result.Warning) != "" {
-		summary = summary + " " + strings.TrimSpace(labelRes.Result.Warning)
-	}
-	s.render(w, "partials/suggestions_bootstrap_table", pageData{
-		BootstrapGroups:      res.Groups,
-		SuggestionStats:      res.Stats,
-		SuggestionQuery:      q,
-		SuggestionActivities: activities,
-		BootstrapSummary:     summary,
-	})
-}
-
 func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "layout", pageData{Title: "Projects", Page: "projects", Body: "projects", Flash: r.URL.Query().Get("flash")})
 }
@@ -1443,118 +1222,6 @@ func summarizeGroups(groups []domain.GroupedEvent, limit int) string {
 	return strings.Join(parts, "; ")
 }
 
-func (s *Server) suggestionActivityNames(ctx context.Context) ([]string, error) {
-	if s.app == nil || s.app.Rules == nil {
-		return nil, fmt.Errorf("rules usecase is not configured")
-	}
-	targetsRes, err := s.app.Rules.ListAssignmentTargets(ctx, contracts.RulesAssignmentTargetsRequest{})
-	if err != nil {
-		return nil, err
-	}
-	names := make([]string, 0, len(targetsRes.Targets))
-	seen := make(map[string]struct{}, len(targetsRes.Targets))
-	for _, target := range targetsRes.Targets {
-		name := strings.TrimSpace(target.ActivityTitle)
-		if name == "" {
-			continue
-		}
-		key := strings.ToLower(name)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		names = append(names, name)
-	}
-	sort.Slice(names, func(i, j int) bool {
-		return strings.ToLower(names[i]) < strings.ToLower(names[j])
-	})
-	return names, nil
-}
-
-func suggestionQueryFromRequest(r *http.Request) domain.SuggestionQuery {
-	q := domain.SuggestionQuery{
-		MinDurationMS:  parseIntDefault(r.URL.Query().Get("min_duration_ms"), 2000),
-		Limit:          int(parseIntDefault(r.URL.Query().Get("limit"), 50)),
-		MinEvidence:    int(parseIntDefault(r.URL.Query().Get("min_evidence"), 2)),
-		IncludeContext: strings.TrimSpace(r.URL.Query().Get("include_context")) != "0",
-		ExcludeApps:    parseCSV(r.URL.Query().Get("exclude_apps")),
-	}
-	date := strings.TrimSpace(r.URL.Query().Get("date"))
-	if date != "" {
-		q.Date = &date
-	}
-	return q
-}
-
-func suggestionQueryFromForm(r *http.Request) domain.SuggestionQuery {
-	q := domain.SuggestionQuery{
-		MinDurationMS:  parseIntDefault(r.Form.Get("min_duration_ms"), 2000),
-		Limit:          int(parseIntDefault(r.Form.Get("limit"), 50)),
-		MinEvidence:    int(parseIntDefault(r.Form.Get("min_evidence"), 2)),
-		IncludeContext: strings.TrimSpace(r.Form.Get("include_context")) != "0",
-		ExcludeApps:    parseCSV(r.Form.Get("exclude_apps")),
-	}
-	date := strings.TrimSpace(r.Form.Get("date"))
-	if date != "" {
-		q.Date = &date
-	}
-	return q
-}
-
-func parseSuggestionFromForm(r *http.Request) (domain.RuleSuggestion, error) {
-	projectID, err := parseNullableInt64(r.Form.Get("project_id"))
-	if err != nil {
-		return domain.RuleSuggestion{}, fmt.Errorf("invalid project_id")
-	}
-	activityID, err := parseNullableInt64(r.Form.Get("activity_id"))
-	if err != nil {
-		return domain.RuleSuggestion{}, fmt.Errorf("invalid activity_id")
-	}
-	projectValue := int64(0)
-	if projectID != nil {
-		projectValue = *projectID
-	}
-	activityValue := int64(0)
-	if activityID != nil {
-		activityValue = *activityID
-	}
-	conf := int(parseIntDefault(r.Form.Get("confidence"), 0))
-	score := parseFloatDefault(r.Form.Get("score"), 0)
-	ambiguity := parseFloatDefault(r.Form.Get("ambiguity"), 0)
-	impactCount := int(parseIntDefault(r.Form.Get("impact_count"), 0))
-	impactDur := parseIntDefault(r.Form.Get("impact_duration_ms"), 0)
-	evidence := int(parseIntDefault(r.Form.Get("evidence_count"), 0))
-	lastSeen := parseIntDefault(r.Form.Get("last_seen_ms"), 0)
-	st := r.Form.Get("suggestion_type")
-	title := strings.TrimSpace(r.Form.Get("title_pattern"))
-	var titlePtr *string
-	if title != "" {
-		titlePtr = &title
-	}
-	dto := apidto.SuggestionInput{
-		SuggestionType:     st,
-		AppPattern:         r.Form.Get("app_pattern"),
-		TitlePattern:       titlePtr,
-		ProjectID:          projectValue,
-		ActivityID:         activityValue,
-		ProjectTitle:       strings.TrimSpace(r.Form.Get("project_title")),
-		ActivityTitle:      strings.TrimSpace(r.Form.Get("activity_title")),
-		ActionType:         strings.TrimSpace(r.Form.Get("action_type")),
-		ActionActivityName: strings.TrimSpace(r.Form.Get("action_activity_name")),
-		DisplayPath:        r.Form.Get("display_path"),
-		Confidence:         conf,
-		Score:              score,
-		ConfidenceReason:   strings.TrimSpace(r.Form.Get("confidence_reason")),
-		Ambiguity:          ambiguity,
-		ImpactCount:        impactCount,
-		ImpactDurationMS:   impactDur,
-		EvidenceCount:      evidence,
-		LastSeenMS:         lastSeen,
-		ContextHints:       parseCSV(r.Form.Get("context_hints")),
-	}
-	return dto.ToDomain(), nil
-}
-
 func parseLines(v string) []string {
 	parts := strings.Split(v, "\n")
 	out := make([]string, 0, len(parts))
@@ -1577,18 +1244,6 @@ func parseIntDefault(s string, fallback int64) int64 {
 		return fallback
 	}
 	if v <= 0 {
-		return fallback
-	}
-	return v
-}
-
-func parseFloatDefault(s string, fallback float64) float64 {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return fallback
-	}
-	v, err := strconv.ParseFloat(s, 64)
-	if err != nil {
 		return fallback
 	}
 	return v
