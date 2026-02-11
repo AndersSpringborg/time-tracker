@@ -202,7 +202,7 @@ func (r *Runner) runSchema(args []string, stdout, stderr io.Writer) int {
 
 func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: tt rules <list|targets|time-tracker|add|delete|suggest|accept|reject|auto-apply|bootstrap|label-group|apply-rules>")
+		fmt.Fprintln(stderr, "usage: tt rules <list|targets|time-tracker|add|delete|apply-rules>")
 		return 2
 	}
 	sub := args[0]
@@ -391,276 +391,6 @@ func (r *Runner) runRules(ctx context.Context, args []string, stdout, stderr io.
 			return 1
 		}
 		fmt.Fprintf(stdout, "rule deleted: %d\n", id)
-		return 0
-	case "suggest":
-		fs := flag.NewFlagSet("rules suggest", flag.ContinueOnError)
-		fs.SetOutput(stderr)
-		format := fs.String("format", "text", "text|json|yaml")
-		date := fs.String("date", "", "date filter YYYY-MM-DD")
-		minDur := fs.Int64("min-duration-ms", 2000, "minimum event duration")
-		limit := fs.Int("limit", 50, "max suggestions")
-		minEvidence := fs.Int("min-evidence", 2, "minimum mapped evidence")
-		includeContext := fs.Bool("include-context", true, "include context hints")
-		excludeApps := fs.String("exclude-apps", "", "comma-separated app names to exclude")
-		if err := fs.Parse(args[1:]); err != nil {
-			return 2
-		}
-		var datePtr *string
-		if strings.TrimSpace(*date) != "" {
-			datePtr = date
-		}
-		suggestionsRes, err := r.App.Rules.AnalyzeSuggestions(ctx, contracts.RulesAnalyzeSuggestionsRequest{
-			Query: domain.SuggestionQuery{
-				Date:           datePtr,
-				MinDurationMS:  *minDur,
-				Limit:          *limit,
-				MinEvidence:    *minEvidence,
-				IncludeContext: *includeContext,
-				ExcludeApps:    splitCSVNormalized(*excludeApps),
-			},
-		})
-		if err != nil {
-			fmt.Fprintf(stderr, "error: %v\n", err)
-			return 1
-		}
-		if suggestionsRes.Stats.IsColdStart {
-			fmt.Fprintf(stdout, "cold_start: %s\n", suggestionsRes.Stats.Message)
-		}
-		items := suggestionsRes.Suggestions
-		if *format == "text" {
-			for _, s := range items {
-				title := "*"
-				if s.TitlePattern != nil {
-					title = *s.TitlePattern
-				}
-				contextSummary := ""
-				if len(s.ContextHints) > 0 {
-					contextSummary = " context=" + strings.Join(s.ContextHints, ",")
-				}
-				fmt.Fprintf(
-					stdout,
-					"%s app=%q title=%q conf=%d%% score=%.1f ambiguity=%.2f impact=%d/%s evidence=%d target=%s reason=%q%s\n",
-					s.SuggestionType,
-					s.AppPattern,
-					title,
-					s.Confidence,
-					s.Score,
-					s.Ambiguity,
-					s.ImpactCount,
-					domain.FormatDuration(s.ImpactDurationMS),
-					s.EvidenceCount,
-					s.DisplayPath,
-					s.ConfidenceReason,
-					contextSummary,
-				)
-			}
-			if len(items) == 0 {
-				fmt.Fprintln(stdout, "No suggestions")
-			}
-			return 0
-		}
-		return emit(stdout, *format, map[string]any{
-			"suggestions": clidto.SuggestionsFromDomain(items),
-			"stats":       suggestionsRes.Stats,
-		}, stderr)
-	case "accept":
-		fs := flag.NewFlagSet("rules accept", flag.ContinueOnError)
-		fs.SetOutput(stderr)
-		appPattern := fs.String("app-pattern", "", "app pattern")
-		titlePattern := fs.String("title-pattern", "", "title pattern")
-		projectID := fs.Int64("project-id", 0, "project id")
-		activityID := fs.Int64("activity-id", 0, "activity id")
-		applyNow := fs.Bool("apply-now", true, "apply immediately")
-		date := fs.String("date", "", "optional date scope")
-		if err := fs.Parse(args[1:]); err != nil {
-			return 2
-		}
-		if *appPattern == "" || *projectID == 0 || *activityID == 0 {
-			fmt.Fprintln(stderr, "app-pattern, project-id and activity-id are required")
-			return 2
-		}
-		var tp *string
-		if strings.TrimSpace(*titlePattern) != "" {
-			tp = titlePattern
-		}
-		var datePtr *string
-		if strings.TrimSpace(*date) != "" {
-			datePtr = date
-		}
-		res, err := r.App.Rules.AcceptSuggestion(ctx, contracts.RulesAcceptSuggestionRequest{Input: domain.ApplySuggestionInput{
-			Suggestion: domain.RuleSuggestion{
-				SuggestionType: domain.SuggestionTypeAppOnly,
-				AppPattern:     *appPattern,
-				TitlePattern:   tp,
-				ProjectID:      *projectID,
-				ActivityID:     *activityID,
-			},
-			ApplyNow: *applyNow,
-			Date:     datePtr,
-		}})
-		if err != nil {
-			fmt.Fprintf(stderr, "error: %v\n", err)
-			return 1
-		}
-		if strings.TrimSpace(res.Result.Warning) != "" {
-			fmt.Fprintf(stdout, "accepted: rule_created=%v mapped_events=%d warning=%q\n", res.Result.RuleCreated, res.Result.MappedEvents, res.Result.Warning)
-			return 0
-		}
-		fmt.Fprintf(stdout, "accepted: rule_created=%v mapped_events=%d\n", res.Result.RuleCreated, res.Result.MappedEvents)
-		return 0
-	case "reject":
-		fs := flag.NewFlagSet("rules reject", flag.ContinueOnError)
-		fs.SetOutput(stderr)
-		appPattern := fs.String("app-pattern", "", "app pattern")
-		titlePattern := fs.String("title-pattern", "", "title pattern")
-		suggestionType := fs.String("suggestion-type", string(domain.SuggestionTypeAppOnly), "app_only|app_and_title")
-		projectID := fs.Int64("project-id", 0, "project id")
-		activityID := fs.Int64("activity-id", 0, "activity id")
-		if err := fs.Parse(args[1:]); err != nil {
-			return 2
-		}
-		if strings.TrimSpace(*appPattern) == "" {
-			fmt.Fprintln(stderr, "--app-pattern is required")
-			return 2
-		}
-		var tp *string
-		if strings.TrimSpace(*titlePattern) != "" {
-			tp = titlePattern
-		}
-		if _, err := r.App.Rules.RejectSuggestion(ctx, contracts.RulesRejectSuggestionRequest{
-			Input: domain.RuleSuggestion{
-				SuggestionType: domain.SuggestionType(*suggestionType),
-				AppPattern:     *appPattern,
-				TitlePattern:   tp,
-				ProjectID:      *projectID,
-				ActivityID:     *activityID,
-			},
-		}); err != nil {
-			fmt.Fprintf(stderr, "error: %v\n", err)
-			return 1
-		}
-		fmt.Fprintln(stdout, "suggestion rejected")
-		return 0
-	case "auto-apply":
-		fs := flag.NewFlagSet("rules auto-apply", flag.ContinueOnError)
-		fs.SetOutput(stderr)
-		format := fs.String("format", "text", "text|json|yaml")
-		minConf := fs.Int("min-confidence", 85, "minimum confidence")
-		applyNow := fs.Bool("apply-now", true, "apply after creating rules")
-		date := fs.String("date", "", "optional date scope YYYY-MM-DD")
-		minDur := fs.Int64("min-duration-ms", 2000, "minimum duration")
-		limit := fs.Int("limit", 100, "max suggestions")
-		if err := fs.Parse(args[1:]); err != nil {
-			return 2
-		}
-		var datePtr *string
-		if strings.TrimSpace(*date) != "" {
-			datePtr = date
-		}
-		res, err := r.App.Rules.AutoApplySuggestions(ctx, contracts.RulesAutoApplySuggestionsRequest{
-			Input: domain.AutoApplySuggestionsInput{
-				Date:          datePtr,
-				MinConfidence: *minConf,
-				ApplyNow:      *applyNow,
-				MinDurationMS: *minDur,
-				Limit:         *limit,
-			},
-		})
-		if err != nil {
-			fmt.Fprintf(stderr, "error: %v\n", err)
-			return 1
-		}
-		if *format == "text" {
-			fmt.Fprintf(stdout, "analyzed=%d accepted=%d mapped=%d\n", res.Result.Analyzed, res.Result.Accepted, res.Result.MappedEvents)
-			return 0
-		}
-		return emit(stdout, *format, clidto.AutoApplyResultFromDomain(res.Result), stderr)
-	case "bootstrap":
-		fs := flag.NewFlagSet("rules bootstrap", flag.ContinueOnError)
-		fs.SetOutput(stderr)
-		date := fs.String("date", "", "optional date scope YYYY-MM-DD")
-		minDur := fs.Int64("min-duration-ms", 2000, "minimum duration")
-		limit := fs.Int("limit", 20, "max groups")
-		format := fs.String("format", "text", "text|json|yaml")
-		if err := fs.Parse(args[1:]); err != nil {
-			return 2
-		}
-		var datePtr *string
-		if strings.TrimSpace(*date) != "" {
-			datePtr = date
-		}
-		res, err := r.App.Rules.BootstrapGroups(ctx, contracts.RulesBootstrapGroupsRequest{
-			Query: domain.SuggestionQuery{
-				Date:          datePtr,
-				MinDurationMS: *minDur,
-				Limit:         *limit,
-			},
-		})
-		if err != nil {
-			fmt.Fprintf(stderr, "error: %v\n", err)
-			return 1
-		}
-		if *format == "text" {
-			if res.Stats.IsColdStart {
-				fmt.Fprintf(stdout, "cold_start: %s\n", res.Stats.Message)
-			}
-			for _, g := range res.Groups {
-				fmt.Fprintf(stdout, "%s | %s | %d events | %s\n", g.AppName, g.WindowTitle, g.EventCount, domain.FormatDuration(g.TotalDurationMS))
-			}
-			if len(res.Groups) == 0 {
-				fmt.Fprintln(stdout, "No bootstrap groups")
-			}
-			return 0
-		}
-		return emit(stdout, *format, map[string]any{"groups": clidto.GroupedEventsFromDomain(res.Groups), "stats": res.Stats}, stderr)
-	case "label-group":
-		fs := flag.NewFlagSet("rules label-group", flag.ContinueOnError)
-		fs.SetOutput(stderr)
-		date := fs.String("date", "", "date YYYY-MM-DD")
-		appName := fs.String("app", "", "app name")
-		windowTitle := fs.String("title", "", "window title")
-		activityName := fs.String("activity", "", "activity name in current project")
-		projectID := fs.Int64("project-id", 0, "project id (legacy explicit mapping)")
-		activityID := fs.Int64("activity-id", 0, "activity id (legacy explicit mapping)")
-		createRule := fs.Bool("create-rule", true, "create a reusable rule")
-		applyNow := fs.Bool("apply-now", true, "map events now")
-		if err := fs.Parse(args[1:]); err != nil {
-			return 2
-		}
-		if *date == "" || *appName == "" {
-			fmt.Fprintln(stderr, "--date and --app are required")
-			return 2
-		}
-		activityNameValue := strings.TrimSpace(*activityName)
-		if activityNameValue == "" && (*projectID <= 0 || *activityID <= 0) {
-			fmt.Fprintln(stderr, "either --activity or --project-id/--activity-id is required")
-			return 2
-		}
-		input := domain.BootstrapLabelInput{
-			Date:        *date,
-			AppName:     *appName,
-			WindowTitle: *windowTitle,
-			CreateRule:  *createRule,
-			ApplyNow:    *applyNow,
-		}
-		if activityNameValue != "" {
-			input.ActivityName = activityNameValue
-		} else {
-			input.ProjectID = *projectID
-			input.ActivityID = *activityID
-		}
-		res, err := r.App.Rules.LabelBootstrapGroup(ctx, contracts.RulesBootstrapLabelRequest{
-			Input: input,
-		})
-		if err != nil {
-			fmt.Fprintf(stderr, "error: %v\n", err)
-			return 1
-		}
-		if strings.TrimSpace(res.Result.Warning) != "" {
-			fmt.Fprintf(stdout, "label-group: rule_created=%v mapped_events=%d warning=%q\n", res.Result.RuleCreated, res.Result.MappedEvents, res.Result.Warning)
-			return 0
-		}
-		fmt.Fprintf(stdout, "label-group: rule_created=%v mapped_events=%d\n", res.Result.RuleCreated, res.Result.MappedEvents)
 		return 0
 	case "apply-rules":
 		fs := flag.NewFlagSet("rules apply-rules", flag.ContinueOnError)
@@ -1227,19 +957,6 @@ func splitList(s string) []string {
 	return out
 }
 
-func splitCSVNormalized(s string) []string {
-	parts := strings.Split(s, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		out = append(out, p)
-	}
-	return out
-}
-
 func (r *Runner) runReview(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "usage: tt review <dates|groups|map-group|discard-group>")
@@ -1401,7 +1118,7 @@ Commands:
   status         Show launchd collector status and permission hints
   serve          Start web UI (HTMX)
   doctor         Print local paths, collector status, and known startup hints
-  rules          Manage rules and auto-categorization suggestions
+  rules          Manage event-to-project/activity mapping rules
   projects       Manage projects, activities, and current project context
   reports        Show report summaries and WiFi work-hours
   settings       Manage configuration key-values
@@ -1420,10 +1137,8 @@ Examples:
   tt rules targets --format json
   tt rules time-tracker --dry-run
   tt rules time-tracker --dev-activity development --meeting-activity meeting
-  tt rules suggest --format json --limit 20 --min-evidence 2
-  tt rules auto-apply --min-confidence 90 --apply-now
-  tt rules bootstrap --date 2026-02-06 --format json
-  tt rules label-group --date 2026-02-06 --app Arc --title "Daily standup" --activity development --create-rule --apply-now
+  tt rules add --app-pattern \"IntelliJ IDEA\" --title-pattern \"*project a*\" --follow-previous
+  tt rules apply-rules --dry-run --format json
   tt projects create --title "time-tracker" --metadata "local repo"
   tt projects add --project "time-tracker"
   tt projects add-activity --project "time-tracker" --title development
