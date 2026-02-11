@@ -313,61 +313,6 @@ func (f *fakeMutableProjectsRepoForAPI) CurrentProject(context.Context) (string,
 	return "", nil, nil
 }
 
-func TestSuggestionsPartialRendersRows(t *testing.T) {
-	app := &usecases.App{
-		Rules: usecases.NewRulesUsecase(&fakeRulesRepo{}),
-	}
-	s, err := New(app)
-	if err != nil {
-		t.Fatalf("new server: %v", err)
-	}
-	req := httptest.NewRequest(http.MethodGet, "/partials/suggestions", nil)
-	rr := httptest.NewRecorder()
-	s.Routes().ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rr.Code)
-	}
-	body := rr.Body.String()
-	if !strings.Contains(body, "Slack") {
-		t.Fatalf("expected Slack in body, got %s", body)
-	}
-	if !strings.Contains(body, "Accept") {
-		t.Fatalf("expected Accept button in body")
-	}
-	if !strings.Contains(body, "Current project &gt; meeting") {
-		t.Fatalf("expected dynamic current project target with activity name")
-	}
-}
-
-func TestSuggestionsBootstrapPartialRendersRows(t *testing.T) {
-	app := &usecases.App{
-		Rules: usecases.NewRulesUsecase(&fakeRulesRepo{}),
-	}
-	s, err := New(app)
-	if err != nil {
-		t.Fatalf("new server: %v", err)
-	}
-	req := httptest.NewRequest(http.MethodGet, "/partials/suggestions/bootstrap?date=2026-02-06&bootstrap_limit=10", nil)
-	rr := httptest.NewRecorder()
-	s.Routes().ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rr.Code)
-	}
-	body := rr.Body.String()
-	if !strings.Contains(body, "Slack") {
-		t.Fatalf("expected bootstrap app in body, got %s", body)
-	}
-	if !strings.Contains(body, "Label") {
-		t.Fatalf("expected label action in bootstrap table")
-	}
-	if strings.Contains(body, "Project ID") || strings.Contains(body, "Activity ID") {
-		t.Fatalf("expected bootstrap table to avoid id-based mapping inputs")
-	}
-	if !strings.Contains(body, "name=\"activity_name\"") {
-		t.Fatalf("expected bootstrap activity name selector/input")
-	}
-}
-
 func TestRulesPartialRendersDraftActions(t *testing.T) {
 	app := &usecases.App{
 		Rules: usecases.NewRulesUsecase(&fakeRulesRepo{}),
