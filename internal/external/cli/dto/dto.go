@@ -50,7 +50,6 @@ type Activity struct {
 type Settings struct {
 	WorkWifis             []string `json:"work_wifis" yaml:"work_wifis"`
 	Enabled               bool     `json:"enabled" yaml:"enabled"`
-	WeightedBucketMinutes int64    `json:"weighted_bucket_minutes" yaml:"weighted_bucket_minutes"`
 	WeightedSwitchMinutes int64    `json:"weighted_switch_minutes" yaml:"weighted_switch_minutes"`
 }
 
@@ -141,7 +140,6 @@ func SettingsFromDomain(in domain.Settings) Settings {
 	return Settings{
 		WorkWifis:             in.WorkWifis,
 		Enabled:               in.Enabled,
-		WeightedBucketMinutes: in.WeightedBucketMinutes,
 		WeightedSwitchMinutes: in.WeightedSwitchMinutes,
 	}
 }

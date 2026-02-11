@@ -24,12 +24,8 @@
       </div>
 
       <div class="border-t border-slate-200 pt-6">
-        <h3 class="mb-4 text-base font-semibold text-tt-ink">Weighted Scoring</h3>
+        <h3 class="mb-4 text-base font-semibold text-tt-ink">Time Proximity</h3>
         <div class="grid gap-4 md:grid-cols-2">
-          <label class="flex flex-col gap-1">
-            <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Weighted Bucket Minutes</span>
-            <input type="number" name="weighted_bucket_minutes" value="{{.Config.WeightedBucketMinutes}}" class="rounded-lg border-slate-300 text-sm">
-          </label>
           <label class="flex flex-col gap-1">
             <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Weighted Switch Minutes</span>
             <input type="number" name="weighted_switch_minutes" value="{{.Config.WeightedSwitchMinutes}}" class="rounded-lg border-slate-300 text-sm">

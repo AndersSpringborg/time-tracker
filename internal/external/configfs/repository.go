@@ -18,7 +18,6 @@ func defaultSettings() domain.Settings {
 	return domain.Settings{
 		WorkWifis:             []string{},
 		Enabled:               true,
-		WeightedBucketMinutes: 5,
 		WeightedSwitchMinutes: 10,
 	}
 }
@@ -26,9 +25,6 @@ func defaultSettings() domain.Settings {
 func normalize(cfg domain.Settings) domain.Settings {
 	if cfg.WorkWifis == nil {
 		cfg.WorkWifis = []string{}
-	}
-	if cfg.WeightedBucketMinutes <= 0 {
-		cfg.WeightedBucketMinutes = 5
 	}
 	if cfg.WeightedSwitchMinutes <= 0 {
 		cfg.WeightedSwitchMinutes = 10

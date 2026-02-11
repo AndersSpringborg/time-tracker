@@ -34,45 +34,45 @@ type Server struct {
 }
 
 type pageData struct {
-	Title                string
-	Page                 string
-	Body                 string
-	BodyHTML             template.HTML
-	Flash                string
-	Range                string
-	ReportDate           string
-	ReportDateActive     bool
-	PrevReportDate       string
-	NextReportDate       string
-	Config               domain.Settings
-	WorkWifisText        string
-	Dashboard            domain.Dashboard
-	Report               domain.Report
-	RulesApplySummary    string
-	Rules                []domain.Rule
-	ActiveProjects       []domain.Project
-	AllProjects          []domain.Project
-	ArchivedProjects     []domain.Project
-	AllActivities        []domain.Activity
-	ProjectActivities    map[int64][]domain.Activity
-	ActiveProjectIDs     map[int64]bool
-	ProjectTargets       []string
-	ProjectSummary       string
-	ProjectError         string
-	DraftPreview         domain.RuleDraftPreview
-	DraftDate            string
-	DraftMinDuration     int64
-	DraftGroups          []domain.GroupedEvent
-	RuleTargets          []ruleTargetOption
-	RuleSummary          string
-	RulesPreview         contracts.RulesApplyPreviewResponse
-	TidsregCustomers     []tidsregmodel.Customer
-	TidsregProjects      []tidsregmodel.Project
-	TidsregPreview       tidsregmodel.ImportPreview
-	TidsregResult        tidsregmodel.ImportResult
-	TidsregSummary       string
-	TidsregError         string
-	TidsregMode          string
+	Title             string
+	Page              string
+	Body              string
+	BodyHTML          template.HTML
+	Flash             string
+	Range             string
+	ReportDate        string
+	ReportDateActive  bool
+	PrevReportDate    string
+	NextReportDate    string
+	Config            domain.Settings
+	WorkWifisText     string
+	Dashboard         domain.Dashboard
+	Report            domain.Report
+	RulesApplySummary string
+	Rules             []domain.Rule
+	ActiveProjects    []domain.Project
+	AllProjects       []domain.Project
+	ArchivedProjects  []domain.Project
+	AllActivities     []domain.Activity
+	ProjectActivities map[int64][]domain.Activity
+	ActiveProjectIDs  map[int64]bool
+	ProjectTargets    []string
+	ProjectSummary    string
+	ProjectError      string
+	DraftPreview      domain.RuleDraftPreview
+	DraftDate         string
+	DraftMinDuration  int64
+	DraftGroups       []domain.GroupedEvent
+	RuleTargets       []ruleTargetOption
+	RuleSummary       string
+	RulesPreview      contracts.RulesApplyPreviewResponse
+	TidsregCustomers  []tidsregmodel.Customer
+	TidsregProjects   []tidsregmodel.Project
+	TidsregPreview    tidsregmodel.ImportPreview
+	TidsregResult     tidsregmodel.ImportResult
+	TidsregSummary    string
+	TidsregError      string
+	TidsregMode       string
 }
 
 type ruleTargetOption struct {
@@ -993,7 +993,6 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		cfg := loadRes.Settings
 		cfg.Enabled = r.Form.Get("enabled") != ""
-		cfg.WeightedBucketMinutes = parseIntDefault(r.Form.Get("weighted_bucket_minutes"), cfg.WeightedBucketMinutes)
 		cfg.WeightedSwitchMinutes = parseIntDefault(r.Form.Get("weighted_switch_minutes"), cfg.WeightedSwitchMinutes)
 		cfg.WorkWifis = parseLines(r.Form.Get("work_wifis"))
 		if _, err := s.app.Settings.Save(r.Context(), contracts.SettingsSaveRequest{Settings: cfg}); err != nil {

@@ -891,8 +891,6 @@ func printSettingValue(stdout, stderr io.Writer, cfg domain.Settings, key string
 	switch key {
 	case "enabled":
 		fmt.Fprintln(stdout, cfg.Enabled)
-	case "weighted_bucket_minutes":
-		fmt.Fprintln(stdout, cfg.WeightedBucketMinutes)
 	case "weighted_switch_minutes":
 		fmt.Fprintln(stdout, cfg.WeightedSwitchMinutes)
 	case "work_wifis":
@@ -908,12 +906,6 @@ func setSetting(cfg *domain.Settings, key, value string) error {
 	switch key {
 	case "enabled":
 		cfg.Enabled = value == "true" || value == "1"
-	case "weighted_bucket_minutes":
-		v, err := strconv.ParseInt(value, 10, 64)
-		if err != nil {
-			return err
-		}
-		cfg.WeightedBucketMinutes = v
 	case "weighted_switch_minutes":
 		v, err := strconv.ParseInt(value, 10, 64)
 		if err != nil {
@@ -932,8 +924,6 @@ func unsetSetting(cfg *domain.Settings, def domain.Settings, key string) error {
 	switch key {
 	case "enabled":
 		cfg.Enabled = def.Enabled
-	case "weighted_bucket_minutes":
-		cfg.WeightedBucketMinutes = def.WeightedBucketMinutes
 	case "weighted_switch_minutes":
 		cfg.WeightedSwitchMinutes = def.WeightedSwitchMinutes
 	case "work_wifis":

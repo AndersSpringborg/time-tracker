@@ -169,7 +169,6 @@ type EventMappingUpdate struct {
 type Settings struct {
 	WorkWifis             []string
 	Enabled               bool
-	WeightedBucketMinutes int64
 	WeightedSwitchMinutes int64
 }
 
