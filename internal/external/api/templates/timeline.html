@@ -1,0 +1,65 @@
+{{define "timeline"}}
+<section class="space-y-6">
+  <header class="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+    <div>
+      <h1 class="text-2xl font-semibold text-tt-ink">Timeline</h1>
+      <p class="mt-1 max-w-3xl text-sm text-slate-600">Calendar-style day view of tracked events, similar to browser history. Default window shows 08:00 to 17:00.</p>
+    </div>
+  </header>
+
+  <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <div class="flex flex-wrap items-end gap-3">
+      <a
+        href="/timeline?date={{.PrevReportDate}}&start_hour={{.TimelineStartHour}}&end_hour={{.TimelineEndHour}}"
+        class="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+      >
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+        Previous day
+      </a>
+
+      <form class="flex flex-wrap items-end gap-3" action="/timeline" method="get">
+        <label class="flex flex-col gap-1">
+          <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Date</span>
+          <input type="date" name="date" value="{{.ReportDate}}" class="rounded-lg border-slate-300 text-sm">
+        </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-xs font-medium uppercase tracking-wide text-slate-500">Start Hour</span>
+          <input type="number" min="0" max="23" name="start_hour" value="{{.TimelineStartHour}}" class="w-24 rounded-lg border-slate-300 text-sm">
+        </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-xs font-medium uppercase tracking-wide text-slate-500">End Hour</span>
+          <input type="number" min="1" max="24" name="end_hour" value="{{.TimelineEndHour}}" class="w-24 rounded-lg border-slate-300 text-sm">
+        </label>
+        <button
+          type="submit"
+          class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+        >Update</button>
+      </form>
+
+      <a
+        href="/timeline?date={{.NextReportDate}}&start_hour={{.TimelineStartHour}}&end_hour={{.TimelineEndHour}}"
+        class="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+      >
+        Next day
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+      </a>
+
+      <a
+        href="/timeline"
+        class="rounded-lg bg-tt-accent px-3 py-2 text-sm font-semibold text-white hover:bg-teal-700"
+      >Today</a>
+    </div>
+  </section>
+
+  <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <div
+      id="timeline-panel"
+      hx-get="/partials/timeline?date={{.ReportDate}}&start_hour={{.TimelineStartHour}}&end_hour={{.TimelineEndHour}}"
+      hx-trigger="load"
+      hx-swap="innerHTML"
+    >
+      <div class="text-sm text-slate-600">Loading timeline...</div>
+    </div>
+  </section>
+</section>
+{{end}}

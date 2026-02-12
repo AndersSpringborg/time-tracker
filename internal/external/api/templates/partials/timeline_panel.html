@@ -1,0 +1,89 @@
+{{define "partials/timeline_panel"}}
+<div class="space-y-6">
+  <div class="flex flex-wrap gap-5 text-sm text-slate-600">
+    <span>Date: <strong class="text-tt-ink">{{.Timeline.Date}}</strong></span>
+    <span>Window: <strong class="text-tt-ink">{{printf "%02d:00" .Timeline.StartHour}}-{{printf "%02d:00" .Timeline.EndHour}}</strong></span>
+    <span>Total events: <strong class="text-tt-ink">{{.Timeline.TotalEvents}}</strong></span>
+    <span>Visible events: <strong class="text-tt-ink">{{.Timeline.VisibleEvents}}</strong></span>
+    <span>Visible duration: <strong class="text-tt-ink">{{formatDuration .Timeline.VisibleMS}}</strong></span>
+  </div>
+
+  <section class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+    <h3 class="mb-3 text-base font-semibold text-tt-ink">Day Timeline</h3>
+    <div class="flex gap-3">
+      <div class="relative w-16 shrink-0" style="height: 540px;">
+        {{range .Timeline.HourMarks}}
+          <div class="absolute -translate-y-1/2 text-xs text-slate-500" style="top: {{printf "%.4f" .TopPercent}}%;">{{.Label}}</div>
+        {{end}}
+      </div>
+
+      <div class="relative flex-1 rounded-xl border border-slate-200 bg-slate-50" style="height: 540px;">
+        {{range .Timeline.HourMarks}}
+          <div class="absolute left-0 right-0 border-t border-slate-200" style="top: {{printf "%.4f" .TopPercent}}%;"></div>
+        {{end}}
+
+        {{range .Timeline.Events}}
+          {{if .InView}}
+            <div
+              class="absolute left-2 right-2 overflow-hidden rounded-md border px-2 py-1 text-xs shadow-sm {{if .IsMapped}}border-emerald-300 bg-emerald-50{{else}}border-amber-300 bg-amber-50{{end}}"
+              style="top: {{printf "%.4f" .TopPercent}}%; height: {{printf "%.4f" .HeightPercent}}%;"
+              title="{{.AppName}} | {{.WindowTitle}} | WiFi: {{.WifiSSID}}"
+            >
+              <div class="flex items-center justify-between gap-2">
+                <span class="font-semibold text-slate-800">{{.StartLabel}}-{{.EndLabel}}</span>
+                <span class="text-slate-600">{{formatDuration .DurationMS}}</span>
+              </div>
+              <div class="truncate text-slate-700">{{.AppName}} | {{.WindowTitle}}</div>
+              <div class="truncate text-slate-500">WiFi: {{.WifiSSID}}</div>
+            </div>
+          {{end}}
+        {{end}}
+
+        {{if eq .Timeline.VisibleEvents 0}}
+          <div class="absolute inset-0 flex items-center justify-center text-sm text-slate-500">No events in selected time window.</div>
+        {{end}}
+      </div>
+    </div>
+  </section>
+
+  <section class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+    <h3 class="mb-3 text-base font-semibold text-tt-ink">Event History</h3>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-slate-200">
+            <th class="py-2 text-left font-medium text-slate-600">Time</th>
+            <th class="py-2 text-left font-medium text-slate-600">App</th>
+            <th class="py-2 text-left font-medium text-slate-600">Window</th>
+            <th class="py-2 text-left font-medium text-slate-600">Project / Activity</th>
+            <th class="py-2 text-left font-medium text-slate-600">WiFi</th>
+            <th class="py-2 text-right font-medium text-slate-600">Duration</th>
+            <th class="py-2 text-left font-medium text-slate-600">Visibility</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+        {{range .Timeline.Events}}
+          <tr class="{{if not .InView}}opacity-70{{end}}">
+            <td class="py-2 text-slate-700">{{.StartLabel}}-{{.EndLabel}}</td>
+            <td class="py-2 text-slate-800">{{.AppName}}</td>
+            <td class="max-w-xs py-2 text-slate-700 truncate" title="{{.WindowTitle}}">{{.WindowTitle}}</td>
+            <td class="py-2 text-slate-700">
+              {{if .ProjectTitle}}
+                {{.ProjectTitle}}{{if .ActivityName}} &gt; {{.ActivityName}}{{end}}
+              {{else}}
+                <span class="text-amber-600">Unmapped</span>
+              {{end}}
+            </td>
+            <td class="py-2 text-slate-700">{{.WifiSSID}}</td>
+            <td class="py-2 text-right font-medium text-slate-700">{{formatDuration .DurationMS}}</td>
+            <td class="py-2 text-slate-600">{{if .InView}}In view{{else}}Outside view{{end}}</td>
+          </tr>
+        {{else}}
+          <tr><td colspan="7" class="py-4 text-center text-slate-500">No events for this date.</td></tr>
+        {{end}}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+{{end}}

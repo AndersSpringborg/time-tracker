@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	tidsregmodel "time-tracker/internal/application/integrations/tidsreg"
 	"time-tracker/internal/application/usecases"
@@ -83,6 +84,14 @@ func (f *fakeReportsRepoForAPI) ListReportEvents(context.Context, string, *strin
 			WifiSSID:    "Home",
 		},
 	}, nil
+}
+
+type fakeTimelineReportsRepoForAPI struct {
+	events []domain.Event
+}
+
+func (f *fakeTimelineReportsRepoForAPI) ListReportEvents(context.Context, string, *string) ([]domain.Event, error) {
+	return f.events, nil
 }
 
 type fakeProjectsRepoForAPI struct{}
@@ -398,6 +407,92 @@ func TestReportsPartialShowsRangeContextWithoutDate(t *testing.T) {
 	}
 	if !strings.Contains(body, "Mapped") || !strings.Contains(body, "Unmapped") {
 		t.Fatalf("expected mapped/unmapped details in reports partial")
+	}
+}
+
+func TestTimelinePageRendersDefaultControls(t *testing.T) {
+	app := &usecases.App{
+		Reports: usecases.NewReportsUsecase(&fakeTimelineReportsRepoForAPI{}, fakeProjectsRepoForAPI{}, fakeSettingsRepoForAPI{}),
+	}
+	s, err := New(app)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/timeline", nil)
+	rr := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "Timeline") {
+		t.Fatalf("expected timeline heading")
+	}
+	if !strings.Contains(body, `name="start_hour" value="8"`) {
+		t.Fatalf("expected default start hour in timeline controls")
+	}
+	if !strings.Contains(body, `name="end_hour" value="17"`) {
+		t.Fatalf("expected default end hour in timeline controls")
+	}
+}
+
+func TestTimelinePartialRendersTimelineAndHistory(t *testing.T) {
+	day := time.Date(2026, time.February, 7, 0, 0, 0, 0, time.Local)
+	projectID := int64(10)
+	activityID := int64(100)
+	repo := &fakeTimelineReportsRepoForAPI{
+		events: []domain.Event{
+			{
+				ID:           1,
+				TimestampMS:  day.Add(9*time.Hour + 15*time.Minute).UnixMilli(),
+				DurationMS:   45 * 60 * 1000,
+				AppName:      "Code",
+				WindowTitle:  "main.go",
+				ProjectID:    &projectID,
+				ActivityID:   &activityID,
+				ProjectTitle: "project a",
+				ActivityName: "development",
+				WifiSSID:     "Office",
+			},
+			{
+				ID:          2,
+				TimestampMS: day.Add(18 * time.Hour).UnixMilli(),
+				DurationMS:  20 * 60 * 1000,
+				AppName:     "Arc",
+				WindowTitle: "standup notes",
+				WifiSSID:    "Home",
+			},
+		},
+	}
+	app := &usecases.App{
+		Reports: usecases.NewReportsUsecase(repo, fakeProjectsRepoForAPI{}, fakeSettingsRepoForAPI{}),
+	}
+	s, err := New(app)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/partials/timeline?date=2026-02-07&start_hour=8&end_hour=17", nil)
+	rr := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "Day Timeline") {
+		t.Fatalf("expected day timeline section, got %s", body)
+	}
+	if !strings.Contains(body, "Event History") {
+		t.Fatalf("expected event history section, got %s", body)
+	}
+	if !strings.Contains(body, "Office") || !strings.Contains(body, "Home") {
+		t.Fatalf("expected wifi values in timeline/history, got %s", body)
+	}
+	if !strings.Contains(body, "Outside view") {
+		t.Fatalf("expected out-of-window indicator in history, got %s", body)
 	}
 }
 

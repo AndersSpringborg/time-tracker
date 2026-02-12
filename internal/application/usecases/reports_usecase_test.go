@@ -3,6 +3,7 @@ package usecases
 import (
 	"context"
 	"testing"
+	"time"
 
 	"time-tracker/internal/application/contracts"
 	"time-tracker/internal/domain"
@@ -221,5 +222,86 @@ func TestReportsUsecaseReportUsesAllEventsWhenWorkWifiNotConfigured(t *testing.T
 	}
 	if len(report.ByProject) == 0 || len(report.ByApp) == 0 {
 		t.Fatalf("expected populated summaries when work_wifis is empty")
+	}
+}
+
+func TestNormalizeTimelineHours(t *testing.T) {
+	startHour, endHour := NormalizeTimelineHours(-1, 30)
+	if startHour != 8 || endHour != 17 {
+		t.Fatalf("expected defaults 8-17, got %d-%d", startHour, endHour)
+	}
+	startHour, endHour = NormalizeTimelineHours(9, 18)
+	if startHour != 9 || endHour != 18 {
+		t.Fatalf("expected valid range 9-18, got %d-%d", startHour, endHour)
+	}
+	startHour, endHour = NormalizeTimelineHours(18, 9)
+	if startHour != 8 || endHour != 17 {
+		t.Fatalf("expected invalid range to fall back to defaults, got %d-%d", startHour, endHour)
+	}
+}
+
+func TestReportsUsecaseTimelineBuildsDayView(t *testing.T) {
+	day := time.Date(2026, time.February, 7, 0, 0, 0, 0, time.Local)
+	projectID := int64(10)
+	activityID := int64(100)
+	repo := &fakeReportsRepo{
+		events: []domain.Event{
+			{
+				ID:           1,
+				TimestampMS:  day.Add(8*time.Hour + 30*time.Minute).UnixMilli(),
+				DurationMS:   30 * 60 * 1000,
+				AppName:      "Code",
+				WindowTitle:  "main.go",
+				WifiSSID:     "Office",
+				ProjectID:    &projectID,
+				ActivityID:   &activityID,
+				ProjectTitle: "project a",
+				ActivityName: "development",
+			},
+			{
+				ID:          2,
+				TimestampMS: day.Add(18 * time.Hour).UnixMilli(),
+				DurationMS:  15 * 60 * 1000,
+				AppName:     "Arc",
+				WindowTitle: "daily",
+				WifiSSID:    "",
+			},
+		},
+	}
+	uc := NewReportsUsecase(repo, fakeReportsProjectsRepo{}, fakeReportsSettingsRepo{})
+	date := "2026-02-07"
+
+	res, err := uc.Timeline(context.Background(), contracts.ReportsTimelineRequest{
+		Date:      &date,
+		StartHour: 8,
+		EndHour:   17,
+	})
+	if err != nil {
+		t.Fatalf("timeline failed: %v", err)
+	}
+	if repo.lastRangeKey != "all" {
+		t.Fatalf("expected timeline to use all range with date filter, got %s", repo.lastRangeKey)
+	}
+	if repo.lastDate == nil || *repo.lastDate != date {
+		t.Fatalf("expected timeline date forwarding, got %+v", repo.lastDate)
+	}
+	timeline := res.Timeline
+	if timeline.StartHour != 8 || timeline.EndHour != 17 {
+		t.Fatalf("expected timeline range 8-17, got %d-%d", timeline.StartHour, timeline.EndHour)
+	}
+	if timeline.TotalEvents != 2 || timeline.VisibleEvents != 1 {
+		t.Fatalf("unexpected timeline event counts %+v", timeline)
+	}
+	if len(timeline.Events) != 2 {
+		t.Fatalf("expected 2 timeline events, got %d", len(timeline.Events))
+	}
+	if !timeline.Events[0].InView {
+		t.Fatalf("expected first event in view")
+	}
+	if timeline.Events[1].InView {
+		t.Fatalf("expected second event outside view")
+	}
+	if timeline.Events[1].WifiSSID != "(none)" {
+		t.Fatalf("expected empty wifi to render as (none), got %q", timeline.Events[1].WifiSSID)
 	}
 }

@@ -97,6 +97,7 @@ Pages:
 
 - Dashboard
 - Reports
+- Timeline
 - Rules
 - Suggestions (auto-categorization)
 - Projects

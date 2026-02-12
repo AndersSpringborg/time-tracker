@@ -124,6 +124,15 @@ type ReportsBuildResponse struct {
 	Report domain.Report
 }
 
+type ReportsTimelineRequest struct {
+	Date      *string
+	StartHour int
+	EndHour   int
+}
+type ReportsTimelineResponse struct {
+	Timeline domain.TimelineDay
+}
+
 type ProjectsListActiveRequest struct{}
 type ProjectsListActiveResponse struct {
 	Projects []domain.Project

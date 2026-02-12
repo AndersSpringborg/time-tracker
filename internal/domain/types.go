@@ -237,6 +237,40 @@ type Dashboard struct {
 	CurrentProjectID *int64
 }
 
+type TimelineHourMark struct {
+	Hour       int
+	Label      string
+	TopPercent float64
+}
+
+type TimelineEvent struct {
+	EventID       int64
+	StartLabel    string
+	EndLabel      string
+	DurationMS    int64
+	AppName       string
+	WindowTitle   string
+	ProjectTitle  string
+	ActivityName  string
+	WifiSSID      string
+	InView        bool
+	IsMapped      bool
+	TopPercent    float64
+	HeightPercent float64
+}
+
+type TimelineDay struct {
+	Date          string
+	StartHour     int
+	EndHour       int
+	HourMarks     []TimelineHourMark
+	Events        []TimelineEvent
+	TotalEvents   int64
+	VisibleEvents int64
+	TotalMS       int64
+	VisibleMS     int64
+}
+
 type LifecycleStatus struct {
 	Loaded bool
 	PID    string

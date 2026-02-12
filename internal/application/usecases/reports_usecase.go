@@ -2,6 +2,7 @@ package usecases
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -10,6 +11,9 @@ import (
 	"time-tracker/internal/application/ports"
 	"time-tracker/internal/domain"
 )
+
+const defaultTimelineStartHour = 8
+const defaultTimelineEndHour = 17
 
 type ReportsUsecase struct {
 	reportsRepo  ports.ReportsRepository
@@ -141,6 +145,141 @@ func (u *ReportsUsecase) Report(ctx context.Context, req contracts.ReportsBuildR
 	out.MappedDetails = buildMappedDetails(items, workMask)
 
 	return contracts.ReportsBuildResponse{Report: out}, nil
+}
+
+func (u *ReportsUsecase) Timeline(ctx context.Context, req contracts.ReportsTimelineRequest) (contracts.ReportsTimelineResponse, error) {
+	reportDate := NormalizeReportDate(valueOrEmpty(req.Date))
+	if reportDate == nil {
+		today := time.Now().Format("2006-01-02")
+		reportDate = &today
+	}
+	startHour, endHour := NormalizeTimelineHours(req.StartHour, req.EndHour)
+	items, err := u.reportsRepo.ListReportEvents(ctx, "all", reportDate)
+	if err != nil {
+		return contracts.ReportsTimelineResponse{}, err
+	}
+	timeline := buildTimelineDay(*reportDate, startHour, endHour, items)
+	return contracts.ReportsTimelineResponse{Timeline: timeline}, nil
+}
+
+func buildTimelineDay(date string, startHour, endHour int, events []domain.Event) domain.TimelineDay {
+	out := domain.TimelineDay{
+		Date:      date,
+		StartHour: startHour,
+		EndHour:   endHour,
+		HourMarks: buildTimelineHourMarks(startHour, endHour),
+		Events:    []domain.TimelineEvent{},
+	}
+	if len(events) == 0 {
+		return out
+	}
+
+	ordered := make([]domain.Event, len(events))
+	copy(ordered, events)
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].TimestampMS == ordered[j].TimestampMS {
+			return ordered[i].ID < ordered[j].ID
+		}
+		return ordered[i].TimestampMS < ordered[j].TimestampMS
+	})
+
+	dayStart, err := time.ParseInLocation("2006-01-02", date, time.Local)
+	if err != nil {
+		first := time.UnixMilli(ordered[0].TimestampMS).In(time.Local)
+		y, m, d := first.Date()
+		dayStart = time.Date(y, m, d, 0, 0, 0, 0, first.Location())
+	}
+	windowStart := dayStart.Add(time.Duration(startHour) * time.Hour)
+	windowEnd := dayStart.Add(time.Duration(endHour) * time.Hour)
+	windowSpanMS := float64(windowEnd.Sub(windowStart).Milliseconds())
+	if windowSpanMS <= 0 {
+		windowSpanMS = 1
+	}
+
+	for _, item := range ordered {
+		if item.DurationMS <= 0 {
+			continue
+		}
+		start := time.UnixMilli(item.TimestampMS).In(time.Local)
+		end := start.Add(time.Duration(item.DurationMS) * time.Millisecond)
+		if end.Before(start) {
+			end = start
+		}
+		event := domain.TimelineEvent{
+			EventID:       item.ID,
+			StartLabel:    start.Format("15:04"),
+			EndLabel:      end.Format("15:04"),
+			DurationMS:    item.DurationMS,
+			AppName:       strings.TrimSpace(item.AppName),
+			WindowTitle:   strings.TrimSpace(item.WindowTitle),
+			ProjectTitle:  strings.TrimSpace(item.ProjectTitle),
+			ActivityName:  strings.TrimSpace(item.ActivityName),
+			WifiSSID:      strings.TrimSpace(item.WifiSSID),
+			IsMapped:      item.ProjectID != nil && item.ActivityID != nil,
+			InView:        false,
+			TopPercent:    0,
+			HeightPercent: 0,
+		}
+		if event.AppName == "" {
+			event.AppName = "Unknown App"
+		}
+		if event.WindowTitle == "" {
+			event.WindowTitle = "(empty title)"
+		}
+		if event.WifiSSID == "" {
+			event.WifiSSID = "(none)"
+		}
+
+		out.TotalEvents++
+		out.TotalMS += item.DurationMS
+
+		visibleStart := start
+		if visibleStart.Before(windowStart) {
+			visibleStart = windowStart
+		}
+		visibleEnd := end
+		if visibleEnd.After(windowEnd) {
+			visibleEnd = windowEnd
+		}
+		if visibleEnd.After(visibleStart) {
+			visibleMS := visibleEnd.Sub(visibleStart).Milliseconds()
+			top := float64(visibleStart.Sub(windowStart).Milliseconds()) / windowSpanMS * 100
+			height := float64(visibleMS) / windowSpanMS * 100
+			if height < 0.7 {
+				height = 0.7
+			}
+			if top+height > 100 {
+				height = 100 - top
+			}
+			event.InView = true
+			event.TopPercent = top
+			event.HeightPercent = height
+			out.VisibleEvents++
+			out.VisibleMS += visibleMS
+		}
+		out.Events = append(out.Events, event)
+	}
+
+	return out
+}
+
+func buildTimelineHourMarks(startHour, endHour int) []domain.TimelineHourMark {
+	totalHours := endHour - startHour
+	if totalHours <= 0 {
+		return nil
+	}
+	out := make([]domain.TimelineHourMark, 0, totalHours+1)
+	for idx := 0; idx <= totalHours; idx++ {
+		hour := startHour + idx
+		label := fmt.Sprintf("%02d:00", hour)
+		top := float64(idx) / float64(totalHours) * 100
+		out = append(out, domain.TimelineHourMark{
+			Hour:       hour,
+			Label:      label,
+			TopPercent: top,
+		})
+	}
+	return out
 }
 
 func shortenTitle(s string, max int) string {
@@ -284,6 +423,19 @@ func NormalizeRange(v string) string {
 	default:
 		return "today"
 	}
+}
+
+func NormalizeTimelineHours(startHour, endHour int) (int, int) {
+	if startHour < 0 || startHour > 23 {
+		startHour = defaultTimelineStartHour
+	}
+	if endHour < 1 || endHour > 24 {
+		endHour = defaultTimelineEndHour
+	}
+	if endHour <= startHour {
+		return defaultTimelineStartHour, defaultTimelineEndHour
+	}
+	return startHour, endHour
 }
 
 func NormalizeReportDate(raw string) *string {

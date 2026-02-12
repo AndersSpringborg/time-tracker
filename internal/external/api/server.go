@@ -48,6 +48,9 @@ type pageData struct {
 	WorkWifisText     string
 	Dashboard         domain.Dashboard
 	Report            domain.Report
+	Timeline          domain.TimelineDay
+	TimelineStartHour int
+	TimelineEndHour   int
 	RulesApplySummary string
 	Rules             []domain.Rule
 	ActiveProjects    []domain.Project
@@ -80,6 +83,9 @@ type ruleTargetOption struct {
 	Label string
 }
 
+const timelineDefaultStartHour = 8
+const timelineDefaultEndHour = 17
+
 func New(app *usecases.App) (*Server, error) {
 	funcs := template.FuncMap{
 		"formatDuration":   domain.FormatDuration,
@@ -109,6 +115,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/partials/dashboard", s.handleDashboardPartial)
 	mux.HandleFunc("/reports", s.handleReports)
 	mux.HandleFunc("/partials/reports", s.handleReportsPartial)
+	mux.HandleFunc("/timeline", s.handleTimeline)
+	mux.HandleFunc("/partials/timeline", s.handleTimelinePartial)
 	mux.HandleFunc("/reports/apply-rules", s.handleReportsApplyRules)
 	mux.HandleFunc("/reports/apply-rules-preview", s.handleReportsApplyRulesPreview)
 	mux.HandleFunc("/reports/add-rule", s.handleReportsAddRule)
@@ -273,6 +281,62 @@ func (s *Server) handleReportsPartial(w http.ResponseWriter, r *http.Request) {
 	rangeKey := usecases.NormalizeRange(r.URL.Query().Get("range"))
 	requestDate := usecases.NormalizeReportDate(r.URL.Query().Get("date"))
 	s.renderReportsTable(w, r, rangeKey, requestDate, "")
+}
+
+func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
+	requestDate := usecases.NormalizeReportDate(r.URL.Query().Get("date"))
+	if requestDate == nil {
+		today := time.Now().Format("2006-01-02")
+		requestDate = &today
+	}
+	startHour := parseIntBounded(r.URL.Query().Get("start_hour"), timelineDefaultStartHour)
+	endHour := parseIntBounded(r.URL.Query().Get("end_hour"), timelineDefaultEndHour)
+	startHour, endHour = usecases.NormalizeTimelineHours(startHour, endHour)
+	timelineDate := *requestDate
+
+	s.render(w, "layout", pageData{
+		Title:             "Timeline",
+		Page:              "timeline",
+		Body:              "timeline",
+		ReportDate:        timelineDate,
+		ReportDateActive:  true,
+		PrevReportDate:    usecases.PreviousDate(timelineDate),
+		NextReportDate:    usecases.NextDate(timelineDate),
+		TimelineStartHour: startHour,
+		TimelineEndHour:   endHour,
+	})
+}
+
+func (s *Server) handleTimelinePartial(w http.ResponseWriter, r *http.Request) {
+	requestDate := usecases.NormalizeReportDate(r.URL.Query().Get("date"))
+	if requestDate == nil {
+		today := time.Now().Format("2006-01-02")
+		requestDate = &today
+	}
+	startHour := parseIntBounded(r.URL.Query().Get("start_hour"), timelineDefaultStartHour)
+	endHour := parseIntBounded(r.URL.Query().Get("end_hour"), timelineDefaultEndHour)
+	startHour, endHour = usecases.NormalizeTimelineHours(startHour, endHour)
+	s.renderTimelinePanel(w, r, *requestDate, startHour, endHour)
+}
+
+func (s *Server) renderTimelinePanel(w http.ResponseWriter, r *http.Request, date string, startHour, endHour int) {
+	res, err := s.app.Reports.Timeline(r.Context(), contracts.ReportsTimelineRequest{
+		Date:      &date,
+		StartHour: startHour,
+		EndHour:   endHour,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	s.render(w, "partials/timeline_panel", pageData{
+		Timeline:          res.Timeline,
+		ReportDate:        res.Timeline.Date,
+		PrevReportDate:    usecases.PreviousDate(res.Timeline.Date),
+		NextReportDate:    usecases.NextDate(res.Timeline.Date),
+		TimelineStartHour: res.Timeline.StartHour,
+		TimelineEndHour:   res.Timeline.EndHour,
+	})
 }
 
 func (s *Server) handleReportsApplyRules(w http.ResponseWriter, r *http.Request) {
@@ -1245,6 +1309,18 @@ func parseIntDefault(s string, fallback int64) int64 {
 		return fallback
 	}
 	if v <= 0 {
+		return fallback
+	}
+	return v
+}
+
+func parseIntBounded(s string, fallback int) int {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return fallback
+	}
+	v, err := strconv.Atoi(s)
+	if err != nil {
 		return fallback
 	}
 	return v
