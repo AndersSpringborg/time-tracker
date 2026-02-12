@@ -259,6 +259,14 @@ func TestReportsUsecaseTimelineBuildsDayView(t *testing.T) {
 				ActivityName: "development",
 			},
 			{
+				ID:          3,
+				TimestampMS: day.Add(10 * time.Hour).UnixMilli(),
+				DurationMS:  60 * 1000,
+				AppName:     "Code",
+				WindowTitle: "tiny.go",
+				WifiSSID:    "Office",
+			},
+			{
 				ID:          2,
 				TimestampMS: day.Add(18 * time.Hour).UnixMilli(),
 				DurationMS:  15 * 60 * 1000,
@@ -289,19 +297,25 @@ func TestReportsUsecaseTimelineBuildsDayView(t *testing.T) {
 	if timeline.StartHour != 8 || timeline.EndHour != 17 {
 		t.Fatalf("expected timeline range 8-17, got %d-%d", timeline.StartHour, timeline.EndHour)
 	}
-	if timeline.TotalEvents != 2 || timeline.VisibleEvents != 1 {
+	if timeline.TotalEvents != 3 || timeline.VisibleEvents != 2 {
 		t.Fatalf("unexpected timeline event counts %+v", timeline)
 	}
-	if len(timeline.Events) != 2 {
-		t.Fatalf("expected 2 timeline events, got %d", len(timeline.Events))
+	if len(timeline.Events) != 3 {
+		t.Fatalf("expected 3 timeline events, got %d", len(timeline.Events))
 	}
 	if !timeline.Events[0].InView {
 		t.Fatalf("expected first event in view")
 	}
-	if timeline.Events[1].InView {
-		t.Fatalf("expected second event outside view")
+	if !timeline.Events[1].InView {
+		t.Fatalf("expected second event in view")
 	}
-	if timeline.Events[1].WifiSSID != "(none)" {
-		t.Fatalf("expected empty wifi to render as (none), got %q", timeline.Events[1].WifiSSID)
+	if timeline.Events[1].HeightPercent >= 0.7 {
+		t.Fatalf("expected tiny event height to stay proportional, got %.4f", timeline.Events[1].HeightPercent)
+	}
+	if timeline.Events[2].InView {
+		t.Fatalf("expected third event outside view")
+	}
+	if timeline.Events[2].WifiSSID != "(none)" {
+		t.Fatalf("expected empty wifi to render as (none), got %q", timeline.Events[2].WifiSSID)
 	}
 }

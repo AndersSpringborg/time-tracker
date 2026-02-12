@@ -245,9 +245,6 @@ func buildTimelineDay(date string, startHour, endHour int, events []domain.Event
 			visibleMS := visibleEnd.Sub(visibleStart).Milliseconds()
 			top := float64(visibleStart.Sub(windowStart).Milliseconds()) / windowSpanMS * 100
 			height := float64(visibleMS) / windowSpanMS * 100
-			if height < 0.7 {
-				height = 0.7
-			}
 			if top+height > 100 {
 				height = 100 - top
 			}

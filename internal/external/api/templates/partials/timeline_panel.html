@@ -11,13 +11,13 @@
   <section class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
     <h3 class="mb-3 text-base font-semibold text-tt-ink">Day Timeline</h3>
     <div class="flex gap-3">
-      <div class="relative w-16 shrink-0" style="height: 540px;">
+      <div class="relative w-16 shrink-0" style="--start-hour: {{.Timeline.StartHour}}; --end-hour: {{.Timeline.EndHour}}; --timeline-hour-height: 120px; height: calc((var(--end-hour) - var(--start-hour)) * var(--timeline-hour-height)); min-height: 720px;">
         {{range .Timeline.HourMarks}}
           <div class="absolute -translate-y-1/2 text-xs text-slate-500" style="top: {{printf "%.4f" .TopPercent}}%;">{{.Label}}</div>
         {{end}}
       </div>
 
-      <div class="relative flex-1 rounded-xl border border-slate-200 bg-slate-50" style="height: 540px;">
+      <div class="relative flex-1 rounded-xl border border-slate-200 bg-slate-50" style="--start-hour: {{.Timeline.StartHour}}; --end-hour: {{.Timeline.EndHour}}; --timeline-hour-height: 120px; height: calc((var(--end-hour) - var(--start-hour)) * var(--timeline-hour-height)); min-height: 720px;">
         {{range .Timeline.HourMarks}}
           <div class="absolute left-0 right-0 border-t border-slate-200" style="top: {{printf "%.4f" .TopPercent}}%;"></div>
         {{end}}
@@ -26,7 +26,7 @@
           {{if .InView}}
             <div
               class="absolute left-2 right-2 overflow-hidden rounded-md border px-2 py-1 text-xs shadow-sm {{if .IsMapped}}border-emerald-300 bg-emerald-50{{else}}border-amber-300 bg-amber-50{{end}}"
-              style="top: {{printf "%.4f" .TopPercent}}%; height: {{printf "%.4f" .HeightPercent}}%;"
+              style="top: {{printf "%.4f" .TopPercent}}%; height: {{printf "%.4f" .HeightPercent}}%; min-height: 2px;"
               title="{{.AppName}} | {{.WindowTitle}} | WiFi: {{.WifiSSID}}"
             >
               <div class="flex items-center justify-between gap-2">

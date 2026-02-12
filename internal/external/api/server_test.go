@@ -494,6 +494,9 @@ func TestTimelinePartialRendersTimelineAndHistory(t *testing.T) {
 	if !strings.Contains(body, "Outside view") {
 		t.Fatalf("expected out-of-window indicator in history, got %s", body)
 	}
+	if !strings.Contains(body, "--timeline-hour-height: 120px") || !strings.Contains(body, "min-height: 720px") {
+		t.Fatalf("expected dynamic timeline height styles, got %s", body)
+	}
 }
 
 func TestReportsApplyRulesRendersSummary(t *testing.T) {
