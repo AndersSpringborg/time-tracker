@@ -29,6 +29,14 @@ This does:
 2. `make sync-worker` (embed worker binary)
 3. `go build -mod=mod -o tracker ./cmd/tt`
 
+## Install CLI Binary
+
+```bash
+make install
+```
+
+This builds the project and installs `tracker` to `~/.local/bin/tracker`.
+
 ## Test (TDD workflow)
 
 ```bash

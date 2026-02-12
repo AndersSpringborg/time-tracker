@@ -1,8 +1,10 @@
 APP_NAME=tracker
 WORKER_SRC=zig-out/bin/tt
 WORKER_EMBED=internal/worker/assets/tt-worker
+BIN_DIR ?= $(HOME)/.local/bin
+INSTALL_PATH ?= $(BIN_DIR)/$(APP_NAME)
 
-.PHONY: build build-worker sync-worker build-manager test test-go test-zig test-fast clean
+.PHONY: build build-worker sync-worker build-manager install test test-go test-zig test-fast clean
 
 build: build-worker sync-worker build-manager
 
@@ -21,6 +23,12 @@ sync-worker:
 
 build-manager:
 	go build -mod=mod -o $(APP_NAME) ./cmd/tt
+
+install: build
+	@mkdir -p "$(BIN_DIR)"
+	@cp "$(APP_NAME)" "$(INSTALL_PATH)"
+	@chmod +x "$(INSTALL_PATH)"
+	@echo "installed $(APP_NAME) -> $(INSTALL_PATH)"
 
 test: test-zig test-go
 
