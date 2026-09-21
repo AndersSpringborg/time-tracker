@@ -24,6 +24,9 @@ pub const DuckDbError = error{
     ConnectFailed,
     QueryFailed,
     NoResults,
+    InsertFailed,
+    BeginFailed,
+    CommitFailed,
 };
 
 pub const StoredEvent = struct {
@@ -85,31 +88,30 @@ pub const DuckDbRepository = struct {
         c.duckdb_close(&self.db);
     }
 
-    pub fn save(self: *DuckDbRepository, event: Event, duration_ms: i64) void {
+    pub fn save(self: *DuckDbRepository, event: Event, duration_ms: i64) DuckDbError!void {
         // Use prepared statement to avoid SQL injection
         var stmt: c.duckdb_prepared_statement = undefined;
 
         const insert_sql = "INSERT INTO events (timestamp_ms, app_name, window_title, wifi_ssid, duration_ms) VALUES (?, ?, ?, ?, ?)";
 
-        if (c.duckdb_prepare(self.conn, insert_sql, &stmt) == c.DuckDBError) {
-            std.debug.print("Failed to prepare insert statement\n", .{});
-            return;
-        }
+        const prepared = c.duckdb_prepare(self.conn, insert_sql, &stmt);
         defer c.duckdb_destroy_prepare(&stmt);
+        if (prepared == c.DuckDBError) return DuckDbError.InsertFailed;
 
-        // Bind parameters
-        _ = c.duckdb_bind_int64(stmt, 1, event.timestamp_ms);
-        _ = c.duckdb_bind_varchar_length(stmt, 2, event.app_name.ptr, event.app_name.len);
-        _ = c.duckdb_bind_varchar_length(stmt, 3, event.window_title.ptr, event.window_title.len);
-        _ = c.duckdb_bind_varchar_length(stmt, 4, event.wifi_ssid.ptr, event.wifi_ssid.len);
-        _ = c.duckdb_bind_int64(stmt, 5, duration_ms);
-
-        // Execute
-        var result: c.duckdb_result = undefined;
-        if (c.duckdb_execute_prepared(stmt, &result) == c.DuckDBError) {
-            std.debug.print("Failed to execute insert: {s}\n", .{c.duckdb_result_error(&result)});
+        if (c.duckdb_bind_int64(stmt, 1, event.timestamp_ms) == c.DuckDBError or
+            c.duckdb_bind_varchar_length(stmt, 2, event.app_name.ptr, event.app_name.len) == c.DuckDBError or
+            c.duckdb_bind_varchar_length(stmt, 3, event.window_title.ptr, event.window_title.len) == c.DuckDBError or
+            c.duckdb_bind_varchar_length(stmt, 4, event.wifi_ssid.ptr, event.wifi_ssid.len) == c.DuckDBError or
+            c.duckdb_bind_int64(stmt, 5, duration_ms) == c.DuckDBError)
+        {
+            return DuckDbError.InsertFailed;
         }
-        c.duckdb_destroy_result(&result);
+
+        var result: c.duckdb_result = undefined;
+        defer c.duckdb_destroy_result(&result);
+        if (c.duckdb_execute_prepared(stmt, &result) == c.DuckDBError) {
+            return DuckDbError.InsertFailed;
+        }
     }
 
     pub fn countEvents(self: *DuckDbRepository) DuckDbError!usize {
@@ -180,17 +182,28 @@ pub const DuckDbRepository = struct {
 
     /// Begin an explicit transaction so a batch of saves commits once,
     /// rather than each insert running in its own implicit transaction.
-    pub fn beginTransaction(self: *DuckDbRepository) void {
-        self.execQuery("BEGIN TRANSACTION") catch {
-            std.debug.print("Failed to begin transaction\n", .{});
-        };
+    pub fn beginTransaction(self: *DuckDbRepository) DuckDbError!void {
+        self.execQuery("BEGIN TRANSACTION") catch return DuckDbError.BeginFailed;
     }
 
     /// Commit the explicit transaction opened by beginTransaction.
-    pub fn commitTransaction(self: *DuckDbRepository) void {
-        self.execQuery("COMMIT") catch {
-            std.debug.print("Failed to commit transaction\n", .{});
+    pub fn commitTransaction(self: *DuckDbRepository) DuckDbError!void {
+        self.execQuery("COMMIT") catch return DuckDbError.CommitFailed;
+    }
+
+    pub fn rollbackTransaction(self: *DuckDbRepository) DuckDbError!void {
+        try self.execQuery("ROLLBACK");
+    }
+
+    pub fn saveBatch(self: *DuckDbRepository, events: []const BufferedEvent) DuckDbError!void {
+        try self.beginTransaction();
+        errdefer self.rollbackTransaction() catch |err| {
+            std.debug.print("BufferedRepository: Failed to roll back transaction: {}\n", .{err});
         };
+        for (events) |*event| {
+            try self.save(event.toEvent(), event.duration_ms);
+        }
+        try self.commitTransaction();
     }
 
     fn execQuery(self: *DuckDbRepository, sql: [*c]const u8) DuckDbError!void {
@@ -336,14 +349,10 @@ pub const BufferedRepository = struct {
         // Flush all buffered events in a single transaction so the batch
         // commits (and checkpoints on close) once, instead of one implicit
         // transaction per row.
-        repo.beginTransaction();
-        var flushed: usize = 0;
-        for (self.buffer.items) |*buffered| {
-            const event = buffered.toEvent();
-            repo.save(event, buffered.duration_ms);
-            flushed += 1;
-        }
-        repo.commitTransaction();
+        repo.saveBatch(self.buffer.items) catch |err| {
+            std.debug.print("BufferedRepository: Failed to flush batch: {}\n", .{err});
+            return;
+        };
 
         // Clear buffered items and return capacity to a small steady-state baseline.
         self.buffer.clearAndFree(self.allocator);
@@ -351,7 +360,7 @@ pub const BufferedRepository = struct {
 
         std.debug.print(
             "BufferedRepository: Flushed {d}/{d} events to database (capacity {d} -> {d})\n",
-            .{ flushed, buffered_count, previous_capacity, self.buffer.capacity },
+            .{ buffered_count, buffered_count, previous_capacity, self.buffer.capacity },
         );
     }
 
