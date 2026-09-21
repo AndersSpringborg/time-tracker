@@ -15,3 +15,11 @@ type DatabaseMaintainer interface {
 	Stats(context.Context) (domain.DatabaseStats, error)
 	Compact(context.Context) (domain.CompactionResult, error)
 }
+
+// RetentionRepository serves the cap-driven retention policy: how much detail
+// is stored, which days could be summarised, and the summarisation itself.
+type RetentionRepository interface {
+	DetailBytes(context.Context) (int64, error)
+	RetentionDays(context.Context) ([]domain.RetentionDay, error)
+	SummarizeDay(context.Context, string) (domain.DaySummary, error)
+}

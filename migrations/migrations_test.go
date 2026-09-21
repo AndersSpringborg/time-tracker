@@ -11,11 +11,12 @@ func TestLoadReturnsSortedMigrations(t *testing.T) {
 		t.Fatalf("expected at least 19 migrations, got %d", len(migs))
 	}
 
-	if migs[0].Version != 1 {
-		t.Fatalf("expected first version 1, got %d", migs[0].Version)
-	}
-	if migs[len(migs)-1].Version != 19 {
-		t.Fatalf("expected last version 19, got %d", migs[len(migs)-1].Version)
+	// Assert the property rather than today's highest version, which every new
+	// migration would otherwise break: versions run from 1 upwards, in order.
+	for i, m := range migs {
+		if m.Version != i+1 {
+			t.Fatalf("migration %d is version %d; versions must be sorted and contiguous from 1", i, m.Version)
+		}
 	}
 }
 

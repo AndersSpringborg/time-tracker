@@ -1187,7 +1187,7 @@ func workerLogHasAccessibilityError() bool {
 
 func (r *Runner) runMaintenance(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: tt maintenance <status|compact>")
+		fmt.Fprintln(stderr, "usage: tt maintenance <status|compact|retention-preview|retention-run>")
 		return 2
 	}
 	if r.App.Maintenance == nil {
@@ -1240,10 +1240,66 @@ func (r *Runner) runMaintenance(ctx context.Context, args []string, stdout, stde
 			fmt.Fprintf(stdout, "  %s=%d\n", table, result.Rows[table])
 		}
 		return 0
+	case "retention-preview", "retention-run":
+		if r.App.Retention == nil {
+			fmt.Fprintln(stderr, "error: retention adapter not configured")
+			return 1
+		}
+		plan, err := r.App.Retention.Plan(ctx)
+		if err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return 1
+		}
+		printRetentionPlan(stdout, plan)
+		if args[0] == "retention-preview" || len(plan.Days) == 0 {
+			return 0
+		}
+		if !hasFlag(args[1:], "--yes") {
+			fmt.Fprintln(stderr, "error: this deletes detail permanently; re-run with --yes to proceed")
+			return 1
+		}
+		outcome, err := r.App.Retention.Apply(ctx)
+		for _, summary := range outcome.Summarized {
+			fmt.Fprintf(stdout, "summarized %s: %d events, %s\n",
+				summary.Day, summary.EventCount, domain.FormatDuration(summary.TotalMS))
+		}
+		if err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return 1
+		}
+		return 0
 	default:
 		fmt.Fprintf(stderr, "unknown maintenance command: %s\n", args[0])
 		return 2
 	}
+}
+
+func hasFlag(args []string, flag string) bool {
+	for _, arg := range args {
+		if arg == flag {
+			return true
+		}
+	}
+	return false
+}
+
+// printRetentionPlan states what would be lost as well as what would be kept,
+// so enabling deletion is never a surprise.
+func printRetentionPlan(out io.Writer, plan domain.RetentionPlan) {
+	fmt.Fprintf(out, "detail stored: %s (cap %s)\n", formatBytes(plan.DataBytes), formatBytes(plan.CapBytes))
+	if len(plan.Days) == 0 {
+		fmt.Fprintln(out, "within cap: nothing would be summarized or deleted")
+		return
+	}
+	fmt.Fprintf(out, "over cap by %s; would summarize %d day(s), oldest first:\n",
+		formatBytes(plan.OverCapBy()), len(plan.Days))
+	for _, day := range plan.Days {
+		fmt.Fprintf(out, "  %s  %d events  %s  %s\n",
+			day.Day, day.Events, domain.FormatDuration(day.TotalMS), formatBytes(day.EstimatedBytes))
+	}
+	fmt.Fprintf(out, "totals and per-project/app/wifi breakdowns are kept; window titles, timelines and\n")
+	fmt.Fprintf(out, "per-event review are lost for those days (%d events, including %d still unmapped)\n",
+		plan.Events, plan.UnmappedEvents)
 }
 
 func sortedTables(rows map[string]int64) []string {

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -44,6 +45,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 				return 1
 			}
 			defer store.Close()
+		case "maintenance":
+			// Retention reads and rewrites rows, so it needs an open database.
+			// Status and compaction act on the file itself and must not hold
+			// it open — compaction needs the file to itself.
+			if len(args) > 1 && strings.HasPrefix(args[1], "retention") {
+				var store *duckdb.Store
+				var err error
+				app, store, err = buildApp()
+				if err != nil {
+					fmt.Fprintf(stderr, "error: %v\n", err)
+					return 1
+				}
+				defer store.Close()
+			}
 		}
 	}
 
@@ -101,6 +116,7 @@ func buildApp() (*usecases.App, *duckdb.Store, error) {
 	app.Review = usecases.NewReviewUsecase(store)
 	app.Reports = usecases.NewReportsUsecase(store, store, configfs.New())
 	app.Tidsreg = usecases.NewTidsregImportUsecase(tidsreg.New(), store)
+	app.Retention = usecases.NewRetentionUsecase(store)
 	return app, store, nil
 }
 

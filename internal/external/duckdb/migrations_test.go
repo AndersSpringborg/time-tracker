@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"time-tracker/migrations"
 )
 
 func seedLegacyVersion9Schema(t *testing.T, db *sql.DB, kindsStmt, kindsNewStmt string) {
@@ -189,8 +191,8 @@ func TestOpenMigratesLegacyVersion9DatabaseFromDisk(t *testing.T) {
 	if err := store.db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&version); err != nil {
 		t.Fatalf("query schema_migrations failed: %v", err)
 	}
-	if version != 19 {
-		t.Fatalf("expected schema version 19, got %d", version)
+	if version != latestMigrationVersion(t) {
+		t.Fatalf("expected schema version %d, got %d", latestMigrationVersion(t), version)
 	}
 }
 
@@ -230,8 +232,8 @@ func TestMigrateHandlesVersion12WithoutKindsTable(t *testing.T) {
 	if err := db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&version); err != nil {
 		t.Fatalf("query schema_migrations failed: %v", err)
 	}
-	if version != 19 {
-		t.Fatalf("expected schema version 19, got %d", version)
+	if version != latestMigrationVersion(t) {
+		t.Fatalf("expected schema version %d, got %d", latestMigrationVersion(t), version)
 	}
 
 	var phasesCount int
@@ -267,4 +269,21 @@ INSERT INTO a VALUES (1);
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected statements: got=%v want=%v", got, want)
 	}
+}
+
+// latestMigrationVersion avoids hard-coding a number that every new migration
+// would otherwise break.
+func latestMigrationVersion(t *testing.T) int {
+	t.Helper()
+	files, err := migrations.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	highest := 0
+	for _, file := range files {
+		if file.Version > highest {
+			highest = file.Version
+		}
+	}
+	return highest
 }

@@ -10,4 +10,5 @@ type App struct {
 	Help        *HelpUsecase
 	Tidsreg     *TidsregImportUsecase
 	Maintenance *MaintenanceUsecase
+	Retention   *RetentionUsecase
 }

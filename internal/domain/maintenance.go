@@ -44,3 +44,44 @@ func (r CompactionResult) Reclaimed() int64 {
 	}
 	return r.BytesBefore - r.BytesAfter
 }
+
+// DaySummary is the outcome of folding one day of detail into summaries.
+type DaySummary struct {
+	Day        string
+	EventCount int64
+	TotalMS    int64
+}
+
+// RetentionDay is one day of detail considered for summarisation.
+type RetentionDay struct {
+	Day            string
+	Events         int64
+	TotalMS        int64
+	EstimatedBytes int64
+	UnmappedEvents int64
+}
+
+// RetentionPlan is what retention would do at the current data size. It is
+// produced without changing anything.
+type RetentionPlan struct {
+	DataBytes      int64
+	CapBytes       int64
+	Days           []RetentionDay
+	Events         int64
+	UnmappedEvents int64
+	ReclaimedBytes int64
+}
+
+// OverCapBy reports how far stored detail exceeds the cap.
+func (p RetentionPlan) OverCapBy() int64 {
+	if p.DataBytes <= p.CapBytes {
+		return 0
+	}
+	return p.DataBytes - p.CapBytes
+}
+
+// RetentionOutcome records what summarisation actually did.
+type RetentionOutcome struct {
+	Plan       RetentionPlan
+	Summarized []DaySummary
+}
