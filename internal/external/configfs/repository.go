@@ -117,3 +117,13 @@ func DBPath() (string, error) {
 	}
 	return filepath.Join(d, "tracker.db"), nil
 }
+
+// SocketPath returns the private local IPC endpoint owned by the backend. It
+// sits beside the database so both follow the same per-user data location.
+func SocketPath() (string, error) {
+	dbPath, err := DBPath()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(dbPath), "ipc.sock"), nil
+}

@@ -12,7 +12,10 @@ import (
 	"time-tracker/internal/domain"
 )
 
-const maxBatchBytes = 4 * 1024 * 1024
+const (
+	maxBatchBytes = 4 * 1024 * 1024
+	eventsPath    = "/v1/events"
+)
 
 type batchRequest struct {
 	ProducerID string            `json:"producer_id"`
@@ -32,13 +35,13 @@ type intervalRequest struct {
 // will bind it to a user-restricted Unix socket during the collector cutover.
 func NewIngestionHandler(ingestion *usecases.IngestionUsecase) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/events" {
-			http.NotFound(w, r)
+		if r.URL.Path != eventsPath {
+			writeError(w, http.StatusNotFound, false, "unsupported request path; this service speaks "+eventsPath)
 			return
 		}
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
-			http.Error(w, "POST required", http.StatusMethodNotAllowed)
+			writeError(w, http.StatusMethodNotAllowed, false, "POST required")
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, maxBatchBytes)
@@ -69,11 +72,11 @@ func NewIngestionHandler(ingestion *usecases.IngestionUsecase) http.Handler {
 		if err != nil {
 			switch {
 			case errors.Is(err, domain.ErrInvalidBatch):
-				http.Error(w, err.Error(), http.StatusBadRequest)
+				writeError(w, http.StatusBadRequest, false, err.Error())
 			case errors.Is(err, domain.ErrSequenceGap):
-				http.Error(w, err.Error(), http.StatusConflict)
+				writeError(w, http.StatusConflict, false, err.Error())
 			default:
-				http.Error(w, "ingestion unavailable; retry batch", http.StatusServiceUnavailable)
+				writeError(w, http.StatusServiceUnavailable, true, "ingestion unavailable; retry batch")
 			}
 			return
 		}
@@ -88,8 +91,19 @@ func NewIngestionHandler(ingestion *usecases.IngestionUsecase) http.Handler {
 func writeDecodeError(w http.ResponseWriter, err error) {
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
-		http.Error(w, "batch exceeds 4 MiB", http.StatusRequestEntityTooLarge)
+		writeError(w, http.StatusRequestEntityTooLarge, false, "batch exceeds 4 MiB; send smaller batches")
 		return
 	}
-	http.Error(w, "expected one valid batch object", http.StatusBadRequest)
+	writeError(w, http.StatusBadRequest, false, "expected one valid batch object")
+}
+
+// writeError states whether the sender may retry, so a client outbox can keep
+// unsent activity for transient failures and drop nothing silently otherwise.
+func writeError(w http.ResponseWriter, status int, retryable bool, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(struct {
+		Error     string `json:"error"`
+		Retryable bool   `json:"retryable"`
+	}{message, retryable})
 }

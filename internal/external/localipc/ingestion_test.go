@@ -101,3 +101,59 @@ func TestIngestionDoesNotAcknowledgeStorageFailure(t *testing.T) {
 		t.Fatalf("response: %d %s", response.Code, response.Body)
 	}
 }
+
+func TestIngestionReportsErrorsAsRetryableOrPermanent(t *testing.T) {
+	store, err := duckdb.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	handler := NewIngestionHandler(usecases.NewIngestionUsecase(store))
+	for _, tc := range []struct {
+		name, method, path, body string
+		retryable                bool
+	}{
+		{"malformed", "POST", "/v1/events", `{`, false},
+		{"unsupported version", "POST", "/v2/events", validBatch, false},
+		{"gap", "POST", "/v1/events", strings.Replace(validBatch, `"sequence":1`, `"sequence":2`, 1), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body)))
+			assertErrorBody(t, response, tc.retryable)
+		})
+	}
+	t.Run("storage failure", func(t *testing.T) {
+		closed, err := duckdb.Open(":memory:")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := closed.Close(); err != nil {
+			t.Fatal(err)
+		}
+		response := httptest.NewRecorder()
+		NewIngestionHandler(usecases.NewIngestionUsecase(closed)).ServeHTTP(response,
+			httptest.NewRequest(http.MethodPost, "/v1/events", strings.NewReader(validBatch)))
+		assertErrorBody(t, response, true)
+	})
+}
+
+func assertErrorBody(t *testing.T, response *httptest.ResponseRecorder, wantRetryable bool) {
+	t.Helper()
+	if got := response.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("content type: %q", got)
+	}
+	var body struct {
+		Error     string `json:"error"`
+		Retryable bool   `json:"retryable"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode %q: %v", response.Body, err)
+	}
+	if body.Error == "" {
+		t.Fatal("error message must explain the rejection")
+	}
+	if body.Retryable != wantRetryable {
+		t.Fatalf("retryable=%v; want %v (%s)", body.Retryable, wantRetryable, body.Error)
+	}
+}

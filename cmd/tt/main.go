@@ -15,6 +15,7 @@ import (
 	"time-tracker/internal/external/configfs"
 	"time-tracker/internal/external/duckdb"
 	"time-tracker/internal/external/launchd"
+	"time-tracker/internal/external/localipc"
 	"time-tracker/internal/external/tidsreg"
 	"time-tracker/internal/external/workerembed"
 )
@@ -53,7 +54,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 				return err
 			}
 			defer store.Close()
-			return runServer(addr, serverApp)
+			return runServer(ctx, addr, serverApp, store)
 		},
 		DBPath:          dbPath,
 		ConfigPath:      cfgPath,
@@ -91,15 +92,41 @@ func buildApp() (*usecases.App, *duckdb.Store, error) {
 	return app, store, nil
 }
 
-func runServer(addr string, app *usecases.App) error {
+// runServer serves the browser UI on loopback and the private collector IPC on
+// a user-restricted socket from the single process that owns the database.
+func runServer(ctx context.Context, addr string, app *usecases.App, store *duckdb.Store) error {
 	srv, err := api.New(app)
 	if err != nil {
 		return err
 	}
-	log.Printf("api serve addr=%s", addr)
-	err = http.ListenAndServe(addr, srv.Routes())
-	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+	socketPath, err := configfs.SocketPath()
+	if err != nil {
 		return err
 	}
-	return nil
+	ipcCtx, stopIPC := context.WithCancel(ctx)
+	defer stopIPC()
+	ipcDone := make(chan error, 1)
+	go func() {
+		ipcDone <- localipc.Serve(ipcCtx, socketPath, localipc.NewIngestionHandler(usecases.NewIngestionUsecase(store)))
+	}()
+
+	log.Printf("api serve addr=%s ipc=%s", addr, socketPath)
+	httpDone := make(chan error, 1)
+	go func() {
+		httpErr := http.ListenAndServe(addr, srv.Routes())
+		if errors.Is(httpErr, http.ErrServerClosed) {
+			httpErr = nil
+		}
+		httpDone <- httpErr
+	}()
+
+	// Losing either endpoint stops the service: a socket owned by another
+	// process means something else is already serving this user's database.
+	select {
+	case err = <-httpDone:
+		stopIPC()
+		<-ipcDone
+	case err = <-ipcDone:
+	}
+	return err
 }
