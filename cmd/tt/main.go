@@ -137,7 +137,11 @@ func runServer(ctx context.Context, addr string, app *usecases.App, store *duckd
 	defer stopIPC()
 	ipcDone := make(chan error, 1)
 	go func() {
-		ipcDone <- localipc.Serve(ipcCtx, socketPath, localipc.NewIngestionHandler(usecases.NewIngestionUsecase(store)))
+		handler := localipc.NewHandler(
+			usecases.NewIngestionUsecase(store),
+			usecases.NewStatusUsecase(store),
+		)
+		ipcDone <- localipc.Serve(ipcCtx, socketPath, handler)
 	}()
 
 	log.Printf("api serve addr=%s ipc=%s", addr, socketPath)

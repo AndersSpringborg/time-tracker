@@ -284,3 +284,19 @@ type LifecycleStatus struct {
 	State  string
 	Raw    string
 }
+
+// WindowSnapshot is the focused window the worker is reporting on, used to
+// answer "what would this map to" without writing anything.
+type WindowSnapshot struct {
+	AppName     string
+	WindowTitle string
+}
+
+// WorkerStatus is the cached state the menubar renders. The worker refreshes
+// it in the background, so opening the menu never waits on the backend.
+type WorkerStatus struct {
+	UnmatchedCount int64
+	Matched        bool
+	Project        string
+	Activity       string
+}
