@@ -317,6 +317,19 @@ pub fn build(b: *std.Build) void {
         duckdb_lib_path,
         false,
     );
+    add_zig_test(
+        b,
+        test_step,
+        b.path("src/external/outbox/delivery_test.zig"),
+        target,
+        optimize,
+        &.{
+            .{ .name = "domain_event", .module = domain_event_module },
+        },
+        duckdb_include_path,
+        duckdb_lib_path,
+        false,
+    );
     add_zig_test(b, test_step, b.path("src/domain/glob_test.zig"), target, optimize, &.{}, duckdb_include_path, duckdb_lib_path, false);
     add_zig_test(b, test_step, b.path("src/domain/event_test.zig"), target, optimize, &.{}, duckdb_include_path, duckdb_lib_path, false);
     add_zig_test(
