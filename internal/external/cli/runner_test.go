@@ -452,7 +452,7 @@ func TestMaintenanceStatusShowsFileSizeDataSizeAndCap(t *testing.T) {
 
 func TestMaintenanceCompactReportsReclaimedSpaceAndBackup(t *testing.T) {
 	maintainer := &fakeMaintenance{result: domain.CompactionResult{
-		BackupPath: "/tmp/tracker.db.backup-20260921-090000",
+		BackupPath:  "/tmp/tracker.db.backup-20260921-090000",
 		BytesBefore: 19 << 30, BytesAfter: 30 << 20,
 		Rows: map[string]int64{"events": 303130}, SchemaVersion: 19,
 	}}
