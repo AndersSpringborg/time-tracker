@@ -2,8 +2,11 @@ package duckdb
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
+
+	"time-tracker/internal/domain"
 )
 
 // seedRetentionEvents inserts events on a given day, returning their total.
@@ -55,8 +58,8 @@ func TestSummarizeDayPreservesTotalsAndRemovesDetail(t *testing.T) {
 	defer store.Close()
 	seedProjectActivity(t, store)
 	total := seedRetentionEvents(t, store, "2026-03-02", []retentionRow{
-		{app: "Editor", title: "a.go", wifi: "Office", durationMS: 60000, projectID: 1, activityID: 1},
-		{app: "Editor", title: "b.go", wifi: "Office", durationMS: 30000, projectID: 1, activityID: 1},
+		{app: "Editor", title: "a.go", wifi: "Office", durationMS: 60000, projectID: 10, activityID: 100},
+		{app: "Editor", title: "b.go", wifi: "Office", durationMS: 30000, projectID: 10, activityID: 100},
 		{app: "Browser", title: "docs", wifi: "Home", durationMS: 15000},
 	})
 
@@ -189,7 +192,7 @@ func TestRetentionDaysReportOldestFirstExcludingToday(t *testing.T) {
 	defer store.Close()
 	seedProjectActivity(t, store)
 	seedRetentionEvents(t, store, "2026-03-07", []retentionRow{
-		{app: "Editor", title: "a.go", wifi: "Office", durationMS: 1000, projectID: 1, activityID: 1},
+		{app: "Editor", title: "a.go", wifi: "Office", durationMS: 1000, projectID: 10, activityID: 100},
 		{app: "Browser", title: "docs", wifi: "Home", durationMS: 2000},
 	})
 	seedRetentionEvents(t, store, "2026-03-06", []retentionRow{{app: "Editor", title: "b.go", durationMS: 3000}})
@@ -241,5 +244,70 @@ func TestDetailBytesShrinksAfterSummarizing(t *testing.T) {
 	}
 	if after >= before {
 		t.Fatalf("detail bytes did not shrink: %d -> %d", before, after)
+	}
+}
+
+func TestSummarizedHistoryKeepsItsActivityFromBeingDeleted(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	seedProjectActivity(t, store)
+	seedRetentionEvents(t, store, "2026-03-09", []retentionRow{
+		{app: "Editor", title: "a.go", wifi: "Office", durationMS: 60000, projectID: 10, activityID: 100},
+	})
+	if _, err := store.SummarizeDay(context.Background(), "2026-03-09"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The raw events are gone, but the activity still has recorded history.
+	err := store.DeleteActivity(context.Background(), 100)
+	if !errors.Is(err, domain.ErrActivityInUse) {
+		t.Fatalf("error: %v; want ErrActivityInUse so summarised history is not orphaned", err)
+	}
+}
+
+func TestReportsReadSummarizedDaysExactlyOnce(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	seedProjectActivity(t, store)
+	summarizedTotal := seedRetentionEvents(t, store, "2026-03-10", []retentionRow{
+		{app: "Editor", title: "a.go", wifi: "Office", durationMS: 60000, projectID: 10, activityID: 100},
+		{app: "Browser", title: "docs", wifi: "Home", durationMS: 30000},
+	})
+	seedRetentionEvents(t, store, "2026-03-11", []retentionRow{
+		{app: "Editor", title: "b.go", wifi: "Office", durationMS: 15000},
+	})
+	if _, err := store.SummarizeDay(context.Background(), "2026-03-10"); err != nil {
+		t.Fatal(err)
+	}
+
+	contributions, err := store.ListSummaryContributions(context.Background(), "all", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fromSummaries int64
+	for _, contribution := range contributions {
+		fromSummaries += contribution.TotalMS
+		if contribution.Day != "2026-03-10" {
+			t.Fatalf("a day that still has detail must not be served from summaries: %+v", contribution)
+		}
+	}
+	if fromSummaries != summarizedTotal {
+		t.Fatalf("summaries total %d; want %d", fromSummaries, summarizedTotal)
+	}
+
+	events, err := store.ListReportEvents(context.Background(), "all", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("only the unsummarised day should still have events, got %d", len(events))
+	}
+
+	days, err := store.SummarizedDays(context.Background(), "all", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(days) != 1 || days[0] != "2026-03-10" {
+		t.Fatalf("summarized days: %v", days)
 	}
 }

@@ -16,9 +16,18 @@ const defaultTimelineStartHour = 8
 const defaultTimelineEndHour = 17
 
 type ReportsUsecase struct {
-	reportsRepo  ports.ReportsRepository
-	projectsRepo ports.ProjectsRepository
-	settingsRepo ports.SettingsRepository
+	reportsRepo   ports.ReportsRepository
+	projectsRepo  ports.ProjectsRepository
+	settingsRepo  ports.SettingsRepository
+	summariesRepo ports.SummaryRepository
+}
+
+// WithSummaries adds the summarised history of days whose detail retention has
+// deleted. Without it, reports read raw events only, as they always have.
+func (u *ReportsUsecase) WithSummaries(summaries ports.SummaryRepository) *ReportsUsecase {
+	next := *u
+	next.summariesRepo = summaries
+	return &next
 }
 
 func NewReportsUsecase(reportsRepo ports.ReportsRepository, projectsRepo ports.ProjectsRepository, settingsRepo ports.SettingsRepository) *ReportsUsecase {
@@ -144,6 +153,13 @@ func (u *ReportsUsecase) Report(ctx context.Context, req contracts.ReportsBuildR
 	// Build mapped details: project -> activity -> events
 	out.MappedDetails = buildMappedDetails(items, workMask)
 
+	// Summarised days contribute totals only: their window detail, timeline and
+	// per-event review no longer exist, so they are deliberately absent from
+	// ByWindow and MappedDetails rather than faked.
+	if err := u.addSummarizedHistory(ctx, &out, rangeKey, reportDate, cfg); err != nil {
+		return contracts.ReportsBuildResponse{}, err
+	}
+
 	return contracts.ReportsBuildResponse{Report: out}, nil
 }
 
@@ -159,6 +175,13 @@ func (u *ReportsUsecase) Timeline(ctx context.Context, req contracts.ReportsTime
 		return contracts.ReportsTimelineResponse{}, err
 	}
 	timeline := buildTimelineDay(*reportDate, startHour, endHour, items)
+	if u.summariesRepo != nil {
+		days, err := u.summariesRepo.SummarizedDays(ctx, "all", reportDate)
+		if err != nil {
+			return contracts.ReportsTimelineResponse{}, err
+		}
+		timeline.DetailUnavailable = len(days) > 0
+	}
 	return contracts.ReportsTimelineResponse{Timeline: timeline}, nil
 }
 
@@ -485,4 +508,112 @@ func valueOrEmpty(v *string) string {
 		return ""
 	}
 	return *v
+}
+
+// addSummarizedHistory folds days served from summaries into the report's
+// totals and breakdowns. Work classification is applied here, from current
+// settings, so editing work wifis still reclassifies summarised history.
+func (u *ReportsUsecase) addSummarizedHistory(
+	ctx context.Context,
+	out *domain.Report,
+	rangeKey string,
+	date *string,
+	cfg domain.Settings,
+) error {
+	if u.summariesRepo == nil {
+		return nil
+	}
+	contributions, err := u.summariesRepo.ListSummaryContributions(ctx, rangeKey, date)
+	if err != nil {
+		return err
+	}
+	days, err := u.summariesRepo.SummarizedDays(ctx, rangeKey, date)
+	if err != nil {
+		return err
+	}
+	out.SummarizedDays = days
+
+	byProject := map[string]int64{}
+	byActivity := map[string]int64{}
+	byApp := map[string]int64{}
+	byWifi := map[string]int64{}
+	for _, contribution := range contributions {
+		if contribution.TotalMS <= 0 {
+			continue
+		}
+		out.TotalEvents += contribution.EventCount
+		out.TotalMS += contribution.TotalMS
+		if !domain.IsWorkWifi(contribution.WifiSSID, cfg.WorkWifis) {
+			continue
+		}
+		out.WorkEvents += contribution.EventCount
+		out.WorkMS += contribution.TotalMS
+		if strings.TrimSpace(contribution.ProjectTitle) != "" && strings.TrimSpace(contribution.ActivityName) != "" {
+			out.MappedEvents += contribution.EventCount
+			out.MappedMS += contribution.TotalMS
+		} else {
+			out.UnmappedEvents += contribution.EventCount
+			out.UnmappedMS += contribution.TotalMS
+		}
+		byProject[nameOrUnmapped(contribution.ProjectTitle)] += contribution.TotalMS
+		byActivity[nameOrUnmapped(contribution.ActivityName)] += contribution.TotalMS
+		byApp[contribution.AppName] += contribution.TotalMS
+		byWifi[wifiOrNone(contribution.WifiSSID)] += contribution.TotalMS
+	}
+
+	out.ByProject = mergeSummaryRows(out.ByProject, byProject)
+	out.ByActivity = mergeSummaryRows(out.ByActivity, byActivity)
+	out.ByApp = mergeSummaryRows(out.ByApp, byApp)
+	out.ByWifi = mergeSummaryRows(out.ByWifi, byWifi)
+	if len(out.ByWifi) > 12 {
+		out.ByWifi = out.ByWifi[:12]
+	}
+	return nil
+}
+
+func nameOrUnmapped(name string) string {
+	if strings.TrimSpace(name) == "" {
+		return "Unmapped"
+	}
+	return name
+}
+
+func wifiOrNone(ssid string) string {
+	if strings.TrimSpace(ssid) == "" {
+		return "(none)"
+	}
+	return ssid
+}
+
+// mergeSummaryRows adds summarised totals to rows built from raw events,
+// keeping one row per name so nothing is counted twice.
+func mergeSummaryRows(rows []domain.SummaryRow, extra map[string]int64) []domain.SummaryRow {
+	if len(extra) == 0 {
+		return rows
+	}
+	merged := make(map[string]int64, len(rows)+len(extra))
+	order := make([]string, 0, len(rows)+len(extra))
+	for _, row := range rows {
+		if _, seen := merged[row.Name]; !seen {
+			order = append(order, row.Name)
+		}
+		merged[row.Name] += row.TotalMS
+	}
+	for name, totalMS := range extra {
+		if _, seen := merged[name]; !seen {
+			order = append(order, name)
+		}
+		merged[name] += totalMS
+	}
+	out := make([]domain.SummaryRow, 0, len(order))
+	for _, name := range order {
+		out = append(out, domain.SummaryRow{Name: name, TotalMS: merged[name]})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].TotalMS != out[j].TotalMS {
+			return out[i].TotalMS > out[j].TotalMS
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
 }

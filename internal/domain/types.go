@@ -223,6 +223,10 @@ type Report struct {
 	ByWifi         []SummaryRow
 	ByWindow       []SummaryRow
 	MappedDetails  []ProjectDetail
+	// SummarizedDays lists days in range whose detail was deleted by
+	// retention. Their totals are included; their window detail, timeline and
+	// per-event review are not recoverable.
+	SummarizedDays []string
 }
 
 type Dashboard struct {
@@ -269,6 +273,9 @@ type TimelineDay struct {
 	VisibleEvents int64
 	TotalMS       int64
 	VisibleMS     int64
+	// DetailUnavailable marks a day whose events were summarised and deleted:
+	// its totals live in the report, but it has no timeline to draw.
+	DetailUnavailable bool
 }
 
 type LifecycleStatus struct {

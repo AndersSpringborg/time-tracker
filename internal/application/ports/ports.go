@@ -28,6 +28,13 @@ type ReportsRepository interface {
 	ListReportEvents(ctx context.Context, rangeKey string, date *string) ([]domain.Event, error)
 }
 
+// SummaryRepository serves days whose detail has been summarised away. A day
+// is served either from events or from summaries, never from both.
+type SummaryRepository interface {
+	ListSummaryContributions(ctx context.Context, rangeKey string, date *string) ([]domain.SummaryContribution, error)
+	SummarizedDays(ctx context.Context, rangeKey string, date *string) ([]string, error)
+}
+
 type ProjectsRepository interface {
 	ListActiveProjects(ctx context.Context) ([]domain.Project, error)
 	ListAllProjects(ctx context.Context) ([]domain.Project, error)

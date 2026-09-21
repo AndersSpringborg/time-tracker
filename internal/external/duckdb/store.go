@@ -757,7 +757,9 @@ func (s *Store) DeleteActivity(ctx context.Context, activityID int64) error {
 		return domain.ErrActivityNotFound
 	}
 
-	for _, table := range []string{"mapping_rules", "events", "kinds"} {
+	// daily_summaries is included because summarised history still references
+	// the activity, even though its raw events are gone.
+	for _, table := range []string{"mapping_rules", "events", "kinds", "daily_summaries"} {
 		query := `SELECT COUNT(*) FROM ` + table + ` WHERE activity_id = ?`
 		var count int64
 		if err := s.db.QueryRowContext(ctx, query, activityID).Scan(&count); err != nil {
@@ -801,8 +803,11 @@ SELECT (
   (SELECT COUNT(*) FROM events e WHERE e.project_activity_id = ? OR (e.project_id = ? AND e.activity_id = ?))
   +
   (SELECT COUNT(*) FROM kinds k WHERE k.activity_id = ?)
+  +
+  (SELECT COUNT(*) FROM daily_summaries ds WHERE ds.project_id = ? AND ds.activity_id = ?)
 )
-`, projectActivityID, projectID, activityID, projectActivityID, projectID, activityID, activityID).Scan(&blocked); err != nil {
+`, projectActivityID, projectID, activityID, projectActivityID, projectID, activityID, activityID,
+		projectID, activityID).Scan(&blocked); err != nil {
 		return err
 	}
 	if blocked > 0 {
@@ -1178,8 +1183,10 @@ SELECT (
   (SELECT COUNT(*) FROM events e WHERE e.activity_id = ?)
   +
   (SELECT COUNT(*) FROM kinds k WHERE k.activity_id = ?)
+  +
+  (SELECT COUNT(*) FROM daily_summaries ds WHERE ds.activity_id = ?)
 )
-`, activityID, activityID, activityID).Scan(&blocked); err != nil {
+`, activityID, activityID, activityID, activityID).Scan(&blocked); err != nil {
 			return result, err
 		}
 		if blocked > 0 {

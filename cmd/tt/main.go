@@ -114,7 +114,7 @@ func buildApp() (*usecases.App, *duckdb.Store, error) {
 	app.Rules = usecases.NewRulesUsecase(store)
 	app.Projects = usecases.NewProjectsUsecase(store)
 	app.Review = usecases.NewReviewUsecase(store)
-	app.Reports = usecases.NewReportsUsecase(store, store, configfs.New())
+	app.Reports = usecases.NewReportsUsecase(store, store, configfs.New()).WithSummaries(store)
 	app.Tidsreg = usecases.NewTidsregImportUsecase(tidsreg.New(), store)
 	app.Retention = usecases.NewRetentionUsecase(store)
 	return app, store, nil

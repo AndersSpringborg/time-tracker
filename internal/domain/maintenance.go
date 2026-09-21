@@ -85,3 +85,16 @@ type RetentionOutcome struct {
 	Plan       RetentionPlan
 	Summarized []DaySummary
 }
+
+// SummaryContribution is one day's summarised time for a project, activity,
+// app and wifi. It replaces the events it was built from, so it carries their
+// count as well as their duration.
+type SummaryContribution struct {
+	Day          string
+	ProjectTitle string
+	ActivityName string
+	AppName      string
+	WifiSSID     string
+	TotalMS      int64
+	EventCount   int64
+}
