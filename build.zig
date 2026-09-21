@@ -72,6 +72,21 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const status_client_module = b.createModule(.{
+        .root_source_file = b.path("src/external/outbox/status_client.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const menu_state_module = b.createModule(.{
+        .root_source_file = b.path("src/entrypoint/menu_state.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "status_client", .module = status_client_module },
+        },
+    });
+
     const config_module = b.createModule(.{
         .root_source_file = b.path("src/entrypoint/config.zig"),
         .target = target,
@@ -185,6 +200,8 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "config", .module = config_module },
             .{ .name = "shutdown", .module = shutdown_module },
+            .{ .name = "menu_state", .module = menu_state_module },
+            .{ .name = "status_client", .module = status_client_module },
             .{ .name = "tracker", .module = tracker_module },
             .{ .name = "outbox_repository", .module = outbox_repository_module },
             .{ .name = "event_dto_mapper", .module = event_dto_mapper_module },
@@ -332,6 +349,17 @@ pub fn build(b: *std.Build) void {
     add_zig_test(
         b,
         test_step,
+        b.path("src/external/outbox/status_client_test.zig"),
+        target,
+        optimize,
+        &.{},
+        duckdb_include_path,
+        duckdb_lib_path,
+        false,
+    );
+    add_zig_test(
+        b,
+        test_step,
         b.path("src/external/outbox/outbox_repository_test.zig"),
         target,
         optimize,
@@ -363,6 +391,20 @@ pub fn build(b: *std.Build) void {
         optimize,
         &.{
             .{ .name = "domain_event", .module = domain_event_module },
+        },
+        duckdb_include_path,
+        duckdb_lib_path,
+        false,
+    );
+    add_zig_test(
+        b,
+        test_step,
+        b.path("src/entrypoint/menu_state_test.zig"),
+        target,
+        optimize,
+        &.{
+            .{ .name = "menu_state", .module = menu_state_module },
+            .{ .name = "status_client", .module = status_client_module },
         },
         duckdb_include_path,
         duckdb_lib_path,

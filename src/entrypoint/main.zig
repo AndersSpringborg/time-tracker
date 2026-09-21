@@ -7,6 +7,8 @@ pub const std_options: std.Options = .{
     .log_level = .info,
 };
 const shutdown = @import("shutdown");
+const menu_state = @import("menu_state");
+const status_client = @import("status_client");
 
 const Tracker = @import("tracker").Tracker;
 const outbox_repository = @import("outbox_repository");
@@ -18,9 +20,13 @@ extern fn check_accessibility() bool;
 extern fn start_listening(cb: *const fn ([*c]const u8, [*c]const u8, [*c]const u8, i32) callconv(.c) void) void;
 extern fn add_work_wifi(pattern: [*c]const u8) void;
 extern fn clear_work_wifis() void;
+extern fn update_matched_info(project: [*c]const u8, activity: [*c]const u8) void;
 extern fn clear_matched_info() void;
 extern fn update_unmatched_count(count: i64) void;
 
+const menu_refresh_interval_ms: u64 = 5_000;
+
+var global_menu: menu_state.MenuState = .{};
 var global_tracker: ?*Tracker = null;
 var global_allocator: ?std.mem.Allocator = null;
 var global_daemon_data_dir_buf: [640]u8 = undefined;
@@ -156,6 +162,10 @@ fn onEvent(
 
     std.log.debug("[Event] App: {s} | Title: {s} | WiFi: {s}", .{ event.app_name, event.window_title, event.wifi_ssid });
 
+    // Remember the window for the menu refresh. This is the AppKit main
+    // thread, so it copies and returns; the backend is asked on another thread.
+    global_menu.setWindow(event.app_name, event.window_title);
+
     if (global_tracker) |tracker| {
         tracker.onEventWithWifi(event.app_name, event.window_title, event.wifi_ssid, event.timestamp_ms);
     }
@@ -214,6 +224,60 @@ fn runDaemonWithDefaults(allocator: std.mem.Allocator) void {
     std.debug.print("Work WiFi: (all networks)\n", .{});
     clear_work_wifis();
     runDaemonCore(allocator);
+}
+
+/// Refreshes the menubar from the backend on its own thread, so opening the
+/// menu reads memory rather than waiting on IPC. A failed refresh leaves the
+/// last snapshot in the menu instead of blanking it.
+const MenuRefresher = struct {
+    client: status_client.StatusClient,
+    interval_ms: u64,
+    should_stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    const tick_ms: u64 = 250;
+
+    fn loop(self: *MenuRefresher) void {
+        var waited_ms: u64 = 0;
+        while (!self.should_stop.load(.acquire)) {
+            std.posix.nanosleep(0, tick_ms * std.time.ns_per_ms);
+            waited_ms += tick_ms;
+            if (waited_ms < self.interval_ms) continue;
+            waited_ms = 0;
+            self.refreshOnce();
+        }
+    }
+
+    fn refreshOnce(self: *MenuRefresher) void {
+        var window_text: menu_state.WindowText = undefined;
+        const window = global_menu.window(&window_text);
+
+        const snapshot = self.client.fetch(window) catch {
+            global_menu.recordFailure();
+            return;
+        };
+        global_menu.recordSnapshot(snapshot);
+        renderSnapshot(snapshot);
+    }
+};
+
+/// Push the snapshot into the AppKit menu. Both names are copied into
+/// null-terminated buffers because Swift reads them as C strings.
+fn renderSnapshot(snapshot: status_client.Snapshot) void {
+    update_unmatched_count(snapshot.unmatched_count);
+
+    if (!snapshot.matched) {
+        clear_matched_info();
+        return;
+    }
+    var project_buf: [status_client.max_name_len + 1]u8 = undefined;
+    var activity_buf: [status_client.max_name_len + 1]u8 = undefined;
+    const project = snapshot.project();
+    const activity = snapshot.activity();
+    @memcpy(project_buf[0..project.len], project);
+    project_buf[project.len] = 0;
+    @memcpy(activity_buf[0..activity.len], activity);
+    activity_buf[activity.len] = 0;
+    update_matched_info(&project_buf, &activity_buf);
 }
 
 /// Flushes the trailing interval and the buffered events, in that order, so a
@@ -297,7 +361,18 @@ fn runDaemonCore(allocator: std.mem.Allocator) void {
     };
     watcher.detach();
 
+    var refresher = MenuRefresher{
+        .client = .{ .path = socket_path },
+        .interval_ms = menu_refresh_interval_ms,
+    };
+    const refresher_thread = std.Thread.spawn(.{}, MenuRefresher.loop, .{&refresher}) catch |err| {
+        std.debug.print("Failed to start menu refresher: {}\n", .{err});
+        return;
+    };
+    refresher_thread.detach();
+
     std.debug.print("Window sampling initialized (logs the dominant window per 5s).\n", .{});
+    std.debug.print("Menubar refreshes from the backend every 5 seconds.\n", .{});
 
     if (!check_accessibility()) {
         std.debug.print("\nWarning: Accessibility not yet granted. Will report error on start.\n", .{});
