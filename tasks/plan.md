@@ -33,6 +33,17 @@ been changed.
   stops the service if either endpoint stops. Errors are JSON with an explicit
   `retryable` flag so the client can distinguish transient from permanent
   rejections. The worker does not use the socket yet.
+- Added the client-side outbox: a synchronised, checksummed append log with a
+  persistent producer identity and monotonic sequences, bounded in size, that
+  recovers from an incomplete or corrupted trailing record without reusing its
+  sequence and reclaims acknowledged bytes.
+- Added bounded batch delivery with exponential backoff. Records are dropped
+  only for the sequence the backend reports as committed; unreachable backends
+  and retryable rejections resend, and permanent rejections are surfaced rather
+  than acknowledged. A Unix-socket transport speaks the HTTP subset the contract
+  needs, including chunked replies, without allocating.
+- The service now shuts down on SIGINT/SIGTERM through a cancelled context, so
+  the socket is removed and the database is closed and checkpointed.
 
 ### Pending
 
@@ -40,6 +51,22 @@ been changed.
   isolation, retention/reporting, and live performance measurements.
 - Backend ingestion currently serializes only other ingestion requests. The
   broader write coordination and classification policy remain part of cutover.
+
+### Verification of second milestone
+
+- PASS: `go test -race -shuffle=on -count=1 ./cmd/... ./internal/... ./migrations/...`
+- PASS: `go vet`, `gofmt -l`, `git diff --check` on the application roots.
+- PASS: `/opt/homebrew/opt/zig@0.15/bin/zig build test --summary all` — 90 tests
+  (69 before this milestone).
+- PASS: live socket smoke test against a scratch database — mode 0600 socket,
+  commit-then-acknowledge, replayed batch inserted 0 rows, sequence gap and
+  unsupported version rejected as non-retryable, a second service refused by the
+  DuckDB lock, and SIGTERM removed the socket and checkpointed the WAL.
+- Delivery was verified against a fake backend and a real Unix socket server in
+  Zig tests; the Zig client and the Go backend have not yet been run against
+  each other in one automated test, and the worker still writes to DuckDB.
+- `build.zig` is not `zig fmt` clean at HEAD (pre-existing formatting of the
+  linker argument list); it was left as found rather than reformatted.
 
 ### Verification of first milestone
 
@@ -214,7 +241,7 @@ merely because a long interval is periodically persisted.
 - [x] Implement transactional event insertion and durable producer cursors.
 - [x] Add and test the bounded v1 ingestion handler (socket binding pending).
 - [x] Add versioned local IPC with bounded requests and useful errors.
-- [ ] Implement and test durable client outbox recovery and delivery retries.
+- [x] Implement and test durable client outbox recovery and delivery retries.
 - [ ] Replace worker DuckDB writes and menu queries with delivery/status IPC.
 - [ ] Route CLI database operations through the backend.
 - [ ] Make backend startup the sole migration owner; remove competing opens and
