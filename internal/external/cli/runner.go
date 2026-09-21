@@ -46,7 +46,7 @@ func (r *Runner) Run(ctx context.Context, args []string, stdout, stderr io.Write
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
-		fmt.Fprintln(stdout, "installed and started launchd worker")
+		fmt.Fprintln(stdout, "installed and started launchd backend and worker")
 		r.printAccessibilityHint(stdout)
 		return 0
 	case "uninstall":
@@ -54,7 +54,7 @@ func (r *Runner) Run(ctx context.Context, args []string, stdout, stderr io.Write
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
-		fmt.Fprintln(stdout, "uninstalled worker and launch agent")
+		fmt.Fprintln(stdout, "uninstalled worker, backend and launch agents")
 		return 0
 	case "start":
 		if _, err := r.App.Lifecycle.Start(ctx, contracts.LifecycleStartRequest{}); err != nil {

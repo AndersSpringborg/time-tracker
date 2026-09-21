@@ -89,7 +89,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 func buildLocalApp() *usecases.App {
 	app := &usecases.App{
 		Settings:  usecases.NewSettingsUsecase(configfs.New()),
-		Lifecycle: usecases.NewLifecycleUsecase(launchd.New()),
+		Lifecycle: usecases.NewLifecycleUsecase(launchd.NewAgents()),
 		Help:      usecases.NewHelpUsecase(),
 	}
 	// Maintenance owns the database file rather than a connection, so it must

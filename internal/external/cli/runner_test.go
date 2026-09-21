@@ -279,7 +279,7 @@ func TestRunnerInstallPrintsAccessibilityHint(t *testing.T) {
 	}
 
 	got := out.String()
-	if !strings.Contains(got, "installed and started launchd worker") {
+	if !strings.Contains(got, "installed and started launchd backend and worker") {
 		t.Fatalf("expected install success output, got: %s", got)
 	}
 	if !strings.Contains(got, "accessibility-worker: /Users/test/.local/bin/tt-worker") {
