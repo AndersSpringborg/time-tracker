@@ -26,8 +26,13 @@ been changed.
   sequence gaps, concurrent retries, rollback, reopening, and raw-event deletion.
 - Added a bounded `/v1/events` JSON handler for private local IPC, with tests for
   malformed/oversized requests, unknown fields, trailing data, replay, and
-  storage failure. It is deliberately not mounted on the browser server or
-  bound to a production socket yet.
+  storage failure. It is deliberately not mounted on the browser server.
+- The backend now serves that handler on a user-restricted Unix socket beside
+  the database (`ipc.sock`, mode 0600). It refuses a socket owned by a live
+  server, replaces one left by an unclean shutdown, removes it on shutdown, and
+  stops the service if either endpoint stops. Errors are JSON with an explicit
+  `retryable` flag so the client can distinguish transient from permanent
+  rejections. The worker does not use the socket yet.
 
 ### Pending
 
@@ -208,7 +213,7 @@ merely because a long interval is periodically persisted.
 - [x] Add backend ingestion use cases and persistence ports.
 - [x] Implement transactional event insertion and durable producer cursors.
 - [x] Add and test the bounded v1 ingestion handler (socket binding pending).
-- [ ] Add versioned local IPC with bounded requests and useful errors.
+- [x] Add versioned local IPC with bounded requests and useful errors.
 - [ ] Implement and test durable client outbox recovery and delivery retries.
 - [ ] Replace worker DuckDB writes and menu queries with delivery/status IPC.
 - [ ] Route CLI database operations through the backend.
