@@ -1,6 +1,56 @@
 # Time tracker client redesign
 
-Status: proposed design; implementation has not started.
+Status: in progress. Existing production database and installed services have not
+been changed.
+
+## Work log
+
+### In progress
+
+- Phase 2: reliable ingestion and exclusive ownership. The ingestion foundation
+  is complete; the client still writes directly to DuckDB until outbox and
+  service cutover are implemented together.
+
+### Done
+
+- Completed static architecture review and documented target ownership,
+  durability, retention, and acceptance criteria.
+- Legacy collector batches now return insert/transaction errors, roll back
+  partial writes, and retain buffered data until commit succeeds. Real DuckDB
+  tests verify retry without duplicate inserts. The buffer is still memory-only.
+- Top-level help/schema, settings, and lifecycle commands no longer open DuckDB.
+  Database close now runs before process exit. Regression tests cover commands
+  against an unusable database path and normal database-open failure reporting.
+- Added validated ingestion domain types, application use case/port, migration
+  019, and transactional event/cursor persistence. Tests cover partial replay,
+  sequence gaps, concurrent retries, rollback, reopening, and raw-event deletion.
+- Added a bounded `/v1/events` JSON handler for private local IPC, with tests for
+  malformed/oversized requests, unknown fields, trailing data, replay, and
+  storage failure. It is deliberately not mounted on the browser server or
+  bound to a production socket yet.
+
+### Pending
+
+- Durable client outbox, sole-owner service/CLI cutover, native capture/UI
+  isolation, retention/reporting, and live performance measurements.
+- Backend ingestion currently serializes only other ingestion requests. The
+  broader write coordination and classification policy remain part of cutover.
+
+### Verification of first milestone
+
+- PASS: `go test -race -shuffle=on -count=1 ./cmd/... ./internal/... ./migrations/...`
+- PASS: `go vet ./cmd/... ./internal/... ./migrations/...`
+- PASS: `/opt/homebrew/opt/zig@0.15/bin/zig build test --summary all` — 69 tests.
+- PASS: `/opt/homebrew/opt/zig@0.15/bin/zig build` (includes Swift worker link).
+- PASS: Go/Zig formatting and `git diff --check`.
+- Environment: default `zig` is 0.16 and fails on existing 0.15 build/dependency
+  APIs. The installed 0.15 toolchain works. Broad Go `./...` includes unrelated
+  fixtures in the pre-existing untracked `zig-pkg/` directory; use the explicit
+  application package roots above. No dependency upgrades were retained.
+- Existing linker warnings were emitted for race-test object metadata and the
+  worker macOS deployment target; builds/tests still succeeded.
+- No live database migration, service installation/restart, retention deletion,
+  or GUI profiling was performed.
 
 ## Goal
 
@@ -153,10 +203,11 @@ merely because a long interval is periodically persisted.
 
 ### 2. Reliable ingestion and exclusive database ownership
 
-- [ ] Write failing tests for committed acknowledgement, duplicate replay,
+- [x] Write failing tests for committed acknowledgement, duplicate replay,
       sequence handling, and transaction failures.
-- [ ] Add backend ingestion use cases and persistence ports.
-- [ ] Implement transactional event insertion and durable producer cursors.
+- [x] Add backend ingestion use cases and persistence ports.
+- [x] Implement transactional event insertion and durable producer cursors.
+- [x] Add and test the bounded v1 ingestion handler (socket binding pending).
 - [ ] Add versioned local IPC with bounded requests and useful errors.
 - [ ] Implement and test durable client outbox recovery and delivery retries.
 - [ ] Replace worker DuckDB writes and menu queries with delivery/status IPC.

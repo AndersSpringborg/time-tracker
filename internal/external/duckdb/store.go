@@ -7,13 +7,15 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"time-tracker/internal/domain"
 )
 
 type Store struct {
-	db *sql.DB
+	db          *sql.DB
+	ingestionMu sync.Mutex
 }
 
 type ruleRow struct {

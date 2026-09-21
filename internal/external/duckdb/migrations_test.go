@@ -189,8 +189,8 @@ func TestOpenMigratesLegacyVersion9DatabaseFromDisk(t *testing.T) {
 	if err := store.db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&version); err != nil {
 		t.Fatalf("query schema_migrations failed: %v", err)
 	}
-	if version != 18 {
-		t.Fatalf("expected schema version 18, got %d", version)
+	if version != 19 {
+		t.Fatalf("expected schema version 19, got %d", version)
 	}
 }
 
@@ -230,8 +230,8 @@ func TestMigrateHandlesVersion12WithoutKindsTable(t *testing.T) {
 	if err := db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&version); err != nil {
 		t.Fatalf("query schema_migrations failed: %v", err)
 	}
-	if version != 18 {
-		t.Fatalf("expected schema version 18, got %d", version)
+	if version != 19 {
+		t.Fatalf("expected schema version 19, got %d", version)
 	}
 
 	var phasesCount int
