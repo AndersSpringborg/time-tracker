@@ -15,6 +15,9 @@ pub const Error = error{
 
 pub const SocketTransport = struct {
     path: []const u8,
+    /// Bound on each socket operation. The delivery thread holds the outbox
+    /// while it sends, so a wedged backend must not park it indefinitely.
+    timeout_ms: u32 = 2_000,
 
     const Self = @This();
 
@@ -26,6 +29,7 @@ pub const SocketTransport = struct {
         const self: *Self = @ptrCast(@alignCast(ptr));
         const stream = try std.net.connectUnixSocket(self.path);
         defer stream.close();
+        try setTimeouts(stream, self.timeout_ms);
 
         var header_buffer: [256]u8 = undefined;
         const header = try std.fmt.bufPrint(&header_buffer, "POST " ++ events_path ++ " HTTP/1.1\r\n" ++
@@ -39,6 +43,16 @@ pub const SocketTransport = struct {
         return parseResponse(response);
     }
 };
+
+fn setTimeouts(stream: std.net.Stream, timeout_ms: u32) !void {
+    const timeout = std.posix.timeval{
+        .sec = @intCast(timeout_ms / 1000),
+        .usec = @intCast((timeout_ms % 1000) * 1000),
+    };
+    const bytes = std.mem.asBytes(&timeout);
+    try std.posix.setsockopt(stream.handle, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, bytes);
+    try std.posix.setsockopt(stream.handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, bytes);
+}
 
 fn readResponse(stream: std.net.Stream, buffer: []u8) ![]const u8 {
     var length: usize = 0;

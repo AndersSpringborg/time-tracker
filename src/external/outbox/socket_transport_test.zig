@@ -25,8 +25,27 @@ const CannedServer = struct {
     fn serve(self: *CannedServer) void {
         const connection = self.server.accept() catch return;
         defer connection.stream.close();
-        self.request_len = connection.stream.read(&self.request) catch 0;
+        // Read the whole request before replying: closing mid-request makes the
+        // client fail on its own write rather than on the reply under test.
+        while (!self.requestComplete()) {
+            const read = connection.stream.read(self.request[self.request_len..]) catch break;
+            if (read == 0) break;
+            self.request_len += read;
+        }
         connection.stream.writeAll(self.reply) catch {};
+    }
+
+    fn requestComplete(self: *const CannedServer) bool {
+        const request = self.request[0..self.request_len];
+        const marker = "\r\n\r\n";
+        const headers_end = std.mem.indexOf(u8, request, marker) orelse return false;
+        const body_start = headers_end + marker.len;
+        const field = "Content-Length: ";
+        const at = std.mem.indexOf(u8, request[0..headers_end], field) orelse return true;
+        const value = request[at + field.len ..];
+        const value_end = std.mem.indexOfScalar(u8, value, '\r') orelse return false;
+        const content_length = std.fmt.parseInt(usize, value[0..value_end], 10) catch return true;
+        return request.len - body_start >= content_length;
     }
 
     fn finish(self: *CannedServer) []const u8 {
@@ -127,4 +146,54 @@ test "a missing backend socket fails instead of acknowledging" {
     var buffer: [64]u8 = undefined;
     const path = try socketPath(&buffer);
     try testing.expectError(error.FileNotFound, send(path, "{}"));
+}
+
+/// A server that accepts the connection and then never answers, standing in
+/// for a wedged backend.
+const SilentServer = struct {
+    server: std.net.Server,
+    thread: std.Thread,
+    stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    fn start(path: []const u8) !*SilentServer {
+        const address = try std.net.Address.initUnix(path);
+        const self = try testing.allocator.create(SilentServer);
+        errdefer testing.allocator.destroy(self);
+        self.* = .{ .server = try address.listen(.{}), .thread = undefined };
+        self.thread = try std.Thread.spawn(.{}, serve, .{self});
+        return self;
+    }
+
+    fn serve(self: *SilentServer) void {
+        const connection = self.server.accept() catch return;
+        defer connection.stream.close();
+        while (!self.stop.load(.acquire)) {
+            std.posix.nanosleep(0, 5 * std.time.ns_per_ms);
+        }
+    }
+
+    fn deinit(self: *SilentServer) void {
+        self.stop.store(true, .release);
+        self.thread.join();
+        self.server.deinit();
+        testing.allocator.destroy(self);
+    }
+};
+
+test "a backend that never answers fails fast instead of stalling the caller" {
+    var buffer: [64]u8 = undefined;
+    const path = try socketPath(&buffer);
+    defer std.fs.cwd().deleteFile(path) catch {};
+    const server = try SilentServer.start(path);
+    defer server.deinit();
+
+    var transport = socket_transport.SocketTransport{ .path = path, .timeout_ms = 100 };
+    const boundary = transport.transport();
+
+    const started_ns = std.time.nanoTimestamp();
+    try testing.expectError(error.WouldBlock, boundary.send(boundary.ptr, "{\"intervals\":[]}"));
+    const elapsed_ms = @divFloor(std.time.nanoTimestamp() - started_ns, std.time.ns_per_ms);
+
+    try testing.expect(elapsed_ms >= 100);
+    try testing.expect(elapsed_ms < 3_000);
 }
