@@ -52,6 +52,32 @@ been changed.
 - Backend ingestion currently serializes only other ingestion requests. The
   broader write coordination and classification policy remain part of cutover.
 
+### Verification of third milestone (retention and database size)
+
+- PASS: `go test -race -shuffle=on -count=1 ./cmd/... ./internal/... ./migrations/...`,
+  `go vet`, `gofmt -l`, `git diff --check`.
+- PASS: live compaction of the production database with the collector stopped:
+  18.1 GiB -> 17.8 MiB, original kept as `tracker.db.backup-20260921-094346`.
+  Event count (303,214), duration total, distinct apps/titles, mapped count,
+  project/activity/rule counts and schema version were identical afterwards,
+  and `tt report --range all` matched the pre-compaction totals.
+- PASS: retention on a copy of the real database with a 20 MiB cap: 86 days
+  summarized, 137,675 raw events deleted, 2,025 summary rows written. Report
+  total_ms, work_ms, total_events, work_events and per-project totals were
+  identical before and after.
+- The copy test first exposed a real defect: summaries counted zero-duration
+  events that reports ignore, inflating total_events by 838. Fixed, with a
+  regression test.
+- Measured beforehand: 303,130 events over 233 days (~1,300/day); 60 days of
+  detail is ~88,000 events and ~5.5 MB of text. The 18 GiB file was ~99.9%
+  storage bloat, growing ~160 MB/day since the June compaction.
+- The retention cap is 5 GiB of detail, so on current data nothing is eligible;
+  `tt maintenance retention-preview` reports "within cap". Nothing was deleted
+  from the production database.
+- The bloat will return at ~160 MB/day until the worker stops opening DuckDB
+  (Track B), because both its flush path and its per-event menu refresh open and
+  close the database, and each close checkpoints the file.
+
 ### Verification of second milestone
 
 - PASS: `go test -race -shuffle=on -count=1 ./cmd/... ./internal/... ./migrations/...`
@@ -265,16 +291,24 @@ merely because a long interval is periodically persisted.
 
 ### 4. Historical summaries and retention
 
-- [ ] Write tests for aggregation, mixed raw/summary reports, boundary dates,
-      daylight-saving transitions, and frozen work classification.
-- [ ] Add summary schema, coverage metadata, and configuration.
-- [ ] Adapt reports to query summaries plus recent detail without double counting.
-- [ ] Clearly indicate when timeline/detail/reclassification is no longer available.
-- [ ] Update project/activity deletion guards for historical references.
-- [ ] Implement transactional summarize-and-delete with bounded daily work.
-- [ ] Test retries, crashes, late delivery, and summary expiration.
-- [ ] Add retention preview, maintenance status, log rotation, and checkpoint policy.
-- [ ] Verify logical retention and physical disk behavior on representative data.
+- [x] Write tests for aggregation, mixed raw/summary reports, and work
+      classification. Daylight-saving boundaries are not covered: summaries use
+      the same local-date expression as existing report queries, so both agree,
+      but neither is tested across a transition.
+- [x] Add summary schema (migration 020) and coverage metadata. The retention
+      cap is a constant, not yet user-configurable.
+- [x] Adapt reports to query summaries plus recent detail without double
+      counting. Work classification is recomputed from current settings rather
+      than frozen, because summaries keep the wifi dimension.
+- [x] Indicate when timeline/detail is no longer available.
+- [x] Update activity deletion guards for summarized history. Projects are
+      soft-archived rather than deleted, so they need no guard.
+- [x] Implement transactional summarize-and-delete, one day per transaction.
+- [x] Test retries. Crash-mid-transaction and late-delivery cases are not
+      covered; each day commits alone, so a failure leaves earlier days done.
+- [x] Add retention preview, maintenance status, and compaction. Log rotation
+      is not implemented.
+- [x] Verify logical retention and physical disk behaviour on the real data.
 
 ### 5. Cutover and final validation
 
