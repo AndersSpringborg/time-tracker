@@ -402,3 +402,85 @@ func TestRunnerProjectsAddAndCurrentByProjectName(t *testing.T) {
 		t.Fatalf("expected current project output with name, got: %s", out.String())
 	}
 }
+
+type fakeMaintenance struct {
+	stats      domain.DatabaseStats
+	result     domain.CompactionResult
+	compactErr error
+	compacted  bool
+}
+
+func (f *fakeMaintenance) Stats(context.Context) (domain.DatabaseStats, error) {
+	return f.stats, nil
+}
+
+func (f *fakeMaintenance) Compact(context.Context) (domain.CompactionResult, error) {
+	if f.compactErr != nil {
+		return domain.CompactionResult{}, f.compactErr
+	}
+	f.compacted = true
+	return f.result, nil
+}
+
+func maintenanceRunner(maintainer *fakeMaintenance) *Runner {
+	return &Runner{App: &usecases.App{
+		Maintenance: usecases.NewMaintenanceUsecase(maintainer),
+		Help:        usecases.NewHelpUsecase(),
+	}}
+}
+
+func TestMaintenanceStatusShowsFileSizeDataSizeAndCap(t *testing.T) {
+	r := maintenanceRunner(&fakeMaintenance{stats: domain.DatabaseStats{
+		Path: "/tmp/tracker.db", FileBytes: 19 << 30, EstimatedDataBytes: 25 << 20,
+		Events: 303130, FirstDay: "2026-01-31", LastDay: "2026-09-21", Reachable: true,
+	}})
+
+	var out, errOut bytes.Buffer
+	if code := r.Run(context.Background(), []string{"maintenance", "status"}, &out, &errOut); code != 0 {
+		t.Fatalf("exit %d stderr=%s", code, errOut.String())
+	}
+	got := out.String()
+	for _, want := range []string{"19.0 GiB", "25.0 MiB", "303130", "2026-01-31", "within cap"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("status output missing %q:\n%s", want, got)
+		}
+	}
+	if !strings.Contains(got, "reclaim") {
+		t.Fatalf("a file far larger than its data should suggest compaction:\n%s", got)
+	}
+}
+
+func TestMaintenanceCompactReportsReclaimedSpaceAndBackup(t *testing.T) {
+	maintainer := &fakeMaintenance{result: domain.CompactionResult{
+		BackupPath: "/tmp/tracker.db.backup-20260921-090000",
+		BytesBefore: 19 << 30, BytesAfter: 30 << 20,
+		Rows: map[string]int64{"events": 303130}, SchemaVersion: 19,
+	}}
+	r := maintenanceRunner(maintainer)
+
+	var out, errOut bytes.Buffer
+	if code := r.Run(context.Background(), []string{"maintenance", "compact"}, &out, &errOut); code != 0 {
+		t.Fatalf("exit %d stderr=%s", code, errOut.String())
+	}
+	if !maintainer.compacted {
+		t.Fatal("compaction did not run")
+	}
+	got := out.String()
+	for _, want := range []string{"backup", "/tmp/tracker.db.backup-20260921-090000", "events=303130"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("compact output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestMaintenanceCompactExplainsThatTheCollectorMustBeStopped(t *testing.T) {
+	r := maintenanceRunner(&fakeMaintenance{compactErr: domain.ErrDatabaseBusy})
+
+	var out, errOut bytes.Buffer
+	if code := r.Run(context.Background(), []string{"maintenance", "compact"}, &out, &errOut); code == 0 {
+		t.Fatal("expected a non-zero exit for a busy database")
+	}
+	if !strings.Contains(errOut.String(), "tt stop") {
+		t.Fatalf("error should say how to free the database:\n%s", errOut.String())
+	}
+}

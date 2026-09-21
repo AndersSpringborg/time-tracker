@@ -72,11 +72,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func buildLocalApp() *usecases.App {
-	return &usecases.App{
+	app := &usecases.App{
 		Settings:  usecases.NewSettingsUsecase(configfs.New()),
 		Lifecycle: usecases.NewLifecycleUsecase(launchd.New()),
 		Help:      usecases.NewHelpUsecase(),
 	}
+	// Maintenance owns the database file rather than a connection, so it must
+	// not open DuckDB here: compaction needs the file to itself.
+	if dbPath, err := configfs.DBPath(); err == nil {
+		app.Maintenance = usecases.NewMaintenanceUsecase(duckdb.NewMaintainer(dbPath))
+	}
+	return app
 }
 
 func buildApp() (*usecases.App, *duckdb.Store, error) {

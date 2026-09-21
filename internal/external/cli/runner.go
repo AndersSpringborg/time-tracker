@@ -134,6 +134,8 @@ func (r *Runner) Run(ctx context.Context, args []string, stdout, stderr io.Write
 		return r.runSettings(ctx, args[1:], stdout, stderr)
 	case "review":
 		return r.runReview(ctx, args[1:], stdout, stderr)
+	case "maintenance":
+		return r.runMaintenance(ctx, args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command: %s\n\n", args[0])
 		r.printHelp(stderr)
@@ -1113,6 +1115,7 @@ Commands:
   reports        Show report summaries and WiFi work-hours
   settings       Manage configuration key-values
   review         Review/match/discard unmapped events
+  maintenance    Report database size and reclaim unused file space
   help           Show help (supports --format json|yaml)
   schema         Print JSON command schema for LLM/tools
 
@@ -1180,4 +1183,89 @@ func workerLogHasAccessibilityError() bool {
 		b = b[len(b)-64*1024:]
 	}
 	return strings.Contains(string(b), "Accessibility permission required")
+}
+
+func (r *Runner) runMaintenance(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: tt maintenance <status|compact>")
+		return 2
+	}
+	if r.App.Maintenance == nil {
+		fmt.Fprintln(stderr, "error: maintenance adapter not configured")
+		return 1
+	}
+	switch args[0] {
+	case "status":
+		stats, err := r.App.Maintenance.Status(ctx)
+		if err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "database: %s\n", stats.Path)
+		fmt.Fprintf(stdout, "file size: %s\n", formatBytes(stats.FileBytes))
+		if !stats.Reachable {
+			fmt.Fprintln(stdout, "data size: unknown (database in use; stop the collector with `tt stop` to measure it)")
+			return 0
+		}
+		fmt.Fprintf(stdout, "data size: %s (estimated)\n", formatBytes(stats.EstimatedDataBytes))
+		fmt.Fprintf(stdout, "events: %d (%s to %s)\n", stats.Events, stats.FirstDay, stats.LastDay)
+		if stats.OverCap() {
+			fmt.Fprintf(stdout, "retention: OVER CAP of %s; oldest detail is eligible for summarisation\n",
+				formatBytes(domain.RetentionCapBytes))
+		} else {
+			fmt.Fprintf(stdout, "retention: within cap of %s\n", formatBytes(domain.RetentionCapBytes))
+		}
+		// DuckDB never returns freed blocks to the filesystem, so a file much
+		// larger than its data is storage bloat, not history.
+		if stats.FileBytes > 4*stats.EstimatedDataBytes+16*1024*1024 {
+			fmt.Fprintf(stdout, "note: the file holds %s of data; `tt maintenance compact` would reclaim about %s\n",
+				formatBytes(stats.EstimatedDataBytes), formatBytes(stats.FileBytes-stats.EstimatedDataBytes))
+		}
+		return 0
+	case "compact":
+		result, err := r.App.Maintenance.Compact(ctx)
+		if err != nil {
+			if errors.Is(err, domain.ErrDatabaseBusy) {
+				fmt.Fprintf(stderr, "error: %v\nstop the collector first: `tt stop`, then retry\n", err)
+				return 1
+			}
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "compacted: %s -> %s (reclaimed %s)\n",
+			formatBytes(result.BytesBefore), formatBytes(result.BytesAfter), formatBytes(result.Reclaimed()))
+		fmt.Fprintf(stdout, "backup: %s\n", result.BackupPath)
+		fmt.Fprintf(stdout, "schema version: %d\n", result.SchemaVersion)
+		for _, table := range sortedTables(result.Rows) {
+			fmt.Fprintf(stdout, "  %s=%d\n", table, result.Rows[table])
+		}
+		return 0
+	default:
+		fmt.Fprintf(stderr, "unknown maintenance command: %s\n", args[0])
+		return 2
+	}
+}
+
+func sortedTables(rows map[string]int64) []string {
+	names := make([]string, 0, len(rows))
+	for name := range rows {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func formatBytes(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	value := float64(bytes)
+	units := []string{"KiB", "MiB", "GiB", "TiB"}
+	index := -1
+	for value >= unit && index < len(units)-1 {
+		value /= unit
+		index++
+	}
+	return fmt.Sprintf("%.1f %s", value, units[index])
 }

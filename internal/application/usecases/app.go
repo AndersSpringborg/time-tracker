@@ -1,12 +1,13 @@
 package usecases
 
 type App struct {
-	Rules     *RulesUsecase
-	Reports   *ReportsUsecase
-	Projects  *ProjectsUsecase
-	Settings  *SettingsUsecase
-	Lifecycle *LifecycleUsecase
-	Review    *ReviewUsecase
-	Help      *HelpUsecase
-	Tidsreg   *TidsregImportUsecase
+	Rules       *RulesUsecase
+	Reports     *ReportsUsecase
+	Projects    *ProjectsUsecase
+	Settings    *SettingsUsecase
+	Lifecycle   *LifecycleUsecase
+	Review      *ReviewUsecase
+	Help        *HelpUsecase
+	Tidsreg     *TidsregImportUsecase
+	Maintenance *MaintenanceUsecase
 }
