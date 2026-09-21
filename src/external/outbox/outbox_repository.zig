@@ -12,6 +12,9 @@ const Event = @import("domain_event").Event;
 const outbox = @import("outbox.zig");
 const delivery = @import("delivery.zig");
 
+/// Re-exported so the worker depends on one module for its event sink.
+pub const SocketTransport = @import("socket_transport.zig").SocketTransport;
+
 pub const Options = struct {
     outbox: outbox.Options = .{},
     /// How often to offer pending records to the backend.

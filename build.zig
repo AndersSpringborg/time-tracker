@@ -169,19 +169,24 @@ pub fn build(b: *std.Build) void {
     duckdb_event_repository.addIncludePath(duckdb_include_path);
     duckdb_event_repository.addLibraryPath(duckdb_lib_path);
 
+    const outbox_repository_module = b.createModule(.{
+        .root_source_file = b.path("src/external/outbox/outbox_repository.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "domain_event", .module = domain_event_module },
+        },
+    });
+
     const worker_module = b.createModule(.{
         .root_source_file = b.path("src/entrypoint/main.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "config", .module = config_module },
-            .{ .name = "migrations", .module = migrations_module },
             .{ .name = "shutdown", .module = shutdown_module },
             .{ .name = "tracker", .module = tracker_module },
-            .{ .name = "buffered_repository", .module = buffered_repo_module },
-            .{ .name = "duckdb_rule_repository", .module = duckdb_rule_repository },
-            .{ .name = "duckdb_hierarchy_repository", .module = duckdb_hierarchy_repository },
-            .{ .name = "duckdb_event_repository", .module = duckdb_event_repository },
+            .{ .name = "outbox_repository", .module = outbox_repository_module },
             .{ .name = "event_dto_mapper", .module = event_dto_mapper_module },
         },
     });

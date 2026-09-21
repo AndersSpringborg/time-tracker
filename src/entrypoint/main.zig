@@ -6,13 +6,12 @@ const config = @import("config");
 pub const std_options: std.Options = .{
     .log_level = .info,
 };
-const migrations = @import("migrations");
-const c = migrations.c;
-
 const shutdown = @import("shutdown");
 
 const Tracker = @import("tracker").Tracker;
-const BufferedRepository = @import("buffered_repository").BufferedRepository;
+const outbox_repository = @import("outbox_repository");
+const OutboxRepository = outbox_repository.OutboxRepository;
+const SocketTransport = outbox_repository.SocketTransport;
 const event_dto_mapper = @import("event_dto_mapper");
 
 extern fn check_accessibility() bool;
@@ -24,8 +23,7 @@ extern fn update_unmatched_count(count: i64) void;
 
 var global_tracker: ?*Tracker = null;
 var global_allocator: ?std.mem.Allocator = null;
-var global_db_path: ?[:0]const u8 = null;
-var global_daemon_db_path_buf: [640]u8 = undefined;
+var global_daemon_data_dir_buf: [640]u8 = undefined;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -103,47 +101,6 @@ fn getTimestampMs() i64 {
     return sec_ms + nsec_ms;
 }
 
-fn countUnmatchedEvents(conn: c.duckdb_connection) ?i64 {
-    var result: c.duckdb_result = undefined;
-    const sql =
-        \\SELECT COUNT(*)
-        \\FROM events
-        \\WHERE project_id IS NULL
-        \\  AND activity_id IS NULL
-        \\  AND manually_mapped = false
-    ;
-
-    if (c.duckdb_query(conn, sql, &result) == c.DuckDBError) {
-        c.duckdb_destroy_result(&result);
-        return null;
-    }
-    defer c.duckdb_destroy_result(&result);
-
-    if (c.duckdb_row_count(&result) == 0) return 0;
-    return c.duckdb_value_int64(&result, 0, 0);
-}
-
-fn refreshMenubarState() void {
-    const db_path = global_db_path orelse return;
-
-    var db: c.duckdb_database = undefined;
-    var conn: c.duckdb_connection = undefined;
-
-    if (c.duckdb_open(db_path.ptr, &db) == c.DuckDBError) {
-        return;
-    }
-    defer c.duckdb_close(&db);
-
-    if (c.duckdb_connect(db, &conn) == c.DuckDBError) {
-        return;
-    }
-    defer c.duckdb_disconnect(&conn);
-
-    clear_matched_info();
-    const unmatched = countUnmatchedEvents(conn) orelse return;
-    update_unmatched_count(unmatched);
-}
-
 fn onEvent(
     c_app: [*c]const u8,
     c_title: [*c]const u8,
@@ -202,33 +159,23 @@ fn onEvent(
     if (global_tracker) |tracker| {
         tracker.onEventWithWifi(event.app_name, event.window_title, event.wifi_ssid, event.timestamp_ms);
     }
-
-    refreshMenubarState();
 }
 
-fn getDaemonDbPath() ![:0]const u8 {
+fn getDaemonDataDir() ![]const u8 {
     const home = std.posix.getenv("HOME") orelse "/tmp";
     const xdg_data = std.posix.getenv("XDG_DATA_HOME");
 
-    var path_buf: [512]u8 = undefined;
-    var path_len: usize = 0;
+    const dir_path = if (xdg_data) |data_dir|
+        std.fmt.bufPrint(&global_daemon_data_dir_buf, "{s}/time-tracker", .{data_dir}) catch return error.PathTooLong
+    else
+        std.fmt.bufPrint(&global_daemon_data_dir_buf, "{s}/.local/share/time-tracker", .{home}) catch return error.PathTooLong;
 
-    if (xdg_data) |data_dir| {
-        path_len = (std.fmt.bufPrint(&path_buf, "{s}/time-tracker", .{data_dir}) catch return error.PathTooLong).len;
-    } else {
-        path_len = (std.fmt.bufPrint(&path_buf, "{s}/.local/share/time-tracker", .{home}) catch return error.PathTooLong).len;
-    }
-
-    const dir_path = path_buf[0..path_len];
     std.fs.makeDirAbsolute(dir_path) catch |err| {
         if (err != error.PathAlreadyExists) {
             std.debug.print("Warning: Could not create data directory: {s}\n", .{dir_path});
         }
     };
-
-    const full_path = std.fmt.bufPrint(&global_daemon_db_path_buf, "{s}/tracker.db", .{dir_path}) catch return error.PathTooLong;
-    global_daemon_db_path_buf[full_path.len] = 0;
-    return global_daemon_db_path_buf[0..full_path.len :0];
+    return dir_path;
 }
 
 fn runDaemon(allocator: std.mem.Allocator) void {
@@ -273,7 +220,7 @@ fn runDaemonWithDefaults(allocator: std.mem.Allocator) void {
 /// stop does not discard the pending window plus everything still buffered.
 const DaemonStopper = struct {
     tracker: *Tracker,
-    repo: *BufferedRepository,
+    repo: *OutboxRepository,
 
     fn stop(ctx: *anyopaque) void {
         const self: *DaemonStopper = @ptrCast(@alignCast(ctx));
@@ -292,35 +239,48 @@ fn watchForShutdown(stopper: *DaemonStopper) void {
 }
 
 fn runDaemonCore(allocator: std.mem.Allocator) void {
-    const db_path = getDaemonDbPath() catch |err| {
-        std.debug.print("Failed to determine database path: {}\n", .{err});
+    const data_dir = getDaemonDataDir() catch |err| {
+        std.debug.print("Failed to determine data directory: {}\n", .{err});
         return;
     };
-    global_db_path = db_path;
     global_allocator = allocator;
-    defer {
-        global_db_path = null;
-        global_allocator = null;
-    }
+    defer global_allocator = null;
 
-    std.debug.print("Database: {s}\n", .{db_path});
-
-    var repo = BufferedRepository.init(allocator, db_path);
-
-    repo.startFlushTimer() catch |err| {
-        std.debug.print("Failed to start flush timer: {}\n", .{err});
+    var outbox_path_buf: [640]u8 = undefined;
+    const outbox_path = std.fmt.bufPrint(&outbox_path_buf, "{s}/outbox.log", .{data_dir}) catch {
+        std.debug.print("Data directory path is too long: {s}\n", .{data_dir});
+        return;
+    };
+    var socket_path_buf: [640]u8 = undefined;
+    const socket_path = std.fmt.bufPrint(&socket_path_buf, "{s}/ipc.sock", .{data_dir}) catch {
+        std.debug.print("Data directory path is too long: {s}\n", .{data_dir});
         return;
     };
 
-    std.debug.print("Buffered repository initialized (flushes to database every 5 minutes).\n", .{});
+    std.debug.print("Outbox:  {s}\n", .{outbox_path});
+    std.debug.print("Backend: {s}\n", .{socket_path});
+
+    var transport = SocketTransport{ .path = socket_path };
+    var repo = OutboxRepository.init(allocator, outbox_path, transport.transport(), .{}) catch |err| {
+        std.debug.print("Failed to open the outbox: {}\n", .{err});
+        return;
+    };
+
+    repo.startDeliveryTimer() catch |err| {
+        std.debug.print("Failed to start delivery timer: {}\n", .{err});
+        repo.deinit();
+        return;
+    };
+
+    std.debug.print("Outbox initialized (delivers to the backend every 5 seconds).\n", .{});
 
     var tracker = Tracker.init(&repo);
     global_tracker = &tracker;
     defer global_tracker = null;
 
-    // Stop sampling and flush the trailing window before the repo flushes to DB.
     tracker.startSampleTimer() catch |err| {
         std.debug.print("Failed to start sample timer: {}\n", .{err});
+        repo.deinit();
         return;
     };
 
