@@ -7,12 +7,37 @@ been changed.
 
 ### In progress
 
-- Phase 2: reliable ingestion and exclusive ownership. The ingestion foundation
-  is complete; the client still writes directly to DuckDB until outbox and
-  service cutover are implemented together.
+- Track B, the client cutover. Items 1-3 (signal handling, the outbox cutover,
+  the cached menu snapshot) are done and verified against a real backend.
+  Items 4-6 (main-thread blocking, the tracker lock chain, periodic active
+  interval persistence and the `tt serve` LaunchAgent) are next. Nothing has
+  been installed yet: the running worker is still the old binary.
 
 ### Done
 
+- The worker flushes on SIGTERM and SIGINT. AppKit's terminate calls `exit()`
+  and launchd stops the worker with `kill TERM`, so `start_listening` never
+  returned and the deferred `tracker.deinit()`/`repo.deinit()` never ran: every
+  stop, reinstall and Quit discarded the pending interval plus up to 1,000
+  buffered events. Signal handlers now only set an atomic flag and a watcher
+  thread does the flushing, so nothing allocates or locks in handler context.
+- The worker no longer opens DuckDB at all. Both opens are gone: the per-flush
+  one in `buffered_repository.zig` and the per-event menu refresh in `main.zig`.
+  Intervals go to a durable outbox and are delivered to the backend's IPC
+  socket, which makes the backend the sole owner of the database and removes
+  the checkpoint-per-flush that regrew the file at ~160 MB/day.
+- Added `OutboxRepository`: a synced append on the capture path, a background
+  delivery loop with backoff, and a recording error surfaced when the outbox is
+  full rather than silently dropped activity. The socket transport now bounds
+  each operation, because the delivery thread holds the outbox while it sends.
+- Added `/v1/status` on the existing IPC socket, serving the unmatched review
+  count and what the focused window maps to, through the same rule matcher the
+  CLI uses. The worker polls it every five seconds on its own thread and the
+  menu renders the cached snapshot, so opening the menu reads memory.
+- Fixed a standing menu bug: `clear_matched_info()` ran on every event and
+  `update_matched_info` was never called, so Project and Activity permanently
+  read "(no match)". A failed refresh now keeps the last snapshot and marks it
+  stale instead of blanking the menu.
 - Completed static architecture review and documented target ownership,
   durability, retention, and acceptance criteria.
 - Legacy collector batches now return insert/transaction errors, roll back
@@ -51,6 +76,32 @@ been changed.
   isolation, retention/reporting, and live performance measurements.
 - Backend ingestion currently serializes only other ingestion requests. The
   broader write coordination and classification policy remain part of cutover.
+
+### Verification of Track B items 1-3
+
+- PASS: `/opt/homebrew/opt/zig@0.15/bin/zig build test --summary all` — 120
+  tests (90 before this work).
+- PASS: `go test -race -shuffle=on -count=1 ./cmd/... ./internal/... ./migrations/...`,
+  `go vet`, `gofmt -l`, `git diff --check`.
+- PASS: live SIGTERM on the built worker against a scratch data directory. The
+  pending interval (13.6 s) was flushed and present in the database afterwards;
+  before this change it was discarded.
+- PASS: live end-to-end cutover on a scratch data directory: the worker captured
+  a 16.1 s interval, appended it to `outbox.log`, delivered it over the Unix
+  socket to a running `tt serve`, which committed it to DuckDB. The outbox
+  returned to its 64-byte header, so the record was acknowledged and reclaimed.
+  The worker never opened the database: the only DuckDB lock holder was `serve`.
+- PASS: live `/v1/status` against a real socket with a seeded project, activity
+  and rule — `Ghostty` resolved to `Time Tracker > Development`, `Mail` to no
+  match, and an unknown JSON field was refused with 400.
+- PASS: the running worker polled `/v1/status` every five seconds with the real
+  focused window, verified against a logging listener bound at the socket path.
+- NOT COVERED YET: periodic delivery while the worker runs was verified only in
+  unit tests; the live run had no window switches to emit an interval before
+  shutdown. Menu latency has not been measured. Nothing has been installed.
+- `build.zig` is still not `zig fmt` clean at HEAD (pre-existing formatting of
+  the linker argument list); it was left as found. Every file touched here is
+  `zig fmt` clean.
 
 ### Verification of third milestone (retention and database size)
 
@@ -268,7 +319,7 @@ merely because a long interval is periodically persisted.
 - [x] Add and test the bounded v1 ingestion handler (socket binding pending).
 - [x] Add versioned local IPC with bounded requests and useful errors.
 - [x] Implement and test durable client outbox recovery and delivery retries.
-- [ ] Replace worker DuckDB writes and menu queries with delivery/status IPC.
+- [x] Replace worker DuckDB writes and menu queries with delivery/status IPC.
 - [ ] Route CLI database operations through the backend.
 - [ ] Make backend startup the sole migration owner; remove competing opens and
       ineffective database coordination attempts.
@@ -283,10 +334,11 @@ merely because a long interval is periodically persisted.
 - [ ] Move blocking AX/WiFi work off main, with timeouts and stale-result handling.
 - [ ] Remove storage-related lock dependencies from the callback path.
 - [ ] Persist active intervals periodically without overlap or duration inflation.
-- [ ] Publish immutable cached menu snapshots and refresh backend status
-      asynchronously.
+- [x] Publish immutable cached menu snapshots and refresh backend status
+      asynchronously. A stale mark is published; a pending-sync count and a
+      visible recording-error state are recorded but not yet shown in the menu.
 - [ ] Add visible pending-sync, stale-state, permission, and recording-error states.
-- [ ] Implement graceful shutdown while retaining crash-safe recovery.
+- [x] Implement graceful shutdown while retaining crash-safe recovery.
 - [ ] Measure responsiveness and resource use against the baseline.
 
 ### 4. Historical summaries and retention
