@@ -66,6 +66,12 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    const shutdown_module = b.createModule(.{
+        .root_source_file = b.path("src/entrypoint/shutdown.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const config_module = b.createModule(.{
         .root_source_file = b.path("src/entrypoint/config.zig"),
         .target = target,
@@ -170,6 +176,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "config", .module = config_module },
             .{ .name = "migrations", .module = migrations_module },
+            .{ .name = "shutdown", .module = shutdown_module },
             .{ .name = "tracker", .module = tracker_module },
             .{ .name = "buffered_repository", .module = buffered_repo_module },
             .{ .name = "duckdb_rule_repository", .module = duckdb_rule_repository },
@@ -338,6 +345,19 @@ pub fn build(b: *std.Build) void {
         optimize,
         &.{
             .{ .name = "domain_event", .module = domain_event_module },
+        },
+        duckdb_include_path,
+        duckdb_lib_path,
+        false,
+    );
+    add_zig_test(
+        b,
+        test_step,
+        b.path("src/entrypoint/shutdown_test.zig"),
+        target,
+        optimize,
+        &.{
+            .{ .name = "shutdown", .module = shutdown_module },
         },
         duckdb_include_path,
         duckdb_lib_path,

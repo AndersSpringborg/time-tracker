@@ -9,6 +9,8 @@ pub const std_options: std.Options = .{
 const migrations = @import("migrations");
 const c = migrations.c;
 
+const shutdown = @import("shutdown");
+
 const Tracker = @import("tracker").Tracker;
 const BufferedRepository = @import("buffered_repository").BufferedRepository;
 const event_dto_mapper = @import("event_dto_mapper");
@@ -267,6 +269,28 @@ fn runDaemonWithDefaults(allocator: std.mem.Allocator) void {
     runDaemonCore(allocator);
 }
 
+/// Flushes the trailing interval and the buffered events, in that order, so a
+/// stop does not discard the pending window plus everything still buffered.
+const DaemonStopper = struct {
+    tracker: *Tracker,
+    repo: *BufferedRepository,
+
+    fn stop(ctx: *anyopaque) void {
+        const self: *DaemonStopper = @ptrCast(@alignCast(ctx));
+        self.tracker.deinit();
+        self.repo.deinit();
+    }
+
+    fn hook(self: *DaemonStopper) shutdown.Hook {
+        return .{ .context = @ptrCast(self), .runFn = DaemonStopper.stop };
+    }
+};
+
+fn watchForShutdown(stopper: *DaemonStopper) void {
+    shutdown.global.waitAndRun(stopper.hook());
+    std.process.exit(0);
+}
+
 fn runDaemonCore(allocator: std.mem.Allocator) void {
     const db_path = getDaemonDbPath() catch |err| {
         std.debug.print("Failed to determine database path: {}\n", .{err});
@@ -282,7 +306,6 @@ fn runDaemonCore(allocator: std.mem.Allocator) void {
     std.debug.print("Database: {s}\n", .{db_path});
 
     var repo = BufferedRepository.init(allocator, db_path);
-    defer repo.deinit();
 
     repo.startFlushTimer() catch |err| {
         std.debug.print("Failed to start flush timer: {}\n", .{err});
@@ -300,7 +323,19 @@ fn runDaemonCore(allocator: std.mem.Allocator) void {
         std.debug.print("Failed to start sample timer: {}\n", .{err});
         return;
     };
-    defer tracker.deinit();
+
+    // AppKit's terminate calls exit() and launchd stops us with SIGTERM, so
+    // start_listening never returns and plain defers never run. Flush through
+    // the shutdown coordinator instead, from whichever path reaches it first.
+    var stopper = DaemonStopper{ .tracker = &tracker, .repo = &repo };
+    defer _ = shutdown.global.runOnce(stopper.hook());
+
+    shutdown.installHandlers();
+    const watcher = std.Thread.spawn(.{}, watchForShutdown, .{&stopper}) catch |err| {
+        std.debug.print("Failed to start shutdown watcher: {}\n", .{err});
+        return;
+    };
+    watcher.detach();
 
     std.debug.print("Window sampling initialized (logs the dominant window per 5s).\n", .{});
 
