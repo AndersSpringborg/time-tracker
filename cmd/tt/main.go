@@ -131,6 +131,8 @@ func runServer(ctx context.Context, addr string, app *usecases.App, store *duckd
 	if err != nil {
 		return err
 	}
+	go watchRetention(ctx, app)
+
 	ipcCtx, stopIPC := context.WithCancel(ctx)
 	defer stopIPC()
 	ipcDone := make(chan error, 1)
@@ -172,5 +174,31 @@ func shutdownBrowser(browser *http.Server) {
 	defer cancel()
 	if err := browser.Shutdown(shutdownCtx); err != nil {
 		log.Printf("browser shutdown: %v", err)
+	}
+}
+
+// watchRetention reports when stored detail passes the retention cap. It never
+// deletes on its own: summarisation is an explicit `tt maintenance
+// retention-run --yes`, so history is never lost unattended.
+func watchRetention(ctx context.Context, app *usecases.App) {
+	if app.Retention == nil {
+		return
+	}
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+	for {
+		plan, err := app.Retention.Plan(ctx)
+		switch {
+		case err != nil:
+			log.Printf("retention check failed: %v", err)
+		case len(plan.Days) > 0:
+			log.Printf("retention: %d bytes of detail exceeds the %d byte cap; %d day(s) eligible for `tt maintenance retention-run`",
+				plan.DataBytes, plan.CapBytes, len(plan.Days))
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 	}
 }

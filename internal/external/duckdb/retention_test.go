@@ -311,3 +311,41 @@ func TestReportsReadSummarizedDaysExactlyOnce(t *testing.T) {
 		t.Fatalf("summarized days: %v", days)
 	}
 }
+
+func TestSummarizingDoesNotInflateEventCounts(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	// Reports ignore zero-duration events, so summaries must not count them
+	// either, or totals stay right while counts drift upwards.
+	seedRetentionEvents(t, store, "2026-03-12", []retentionRow{
+		{app: "Editor", title: "a.go", wifi: "Office", durationMS: 60000},
+		{app: "Editor", title: "blip", wifi: "Office", durationMS: 0},
+	})
+	countable := int64(1)
+
+	if _, err := store.SummarizeDay(context.Background(), "2026-03-12"); err != nil {
+		t.Fatal(err)
+	}
+
+	contributions, err := store.ListSummaryContributions(context.Background(), "all", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events, totalMS int64
+	for _, contribution := range contributions {
+		events += contribution.EventCount
+		totalMS += contribution.TotalMS
+	}
+	if events != countable {
+		t.Fatalf("summarised event count %d; want %d, matching what reports count", events, countable)
+	}
+	if totalMS != 60000 {
+		t.Fatalf("summarised total %d; want 60000", totalMS)
+	}
+
+	// The zero-duration row is still removed with the rest of the day's detail.
+	remaining, _ := dayTotals(t, store, "2026-03-12")
+	if remaining != 0 {
+		t.Fatalf("%d events left behind", remaining)
+	}
+}

@@ -29,8 +29,10 @@ func (s *Store) SummarizeDay(ctx context.Context, day string) (domain.DaySummary
 	}
 	defer tx.Rollback()
 
+	// EventCount counts the rows removed; the summary rows themselves count
+	// only events reports would have counted.
 	if err := tx.QueryRowContext(ctx, `
-		SELECT count(*), coalesce(sum(duration_ms), 0) FROM events
+		SELECT count(*), coalesce(sum(duration_ms) FILTER (WHERE duration_ms > 0), 0) FROM events
 		WHERE strftime(to_timestamp(timestamp_ms / 1000), '%Y-%m-%d') = ?`, day).
 		Scan(&summary.EventCount, &summary.TotalMS); err != nil {
 		return summary, fmt.Errorf("measure %s: %w", day, err)
@@ -48,6 +50,9 @@ func (s *Store) SummarizeDay(ctx context.Context, day string) (domain.DaySummary
 		       sum(duration_ms), count(*)
 		FROM events
 		WHERE strftime(to_timestamp(timestamp_ms / 1000), '%Y-%m-%d') = ?
+		  -- Reports ignore events with no duration, so summaries must too,
+		  -- otherwise counts grow when a day is summarised.
+		  AND duration_ms > 0
 		GROUP BY 1, 2, 3, 4, 5
 		ON CONFLICT (day, project_id, activity_id, app_name, wifi_ssid) DO UPDATE SET
 		       total_ms = daily_summaries.total_ms + excluded.total_ms,

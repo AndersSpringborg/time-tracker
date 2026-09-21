@@ -73,6 +73,9 @@ type Report struct {
 	WorkEvents  int64        `json:"work_events" yaml:"work_events"`
 	ByProject   []SummaryRow `json:"by_project" yaml:"by_project"`
 	ByApp       []SummaryRow `json:"by_app" yaml:"by_app"`
+	// SummarizedDays are days whose totals are included but whose per-event
+	// detail retention has deleted.
+	SummarizedDays []string `json:"summarized_days,omitempty" yaml:"summarized_days,omitempty"`
 }
 
 func SchemaFromContract(in contracts.HelpCommandSchema) CommandSchema {
@@ -166,12 +169,13 @@ func ReportFromDomain(in domain.Report) Report {
 		return out
 	}
 	return Report{
-		Range:       in.Range,
-		TotalMS:     in.TotalMS,
-		WorkMS:      in.WorkMS,
-		TotalEvents: in.TotalEvents,
-		WorkEvents:  in.WorkEvents,
-		ByProject:   toSummary(in.ByProject),
-		ByApp:       toSummary(in.ByApp),
+		Range:          in.Range,
+		TotalMS:        in.TotalMS,
+		WorkMS:         in.WorkMS,
+		TotalEvents:    in.TotalEvents,
+		WorkEvents:     in.WorkEvents,
+		ByProject:      toSummary(in.ByProject),
+		ByApp:          toSummary(in.ByApp),
+		SummarizedDays: in.SummarizedDays,
 	}
 }

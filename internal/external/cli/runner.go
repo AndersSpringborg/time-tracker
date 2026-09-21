@@ -1245,7 +1245,18 @@ func (r *Runner) runMaintenance(ctx context.Context, args []string, stdout, stde
 			fmt.Fprintln(stderr, "error: retention adapter not configured")
 			return 1
 		}
-		plan, err := r.App.Retention.Plan(ctx)
+		retention := r.App.Retention
+		fs := flag.NewFlagSet("maintenance "+args[0], flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		capBytes := fs.Int64("cap-bytes", 0, "override the retention cap, in bytes")
+		yes := fs.Bool("yes", false, "confirm permanent deletion of detail")
+		if err := fs.Parse(args[1:]); err != nil {
+			return 2
+		}
+		if *capBytes > 0 {
+			retention = retention.WithCap(*capBytes)
+		}
+		plan, err := retention.Plan(ctx)
 		if err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
@@ -1254,11 +1265,11 @@ func (r *Runner) runMaintenance(ctx context.Context, args []string, stdout, stde
 		if args[0] == "retention-preview" || len(plan.Days) == 0 {
 			return 0
 		}
-		if !hasFlag(args[1:], "--yes") {
+		if !*yes {
 			fmt.Fprintln(stderr, "error: this deletes detail permanently; re-run with --yes to proceed")
 			return 1
 		}
-		outcome, err := r.App.Retention.Apply(ctx)
+		outcome, err := retention.Apply(ctx)
 		for _, summary := range outcome.Summarized {
 			fmt.Fprintf(stdout, "summarized %s: %d events, %s\n",
 				summary.Day, summary.EventCount, domain.FormatDuration(summary.TotalMS))
@@ -1272,15 +1283,6 @@ func (r *Runner) runMaintenance(ctx context.Context, args []string, stdout, stde
 		fmt.Fprintf(stderr, "unknown maintenance command: %s\n", args[0])
 		return 2
 	}
-}
-
-func hasFlag(args []string, flag string) bool {
-	for _, arg := range args {
-		if arg == flag {
-			return true
-		}
-	}
-	return false
 }
 
 // printRetentionPlan states what would be lost as well as what would be kept,
