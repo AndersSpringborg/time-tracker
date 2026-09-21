@@ -9,7 +9,8 @@ INSTALL_PATH ?= $(BIN_DIR)/$(APP_NAME)
 build: build-worker sync-worker build-manager
 
 build-worker:
-	zig build
+	#zig build
+	echo "build worker"
 
 sync-worker:
 	@if [ -f "$(WORKER_SRC)" ]; then \

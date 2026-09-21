@@ -1,5 +1,11 @@
 const std = @import("std");
 const config = @import("config");
+
+/// Keep stderr quiet in the daemon: suppress std.log.debug output, including
+/// the per-operation tracing emitted by the flatbufferz Builder on every event.
+pub const std_options: std.Options = .{
+    .log_level = .info,
+};
 const migrations = @import("migrations");
 const c = migrations.c;
 
@@ -189,7 +195,7 @@ fn onEvent(
     };
     const event = event_dto_mapper.toDomain(decoded);
 
-    std.debug.print("[Event] App: {s} | Title: {s} | WiFi: {s}\n", .{ event.app_name, event.window_title, event.wifi_ssid });
+    std.log.debug("[Event] App: {s} | Title: {s} | WiFi: {s}", .{ event.app_name, event.window_title, event.wifi_ssid });
 
     if (global_tracker) |tracker| {
         tracker.onEventWithWifi(event.app_name, event.window_title, event.wifi_ssid, event.timestamp_ms);
@@ -283,11 +289,20 @@ fn runDaemonCore(allocator: std.mem.Allocator) void {
         return;
     };
 
-    std.debug.print("Buffered repository initialized (flushes after 5s of inactivity).\n", .{});
+    std.debug.print("Buffered repository initialized (flushes to database every 5 minutes).\n", .{});
 
     var tracker = Tracker.init(&repo);
     global_tracker = &tracker;
     defer global_tracker = null;
+
+    // Stop sampling and flush the trailing window before the repo flushes to DB.
+    tracker.startSampleTimer() catch |err| {
+        std.debug.print("Failed to start sample timer: {}\n", .{err});
+        return;
+    };
+    defer tracker.deinit();
+
+    std.debug.print("Window sampling initialized (logs the dominant window per 5s).\n", .{});
 
     if (!check_accessibility()) {
         std.debug.print("\nWarning: Accessibility not yet granted. Will report error on start.\n", .{});
