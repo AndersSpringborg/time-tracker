@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -19,13 +20,25 @@ import (
 )
 
 func main() {
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+func run(args []string, stdout, stderr io.Writer) int {
 	ctx := context.Background()
-	app, store, err := buildApp()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+	app := buildLocalApp()
+	if len(args) > 0 {
+		switch args[0] {
+		case "rules", "projects", "reports", "report", "summary", "review":
+			var store *duckdb.Store
+			var err error
+			app, store, err = buildApp()
+			if err != nil {
+				fmt.Fprintf(stderr, "error: %v\n", err)
+				return 1
+			}
+			defer store.Close()
+		}
 	}
-	defer store.Close()
 
 	dbPath, _ := configfs.DBPath()
 	cfgPath, _ := configfs.ConfigPath()
@@ -33,16 +46,30 @@ func main() {
 	launchPath, _ := workerembed.LaunchAgentPath()
 
 	runner := &cli.Runner{
-		App:             app,
-		Serve:           func(addr string) error { return runServer(addr, app) },
+		App: app,
+		Serve: func(addr string) error {
+			serverApp, store, err := buildApp()
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+			return runServer(addr, serverApp)
+		},
 		DBPath:          dbPath,
 		ConfigPath:      cfgPath,
 		WorkerPath:      workerPath,
 		LaunchAgentPath: launchPath,
 	}
 
-	code := runner.Run(ctx, os.Args[1:], os.Stdout, os.Stderr)
-	os.Exit(code)
+	return runner.Run(ctx, args, stdout, stderr)
+}
+
+func buildLocalApp() *usecases.App {
+	return &usecases.App{
+		Settings:  usecases.NewSettingsUsecase(configfs.New()),
+		Lifecycle: usecases.NewLifecycleUsecase(launchd.New()),
+		Help:      usecases.NewHelpUsecase(),
+	}
 }
 
 func buildApp() (*usecases.App, *duckdb.Store, error) {
@@ -55,19 +82,12 @@ func buildApp() (*usecases.App, *duckdb.Store, error) {
 		return nil, nil, err
 	}
 
-	settingsRepo := configfs.New()
-	lifecycle := launchd.New()
-
-	app := &usecases.App{
-		Rules:     usecases.NewRulesUsecase(store),
-		Projects:  usecases.NewProjectsUsecase(store),
-		Settings:  usecases.NewSettingsUsecase(settingsRepo),
-		Lifecycle: usecases.NewLifecycleUsecase(lifecycle),
-		Review:    usecases.NewReviewUsecase(store),
-		Reports:   usecases.NewReportsUsecase(store, store, settingsRepo),
-		Help:      usecases.NewHelpUsecase(),
-		Tidsreg:   usecases.NewTidsregImportUsecase(tidsreg.New(), store),
-	}
+	app := buildLocalApp()
+	app.Rules = usecases.NewRulesUsecase(store)
+	app.Projects = usecases.NewProjectsUsecase(store)
+	app.Review = usecases.NewReviewUsecase(store)
+	app.Reports = usecases.NewReportsUsecase(store, store, configfs.New())
+	app.Tidsreg = usecases.NewTidsregImportUsecase(tidsreg.New(), store)
 	return app, store, nil
 }
 
