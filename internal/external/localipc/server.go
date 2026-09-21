@@ -21,6 +21,10 @@ const (
 	idleTimeout     = 60 * time.Second
 	shutdownTimeout = 5 * time.Second
 	maxHeaderBytes  = 8 * 1024
+	// Unix socket paths are limited by the kernel; macOS allows 104 bytes
+	// including the terminator, and the failure is otherwise reported only as
+	// "bind: invalid argument".
+	maxSocketPathLen = 103
 )
 
 // Serve runs handler on a user-restricted Unix socket until ctx is cancelled.
@@ -57,6 +61,10 @@ func Serve(ctx context.Context, socketPath string, handler http.Handler) error {
 }
 
 func listen(socketPath string) (net.Listener, error) {
+	if len(socketPath) > maxSocketPathLen {
+		return nil, fmt.Errorf("socket path %s is too long: %d bytes, limit %d",
+			socketPath, len(socketPath), maxSocketPathLen)
+	}
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
 		return nil, fmt.Errorf("create socket directory: %w", err)
 	}

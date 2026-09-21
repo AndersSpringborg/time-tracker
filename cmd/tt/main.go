@@ -8,6 +8,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"time-tracker/internal/application/usecases"
 	"time-tracker/internal/external/api"
@@ -25,7 +28,10 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
-	ctx := context.Background()
+	// Stopping the service must close the database and remove the IPC socket,
+	// so shutdown runs through a cancelled context instead of an abrupt exit.
+	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
 	app := buildLocalApp()
 	if len(args) > 0 {
 		switch args[0] {
@@ -111,9 +117,10 @@ func runServer(ctx context.Context, addr string, app *usecases.App, store *duckd
 	}()
 
 	log.Printf("api serve addr=%s ipc=%s", addr, socketPath)
+	browser := &http.Server{Addr: addr, Handler: srv.Routes()}
 	httpDone := make(chan error, 1)
 	go func() {
-		httpErr := http.ListenAndServe(addr, srv.Routes())
+		httpErr := browser.ListenAndServe()
 		if errors.Is(httpErr, http.ErrServerClosed) {
 			httpErr = nil
 		}
@@ -127,6 +134,21 @@ func runServer(ctx context.Context, addr string, app *usecases.App, store *duckd
 		stopIPC()
 		<-ipcDone
 	case err = <-ipcDone:
+		shutdownBrowser(browser)
+		<-httpDone
+	case <-ctx.Done():
+		shutdownBrowser(browser)
+		<-httpDone
+		stopIPC()
+		err = <-ipcDone
 	}
 	return err
+}
+
+func shutdownBrowser(browser *http.Server) {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := browser.Shutdown(shutdownCtx); err != nil {
+		log.Printf("browser shutdown: %v", err)
+	}
 }

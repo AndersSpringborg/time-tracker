@@ -157,3 +157,15 @@ func TestServeRejectsPathThatIsNotASocket(t *testing.T) {
 		t.Fatalf("existing file was removed: %v", statErr)
 	}
 }
+
+func TestServeExplainsAPathTooLongForAUnixSocket(t *testing.T) {
+	dir := t.TempDir()
+	long := filepath.Join(dir, strings.Repeat("d", 120), "ipc.sock")
+	err := Serve(context.Background(), long, http.NotFoundHandler())
+	if err == nil {
+		t.Fatal("expected an error for an over-long socket path")
+	}
+	if !strings.Contains(err.Error(), "too long") {
+		t.Fatalf("error %q does not explain the length limit", err)
+	}
+}
