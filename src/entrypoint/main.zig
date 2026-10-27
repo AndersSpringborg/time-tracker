@@ -1,23 +1,35 @@
 const std = @import("std");
 const config = @import("config");
-const migrations = @import("migrations");
-const c = migrations.c;
+
+/// Keep stderr quiet in the daemon: suppress std.log.debug output, including
+/// the per-operation tracing emitted by the flatbufferz Builder on every event.
+pub const std_options: std.Options = .{
+    .log_level = .info,
+};
+const shutdown = @import("shutdown");
+const menu_state = @import("menu_state");
+const status_client = @import("status_client");
 
 const Tracker = @import("tracker").Tracker;
-const BufferedRepository = @import("buffered_repository").BufferedRepository;
+const outbox_repository = @import("outbox_repository");
+const OutboxRepository = outbox_repository.OutboxRepository;
+const SocketTransport = outbox_repository.SocketTransport;
 const event_dto_mapper = @import("event_dto_mapper");
 
 extern fn check_accessibility() bool;
 extern fn start_listening(cb: *const fn ([*c]const u8, [*c]const u8, [*c]const u8, i32) callconv(.c) void) void;
 extern fn add_work_wifi(pattern: [*c]const u8) void;
 extern fn clear_work_wifis() void;
+extern fn update_matched_info(project: [*c]const u8, activity: [*c]const u8) void;
 extern fn clear_matched_info() void;
 extern fn update_unmatched_count(count: i64) void;
 
+const menu_refresh_interval_ms: u64 = 5_000;
+
+var global_menu: menu_state.MenuState = .{};
 var global_tracker: ?*Tracker = null;
 var global_allocator: ?std.mem.Allocator = null;
-var global_db_path: ?[:0]const u8 = null;
-var global_daemon_db_path_buf: [640]u8 = undefined;
+var global_daemon_data_dir_buf: [640]u8 = undefined;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -95,47 +107,6 @@ fn getTimestampMs() i64 {
     return sec_ms + nsec_ms;
 }
 
-fn countUnmatchedEvents(conn: c.duckdb_connection) ?i64 {
-    var result: c.duckdb_result = undefined;
-    const sql =
-        \\SELECT COUNT(*)
-        \\FROM events
-        \\WHERE project_id IS NULL
-        \\  AND activity_id IS NULL
-        \\  AND manually_mapped = false
-    ;
-
-    if (c.duckdb_query(conn, sql, &result) == c.DuckDBError) {
-        c.duckdb_destroy_result(&result);
-        return null;
-    }
-    defer c.duckdb_destroy_result(&result);
-
-    if (c.duckdb_row_count(&result) == 0) return 0;
-    return c.duckdb_value_int64(&result, 0, 0);
-}
-
-fn refreshMenubarState() void {
-    const db_path = global_db_path orelse return;
-
-    var db: c.duckdb_database = undefined;
-    var conn: c.duckdb_connection = undefined;
-
-    if (c.duckdb_open(db_path.ptr, &db) == c.DuckDBError) {
-        return;
-    }
-    defer c.duckdb_close(&db);
-
-    if (c.duckdb_connect(db, &conn) == c.DuckDBError) {
-        return;
-    }
-    defer c.duckdb_disconnect(&conn);
-
-    clear_matched_info();
-    const unmatched = countUnmatchedEvents(conn) orelse return;
-    update_unmatched_count(unmatched);
-}
-
 fn onEvent(
     c_app: [*c]const u8,
     c_title: [*c]const u8,
@@ -189,38 +160,32 @@ fn onEvent(
     };
     const event = event_dto_mapper.toDomain(decoded);
 
-    std.debug.print("[Event] App: {s} | Title: {s} | WiFi: {s}\n", .{ event.app_name, event.window_title, event.wifi_ssid });
+    std.log.debug("[Event] App: {s} | Title: {s} | WiFi: {s}", .{ event.app_name, event.window_title, event.wifi_ssid });
+
+    // Remember the window for the menu refresh. This is the AppKit main
+    // thread, so it copies and returns; the backend is asked on another thread.
+    global_menu.setWindow(event.app_name, event.window_title);
 
     if (global_tracker) |tracker| {
         tracker.onEventWithWifi(event.app_name, event.window_title, event.wifi_ssid, event.timestamp_ms);
     }
-
-    refreshMenubarState();
 }
 
-fn getDaemonDbPath() ![:0]const u8 {
+fn getDaemonDataDir() ![]const u8 {
     const home = std.posix.getenv("HOME") orelse "/tmp";
     const xdg_data = std.posix.getenv("XDG_DATA_HOME");
 
-    var path_buf: [512]u8 = undefined;
-    var path_len: usize = 0;
+    const dir_path = if (xdg_data) |data_dir|
+        std.fmt.bufPrint(&global_daemon_data_dir_buf, "{s}/time-tracker", .{data_dir}) catch return error.PathTooLong
+    else
+        std.fmt.bufPrint(&global_daemon_data_dir_buf, "{s}/.local/share/time-tracker", .{home}) catch return error.PathTooLong;
 
-    if (xdg_data) |data_dir| {
-        path_len = (std.fmt.bufPrint(&path_buf, "{s}/time-tracker", .{data_dir}) catch return error.PathTooLong).len;
-    } else {
-        path_len = (std.fmt.bufPrint(&path_buf, "{s}/.local/share/time-tracker", .{home}) catch return error.PathTooLong).len;
-    }
-
-    const dir_path = path_buf[0..path_len];
     std.fs.makeDirAbsolute(dir_path) catch |err| {
         if (err != error.PathAlreadyExists) {
             std.debug.print("Warning: Could not create data directory: {s}\n", .{dir_path});
         }
     };
-
-    const full_path = std.fmt.bufPrint(&global_daemon_db_path_buf, "{s}/tracker.db", .{dir_path}) catch return error.PathTooLong;
-    global_daemon_db_path_buf[full_path.len] = 0;
-    return global_daemon_db_path_buf[0..full_path.len :0];
+    return dir_path;
 }
 
 fn runDaemon(allocator: std.mem.Allocator) void {
@@ -261,33 +226,153 @@ fn runDaemonWithDefaults(allocator: std.mem.Allocator) void {
     runDaemonCore(allocator);
 }
 
-fn runDaemonCore(allocator: std.mem.Allocator) void {
-    const db_path = getDaemonDbPath() catch |err| {
-        std.debug.print("Failed to determine database path: {}\n", .{err});
-        return;
-    };
-    global_db_path = db_path;
-    global_allocator = allocator;
-    defer {
-        global_db_path = null;
-        global_allocator = null;
+/// Refreshes the menubar from the backend on its own thread, so opening the
+/// menu reads memory rather than waiting on IPC. A failed refresh leaves the
+/// last snapshot in the menu instead of blanking it.
+const MenuRefresher = struct {
+    client: status_client.StatusClient,
+    interval_ms: u64,
+    should_stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    const tick_ms: u64 = 250;
+
+    fn loop(self: *MenuRefresher) void {
+        var waited_ms: u64 = 0;
+        while (!self.should_stop.load(.acquire)) {
+            std.posix.nanosleep(0, tick_ms * std.time.ns_per_ms);
+            waited_ms += tick_ms;
+            if (waited_ms < self.interval_ms) continue;
+            waited_ms = 0;
+            self.refreshOnce();
+        }
     }
 
-    std.debug.print("Database: {s}\n", .{db_path});
+    fn refreshOnce(self: *MenuRefresher) void {
+        var window_text: menu_state.WindowText = undefined;
+        const window = global_menu.window(&window_text);
 
-    var repo = BufferedRepository.init(allocator, db_path);
-    defer repo.deinit();
+        const snapshot = self.client.fetch(window) catch {
+            global_menu.recordFailure();
+            return;
+        };
+        global_menu.recordSnapshot(snapshot);
+        renderSnapshot(snapshot);
+    }
+};
 
-    repo.startFlushTimer() catch |err| {
-        std.debug.print("Failed to start flush timer: {}\n", .{err});
+/// Push the snapshot into the AppKit menu. Both names are copied into
+/// null-terminated buffers because Swift reads them as C strings.
+fn renderSnapshot(snapshot: status_client.Snapshot) void {
+    update_unmatched_count(snapshot.unmatched_count);
+
+    if (!snapshot.matched) {
+        clear_matched_info();
+        return;
+    }
+    var project_buf: [status_client.max_name_len + 1]u8 = undefined;
+    var activity_buf: [status_client.max_name_len + 1]u8 = undefined;
+    const project = snapshot.project();
+    const activity = snapshot.activity();
+    @memcpy(project_buf[0..project.len], project);
+    project_buf[project.len] = 0;
+    @memcpy(activity_buf[0..activity.len], activity);
+    activity_buf[activity.len] = 0;
+    update_matched_info(&project_buf, &activity_buf);
+}
+
+/// Flushes the trailing interval and the buffered events, in that order, so a
+/// stop does not discard the pending window plus everything still buffered.
+const DaemonStopper = struct {
+    tracker: *Tracker,
+    repo: *OutboxRepository,
+
+    fn stop(ctx: *anyopaque) void {
+        const self: *DaemonStopper = @ptrCast(@alignCast(ctx));
+        self.tracker.deinit();
+        self.repo.deinit();
+    }
+
+    fn hook(self: *DaemonStopper) shutdown.Hook {
+        return .{ .context = @ptrCast(self), .runFn = DaemonStopper.stop };
+    }
+};
+
+fn watchForShutdown(stopper: *DaemonStopper) void {
+    shutdown.global.waitAndRun(stopper.hook());
+    std.process.exit(0);
+}
+
+fn runDaemonCore(allocator: std.mem.Allocator) void {
+    const data_dir = getDaemonDataDir() catch |err| {
+        std.debug.print("Failed to determine data directory: {}\n", .{err});
+        return;
+    };
+    global_allocator = allocator;
+    defer global_allocator = null;
+
+    var outbox_path_buf: [640]u8 = undefined;
+    const outbox_path = std.fmt.bufPrint(&outbox_path_buf, "{s}/outbox.log", .{data_dir}) catch {
+        std.debug.print("Data directory path is too long: {s}\n", .{data_dir});
+        return;
+    };
+    var socket_path_buf: [640]u8 = undefined;
+    const socket_path = std.fmt.bufPrint(&socket_path_buf, "{s}/ipc.sock", .{data_dir}) catch {
+        std.debug.print("Data directory path is too long: {s}\n", .{data_dir});
         return;
     };
 
-    std.debug.print("Buffered repository initialized (flushes after 5s of inactivity).\n", .{});
+    std.debug.print("Outbox:  {s}\n", .{outbox_path});
+    std.debug.print("Backend: {s}\n", .{socket_path});
+
+    var transport = SocketTransport{ .path = socket_path };
+    var repo = OutboxRepository.init(allocator, outbox_path, transport.transport(), .{}) catch |err| {
+        std.debug.print("Failed to open the outbox: {}\n", .{err});
+        return;
+    };
+
+    repo.startDeliveryTimer() catch |err| {
+        std.debug.print("Failed to start delivery timer: {}\n", .{err});
+        repo.deinit();
+        return;
+    };
+
+    std.debug.print("Outbox initialized (delivers to the backend every 5 seconds).\n", .{});
 
     var tracker = Tracker.init(&repo);
     global_tracker = &tracker;
     defer global_tracker = null;
+
+    tracker.startSampleTimer() catch |err| {
+        std.debug.print("Failed to start sample timer: {}\n", .{err});
+        repo.deinit();
+        return;
+    };
+
+    // AppKit's terminate calls exit() and launchd stops us with SIGTERM, so
+    // start_listening never returns and plain defers never run. Flush through
+    // the shutdown coordinator instead, from whichever path reaches it first.
+    var stopper = DaemonStopper{ .tracker = &tracker, .repo = &repo };
+    defer _ = shutdown.global.runOnce(stopper.hook());
+
+    shutdown.installHandlers();
+    const watcher = std.Thread.spawn(.{}, watchForShutdown, .{&stopper}) catch |err| {
+        std.debug.print("Failed to start shutdown watcher: {}\n", .{err});
+        return;
+    };
+    watcher.detach();
+
+    var refresher = MenuRefresher{
+        .client = .{ .path = socket_path },
+        .interval_ms = menu_refresh_interval_ms,
+    };
+    const refresher_thread = std.Thread.spawn(.{}, MenuRefresher.loop, .{&refresher}) catch |err| {
+        std.debug.print("Failed to start menu refresher: {}\n", .{err});
+        return;
+    };
+    refresher_thread.detach();
+
+    std.debug.print("Window sampling initialized (logs the dominant window per 5s).\n", .{});
+    std.debug.print("Menubar refreshes from the backend every 5 seconds.\n", .{});
 
     if (!check_accessibility()) {
         std.debug.print("\nWarning: Accessibility not yet granted. Will report error on start.\n", .{});

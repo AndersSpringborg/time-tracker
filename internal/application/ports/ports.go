@@ -28,6 +28,13 @@ type ReportsRepository interface {
 	ListReportEvents(ctx context.Context, rangeKey string, date *string) ([]domain.Event, error)
 }
 
+// SummaryRepository serves days whose detail has been summarised away. A day
+// is served either from events or from summaries, never from both.
+type SummaryRepository interface {
+	ListSummaryContributions(ctx context.Context, rangeKey string, date *string) ([]domain.SummaryContribution, error)
+	SummarizedDays(ctx context.Context, rangeKey string, date *string) ([]string, error)
+}
+
 type ProjectsRepository interface {
 	ListActiveProjects(ctx context.Context) ([]domain.Project, error)
 	ListAllProjects(ctx context.Context) ([]domain.Project, error)
@@ -77,4 +84,14 @@ type TidsregGateway interface {
 type TidsregImportRepository interface {
 	UpsertImportedProject(ctx context.Context, in domain.ImportedProjectUpsert) (domain.ImportedProjectUpsertResult, error)
 	SyncImportedActivities(ctx context.Context, projectID int64, activities []domain.ImportedActivityUpsert) (domain.ImportedActivitySyncResult, error)
+}
+
+// StatusRepository serves the worker's menubar snapshot. Every method is a
+// read, so refreshing the menu never competes with ingestion for writes.
+type StatusRepository interface {
+	UnmappedEventCount(ctx context.Context) (int64, error)
+	ListRules(ctx context.Context) ([]domain.Rule, error)
+	CurrentProjectID(ctx context.Context) (*int64, error)
+	ListAllProjects(ctx context.Context) ([]domain.Project, error)
+	ListAllActivities(ctx context.Context) ([]domain.Activity, error)
 }

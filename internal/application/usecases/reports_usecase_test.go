@@ -319,3 +319,133 @@ func TestReportsUsecaseTimelineBuildsDayView(t *testing.T) {
 		t.Fatalf("expected empty wifi to render as (none), got %q", timeline.Events[2].WifiSSID)
 	}
 }
+
+// fakeSummaryRepo serves days whose detail has been summarised away.
+type fakeSummaryRepo struct {
+	contributions []domain.SummaryContribution
+	days          []string
+}
+
+func (f fakeSummaryRepo) ListSummaryContributions(context.Context, string, *string) ([]domain.SummaryContribution, error) {
+	return f.contributions, nil
+}
+
+func (f fakeSummaryRepo) SummarizedDays(context.Context, string, *string) ([]string, error) {
+	return f.days, nil
+}
+
+func summaryFixture() fakeSummaryRepo {
+	return fakeSummaryRepo{
+		days: []string{"2026-01-05"},
+		contributions: []domain.SummaryContribution{
+			{Day: "2026-01-05", ProjectTitle: "Cerivo", ActivityName: "development",
+				AppName: "Editor", WifiSSID: "Office", TotalMS: 60000, EventCount: 4},
+			{Day: "2026-01-05", AppName: "Browser", WifiSSID: "Home", TotalMS: 30000, EventCount: 2},
+		},
+	}
+}
+
+func TestReportCountsSummarizedDaysOnceAlongsideRecentDetail(t *testing.T) {
+	repo := &fakeReportsRepo{events: []domain.Event{
+		{TimestampMS: 1, DurationMS: 5000, AppName: "Editor", WindowTitle: "a.go", WifiSSID: "Office"},
+	}}
+	uc := NewReportsUsecase(repo, fakeReportsProjectsRepo{}, fakeReportsSettingsRepo{}).
+		WithSummaries(summaryFixture())
+
+	res, err := uc.Report(context.Background(), contracts.ReportsBuildRequest{RangeKey: "all"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := res.Report
+	if report.TotalMS != 5000+60000+30000 {
+		t.Fatalf("total_ms=%d; want raw detail plus summaries, each counted once", report.TotalMS)
+	}
+	if report.TotalEvents != 1+4+2 {
+		t.Fatalf("total_events=%d; want 7", report.TotalEvents)
+	}
+	var cerivo int64
+	for _, row := range report.ByProject {
+		if row.Name == "Cerivo" {
+			cerivo = row.TotalMS
+		}
+	}
+	if cerivo != 60000 {
+		t.Fatalf("summarised project time missing from by_project: %+v", report.ByProject)
+	}
+}
+
+func TestReportClassifiesSummarizedTimeWithCurrentWifiSettings(t *testing.T) {
+	repo := &fakeReportsRepo{}
+	uc := NewReportsUsecase(repo, fakeReportsProjectsRepo{}, fakeReportsSettingsRepoWithCfg{
+		cfg: domain.Settings{WorkWifis: []string{"Office"}},
+	}).WithSummaries(summaryFixture())
+
+	res, err := uc.Report(context.Background(), contracts.ReportsBuildRequest{RangeKey: "all"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Office time is work, Home time is not — decided now, not frozen when the
+	// day was summarised.
+	if res.Report.WorkMS != 60000 {
+		t.Fatalf("work_ms=%d; want only the Office summary row", res.Report.WorkMS)
+	}
+	if res.Report.TotalMS != 90000 {
+		t.Fatalf("total_ms=%d; want both summary rows", res.Report.TotalMS)
+	}
+}
+
+func TestReportSaysWhichDaysNoLongerHaveDetail(t *testing.T) {
+	repo := &fakeReportsRepo{events: []domain.Event{
+		{TimestampMS: 1, DurationMS: 5000, AppName: "Editor", WindowTitle: "a.go"},
+	}}
+	uc := NewReportsUsecase(repo, fakeReportsProjectsRepo{}, fakeReportsSettingsRepo{}).
+		WithSummaries(summaryFixture())
+
+	res, err := uc.Report(context.Background(), contracts.ReportsBuildRequest{RangeKey: "all"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Report.SummarizedDays) != 1 || res.Report.SummarizedDays[0] != "2026-01-05" {
+		t.Fatalf("summarised days not reported: %+v", res.Report.SummarizedDays)
+	}
+	// Window detail cannot be reconstructed, so summarised time must not appear
+	// there pretending to be a window.
+	for _, row := range res.Report.ByWindow {
+		if row.TotalMS == 60000 || row.TotalMS == 30000 {
+			t.Fatalf("summarised time leaked into by_window: %+v", res.Report.ByWindow)
+		}
+	}
+}
+
+func TestTimelineMarksASummarizedDayAsHavingNoDetail(t *testing.T) {
+	repo := &fakeReportsRepo{}
+	uc := NewReportsUsecase(repo, fakeReportsProjectsRepo{}, fakeReportsSettingsRepo{}).
+		WithSummaries(summaryFixture())
+	date := "2026-01-05"
+
+	res, err := uc.Timeline(context.Background(), contracts.ReportsTimelineRequest{Date: &date})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Timeline.DetailUnavailable {
+		t.Fatal("a summarised day must say its detail is gone rather than look empty")
+	}
+	if len(res.Timeline.Events) != 0 {
+		t.Fatal("no events may be synthesised for a summarised day")
+	}
+}
+
+func TestReportWithoutSummariesBehavesAsBefore(t *testing.T) {
+	repo := &fakeReportsRepo{events: []domain.Event{
+		{TimestampMS: 1, DurationMS: 5000, AppName: "Editor", WindowTitle: "a.go"},
+	}}
+	uc := NewReportsUsecase(repo, fakeReportsProjectsRepo{}, fakeReportsSettingsRepo{})
+
+	res, err := uc.Report(context.Background(), contracts.ReportsBuildRequest{RangeKey: "all"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Report.TotalMS != 5000 || len(res.Report.SummarizedDays) != 0 {
+		t.Fatalf("unexpected report: %+v", res.Report)
+	}
+}

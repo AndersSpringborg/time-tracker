@@ -66,6 +66,27 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    const shutdown_module = b.createModule(.{
+        .root_source_file = b.path("src/entrypoint/shutdown.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const status_client_module = b.createModule(.{
+        .root_source_file = b.path("src/external/outbox/status_client.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const menu_state_module = b.createModule(.{
+        .root_source_file = b.path("src/entrypoint/menu_state.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "status_client", .module = status_client_module },
+        },
+    });
+
     const config_module = b.createModule(.{
         .root_source_file = b.path("src/entrypoint/config.zig"),
         .target = target,
@@ -112,25 +133,13 @@ pub fn build(b: *std.Build) void {
     migrations_module.addIncludePath(duckdb_include_path);
     migrations_module.addLibraryPath(duckdb_lib_path);
 
-    const legacy_repo_module = b.createModule(.{
-        .root_source_file = b.path("src/external/duckdb/legacy_repository.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "domain_event", .module = domain_event_module },
-            .{ .name = "migrations", .module = migrations_module },
-        },
-    });
-    legacy_repo_module.addIncludePath(duckdb_include_path);
-    legacy_repo_module.addLibraryPath(duckdb_lib_path);
-
     const buffered_repo_module = b.createModule(.{
         .root_source_file = b.path("src/external/duckdb/buffered_repository.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "domain_event", .module = domain_event_module },
-            .{ .name = "legacy_repository", .module = legacy_repo_module },
+            .{ .name = "migrations", .module = migrations_module },
         },
     });
     buffered_repo_module.addIncludePath(duckdb_include_path);
@@ -175,18 +184,26 @@ pub fn build(b: *std.Build) void {
     duckdb_event_repository.addIncludePath(duckdb_include_path);
     duckdb_event_repository.addLibraryPath(duckdb_lib_path);
 
+    const outbox_repository_module = b.createModule(.{
+        .root_source_file = b.path("src/external/outbox/outbox_repository.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "domain_event", .module = domain_event_module },
+        },
+    });
+
     const worker_module = b.createModule(.{
         .root_source_file = b.path("src/entrypoint/main.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "config", .module = config_module },
-            .{ .name = "migrations", .module = migrations_module },
+            .{ .name = "shutdown", .module = shutdown_module },
+            .{ .name = "menu_state", .module = menu_state_module },
+            .{ .name = "status_client", .module = status_client_module },
             .{ .name = "tracker", .module = tracker_module },
-            .{ .name = "buffered_repository", .module = buffered_repo_module },
-            .{ .name = "duckdb_rule_repository", .module = duckdb_rule_repository },
-            .{ .name = "duckdb_hierarchy_repository", .module = duckdb_hierarchy_repository },
-            .{ .name = "duckdb_event_repository", .module = duckdb_event_repository },
+            .{ .name = "outbox_repository", .module = outbox_repository_module },
             .{ .name = "event_dto_mapper", .module = event_dto_mapper_module },
         },
     });
@@ -316,6 +333,96 @@ pub fn build(b: *std.Build) void {
         }
     }.run;
 
+    add_zig_test(
+        b,
+        test_step,
+        b.path("src/external/outbox/outbox_test.zig"),
+        target,
+        optimize,
+        &.{
+            .{ .name = "domain_event", .module = domain_event_module },
+        },
+        duckdb_include_path,
+        duckdb_lib_path,
+        false,
+    );
+    add_zig_test(
+        b,
+        test_step,
+        b.path("src/external/outbox/status_client_test.zig"),
+        target,
+        optimize,
+        &.{},
+        duckdb_include_path,
+        duckdb_lib_path,
+        false,
+    );
+    add_zig_test(
+        b,
+        test_step,
+        b.path("src/external/outbox/outbox_repository_test.zig"),
+        target,
+        optimize,
+        &.{
+            .{ .name = "domain_event", .module = domain_event_module },
+        },
+        duckdb_include_path,
+        duckdb_lib_path,
+        false,
+    );
+    add_zig_test(
+        b,
+        test_step,
+        b.path("src/external/outbox/delivery_test.zig"),
+        target,
+        optimize,
+        &.{
+            .{ .name = "domain_event", .module = domain_event_module },
+        },
+        duckdb_include_path,
+        duckdb_lib_path,
+        false,
+    );
+    add_zig_test(
+        b,
+        test_step,
+        b.path("src/external/outbox/socket_transport_test.zig"),
+        target,
+        optimize,
+        &.{
+            .{ .name = "domain_event", .module = domain_event_module },
+        },
+        duckdb_include_path,
+        duckdb_lib_path,
+        false,
+    );
+    add_zig_test(
+        b,
+        test_step,
+        b.path("src/entrypoint/menu_state_test.zig"),
+        target,
+        optimize,
+        &.{
+            .{ .name = "menu_state", .module = menu_state_module },
+            .{ .name = "status_client", .module = status_client_module },
+        },
+        duckdb_include_path,
+        duckdb_lib_path,
+        false,
+    );
+    add_zig_test(
+        b,
+        test_step,
+        b.path("src/entrypoint/shutdown_test.zig"),
+        target,
+        optimize,
+        &.{
+            .{ .name = "shutdown", .module = shutdown_module },
+        },
+        duckdb_include_path,
+        duckdb_lib_path,
+        false,
+    );
     add_zig_test(b, test_step, b.path("src/domain/glob_test.zig"), target, optimize, &.{}, duckdb_include_path, duckdb_lib_path, false);
     add_zig_test(b, test_step, b.path("src/domain/event_test.zig"), target, optimize, &.{}, duckdb_include_path, duckdb_lib_path, false);
     add_zig_test(
@@ -364,26 +471,12 @@ pub fn build(b: *std.Build) void {
     add_zig_test(
         b,
         test_step,
-        b.path("src/external/duckdb/legacy_repository_test.zig"),
-        target,
-        optimize,
-        &.{
-            .{ .name = "domain_event", .module = domain_event_module },
-            .{ .name = "migrations", .module = migrations_module },
-        },
-        duckdb_include_path,
-        duckdb_lib_path,
-        true,
-    );
-    add_zig_test(
-        b,
-        test_step,
         b.path("src/external/duckdb/buffered_repository_test.zig"),
         target,
         optimize,
         &.{
             .{ .name = "domain_event", .module = domain_event_module },
-            .{ .name = "legacy_repository", .module = legacy_repo_module },
+            .{ .name = "migrations", .module = migrations_module },
         },
         duckdb_include_path,
         duckdb_lib_path,

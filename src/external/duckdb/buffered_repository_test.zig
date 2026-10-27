@@ -1,6 +1,7 @@
 const std = @import("std");
 const BufferedEvent = @import("buffered_repository.zig").BufferedEvent;
 const BufferedRepository = @import("buffered_repository.zig").BufferedRepository;
+const DuckDbRepository = @import("buffered_repository.zig").DuckDbRepository;
 const Event = @import("domain_event").Event;
 
 test "BufferedEvent.fromEvent copies data correctly" {
@@ -111,4 +112,119 @@ test "BufferedRepository preserves buffered events on flush failure" {
 
     try std.testing.expectEqual(@as(usize, 1), repo.bufferedCount());
     try std.testing.expectEqual(before_capacity, repo.bufferedCapacity());
+}
+
+test "DuckDbRepository.init creates events table" {
+    var repo = try DuckDbRepository.initInMemory();
+    defer repo.deinit();
+
+    // If we got here without error, the table was created
+    try std.testing.expect(true);
+}
+
+test "DuckDbRepository.save inserts event into database" {
+    var repo = try DuckDbRepository.initInMemory();
+    defer repo.deinit();
+
+    const event = Event{
+        .timestamp_ms = 1000,
+        .app_name = "Safari",
+        .window_title = "Home",
+    };
+    try repo.save(event, 2500);
+
+    const count = try repo.countEvents();
+    try std.testing.expectEqual(@as(usize, 1), count);
+}
+
+test "DuckDbRepository.save stores correct data" {
+    var repo = try DuckDbRepository.initInMemory();
+    defer repo.deinit();
+
+    const event = Event{
+        .timestamp_ms = 1000,
+        .app_name = "Safari",
+        .window_title = "GitHub - Projects",
+    };
+    try repo.save(event, 5000);
+
+    const last = try repo.getLastEvent();
+    try std.testing.expectEqualStrings("Safari", last.app_name);
+    try std.testing.expectEqualStrings("GitHub - Projects", last.window_title);
+    try std.testing.expectEqual(@as(i64, 5000), last.duration_ms);
+}
+
+test "DuckDbRepository.save handles multiple events" {
+    var repo = try DuckDbRepository.initInMemory();
+    defer repo.deinit();
+
+    try repo.save(Event{ .timestamp_ms = 1000, .app_name = "Safari", .window_title = "Home" }, 1000);
+    try repo.save(Event{ .timestamp_ms = 2000, .app_name = "Terminal", .window_title = "~" }, 3000);
+    try repo.save(Event{ .timestamp_ms = 5000, .app_name = "VSCode", .window_title = "main.zig" }, 2000);
+
+    const count = try repo.countEvents();
+    try std.testing.expectEqual(@as(usize, 3), count);
+}
+
+fn executeSql(repo: *DuckDbRepository, sql: [*:0]const u8) !void {
+    const c = @import("migrations").c;
+    var result: c.duckdb_result = undefined;
+    defer c.duckdb_destroy_result(&result);
+    try std.testing.expect(c.duckdb_query(repo.conn, sql, &result) == c.DuckDBSuccess);
+}
+
+test "BufferedRepository rolls back partial flush and retries the entire batch without duplicates" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const directory = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(directory);
+    const path = try std.fmt.allocPrintSentinel(std.testing.allocator, "{s}/events.db", .{directory}, 0);
+    defer std.testing.allocator.free(path);
+
+    {
+        var db = try DuckDbRepository.init(path.ptr);
+        defer db.deinit();
+        try executeSql(&db, "CREATE UNIQUE INDEX unique_timestamp ON events(timestamp_ms)");
+    }
+    var buffer = BufferedRepository.init(std.testing.allocator, path);
+    defer buffer.deinit();
+    buffer.save(testEvent(1), 1000);
+    buffer.save(testEvent(1), 2000);
+    buffer.flushToDb();
+
+    try std.testing.expectEqual(@as(usize, 2), buffer.bufferedCount());
+    {
+        var db = try DuckDbRepository.init(path.ptr);
+        defer db.deinit();
+        try std.testing.expectEqual(@as(usize, 0), try db.countEvents());
+        try executeSql(&db, "DROP INDEX unique_timestamp");
+    }
+
+    buffer.flushToDb();
+    try std.testing.expectEqual(@as(usize, 0), buffer.bufferedCount());
+    buffer.flushToDb();
+    var db = try DuckDbRepository.init(path.ptr);
+    defer db.deinit();
+    try std.testing.expectEqual(@as(usize, 2), try db.countEvents());
+    try std.testing.expectEqual(@as(i64, 2000), (try db.getLastEvent()).duration_ms);
+}
+
+test "DuckDbRepository reports begin and commit failures" {
+    var db = try DuckDbRepository.initInMemory();
+    defer db.deinit();
+    try std.testing.expectError(error.CommitFailed, db.commitTransaction());
+    try db.beginTransaction();
+    try std.testing.expectError(error.BeginFailed, db.beginTransaction());
+    try db.rollbackTransaction();
+    try db.beginTransaction();
+    try db.save(testEvent(1), 1000);
+    try db.commitTransaction();
+    try std.testing.expectEqual(@as(usize, 1), try db.countEvents());
+}
+
+test "DuckDbRepository reports insert preparation failure" {
+    var db = try DuckDbRepository.initInMemory();
+    defer db.deinit();
+    try executeSql(&db, "DROP TABLE events");
+    try std.testing.expectError(error.InsertFailed, db.save(testEvent(1), 1000));
 }

@@ -34,64 +34,70 @@ const MockRepository = struct {
     }
 };
 
-test "Tracker.onEvent does not save on first event (no previous to record)" {
+test "Tracker does not save until the dominant window changes" {
     var repo = MockRepository{};
     var tracker = Tracker.init(&repo);
 
-    tracker.onEvent("Safari", "Home", 1000);
+    tracker.onEvent("Safari", "Home", 0);
+    tracker.flushBucket(5000); // dominant Safari becomes pending, nothing emitted yet
 
     try std.testing.expectEqual(@as(u32, 0), repo.save_count);
 }
 
-test "Tracker.onEvent saves previous event with duration on second event" {
+test "Tracker coalesces the same dominant window across buckets and emits on change" {
     var repo = MockRepository{};
     var tracker = Tracker.init(&repo);
 
-    tracker.onEvent("Safari", "Home", 1000);
-    tracker.onEvent("Terminal", "~", 3500);
+    tracker.onEvent("Safari", "Home", 0);
+    tracker.flushBucket(5000); // pending = Safari, start = 0
+    tracker.flushBucket(10000); // still Safari -> coalesced, no emit
+    tracker.onEvent("Terminal", "~", 10000);
+    tracker.flushBucket(15000); // dominant now Terminal -> emit Safari
 
     try std.testing.expectEqual(@as(u32, 1), repo.save_count);
-    try std.testing.expectEqual(@as(i64, 2500), repo.last_saved_duration.?);
     try std.testing.expectEqualStrings("Safari", repo.getLastAppName());
     try std.testing.expectEqualStrings("Home", repo.getLastTitle());
+    try std.testing.expectEqual(@as(i64, 0), repo.last_saved_timestamp);
+    try std.testing.expectEqual(@as(i64, 10000), repo.last_saved_duration.?);
 }
 
-test "Tracker.onEvent ignores duplicate events (same app and title)" {
+test "Tracker picks the window with the most accumulated time in a bucket" {
     var repo = MockRepository{};
     var tracker = Tracker.init(&repo);
 
-    tracker.onEvent("Safari", "Home", 1000);
-    tracker.onEvent("Safari", "Home", 2000); // duplicate, should be ignored
-    tracker.onEvent("Safari", "Home", 3000); // duplicate, should be ignored
-    tracker.onEvent("Terminal", "~", 4000); // new event, should trigger save
+    tracker.onEvent("Safari", "Home", 0);
+    tracker.onEvent("Terminal", "~", 1000); // Safari got 1000ms
+    tracker.onEvent("Safari", "Home", 4500); // Terminal got 3500ms
+    tracker.flushBucket(5000); // Safari +500 = 1500ms, Terminal 3500ms -> Terminal wins
+    tracker.finish(5000); // flush trailing pending at the bucket boundary
 
     try std.testing.expectEqual(@as(u32, 1), repo.save_count);
-    // Duration should be from first Safari event (1000) to Terminal (4000) = 3000ms
-    try std.testing.expectEqual(@as(i64, 3000), repo.last_saved_duration.?);
-}
-
-test "Tracker.onEvent tracks multiple transitions correctly" {
-    var repo = MockRepository{};
-    var tracker = Tracker.init(&repo);
-
-    tracker.onEvent("Safari", "Home", 1000);
-    tracker.onEvent("Terminal", "~", 2000); // saves Safari, duration 1000
-    tracker.onEvent("VSCode", "main.zig", 5000); // saves Terminal, duration 3000
-
-    try std.testing.expectEqual(@as(u32, 2), repo.save_count);
     try std.testing.expectEqualStrings("Terminal", repo.getLastAppName());
-    try std.testing.expectEqual(@as(i64, 3000), repo.last_saved_duration.?);
 }
 
-test "Tracker.onEvent handles title change within same app" {
+test "Tracker.finish emits the trailing pending window" {
     var repo = MockRepository{};
     var tracker = Tracker.init(&repo);
 
-    tracker.onEvent("Safari", "Home", 1000);
-    tracker.onEvent("Safari", "Settings", 2000); // different title, should save
+    tracker.onEvent("VSCode", "main.zig", 0);
+    tracker.flushBucket(5000); // pending = VSCode, start = 0
+    tracker.finish(8000);
+
+    try std.testing.expectEqual(@as(u32, 1), repo.save_count);
+    try std.testing.expectEqualStrings("VSCode", repo.getLastAppName());
+    try std.testing.expectEqual(@as(i64, 8000), repo.last_saved_duration.?);
+}
+
+test "Tracker filters a quick blip that never dominates a bucket" {
+    var repo = MockRepository{};
+    var tracker = Tracker.init(&repo);
+
+    tracker.onEvent("Safari", "Home", 0);
+    tracker.onEvent("Terminal", "~", 500); // brief blip
+    tracker.onEvent("Safari", "Home", 1000); // back to Safari
+    tracker.flushBucket(5000); // Safari 4500ms vs Terminal 500ms -> Safari dominant
+    tracker.finish(10000);
 
     try std.testing.expectEqual(@as(u32, 1), repo.save_count);
     try std.testing.expectEqualStrings("Safari", repo.getLastAppName());
-    try std.testing.expectEqualStrings("Home", repo.getLastTitle());
-    try std.testing.expectEqual(@as(i64, 1000), repo.last_saved_duration.?);
 }

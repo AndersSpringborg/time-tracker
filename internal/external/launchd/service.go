@@ -17,11 +17,37 @@ import (
 	"time-tracker/internal/external/workerembed"
 )
 
-const label = "com.time-tracker.worker"
+const (
+	label        = "com.time-tracker.worker"
+	backendLabel = "com.time-tracker.backend"
+)
 
-type Service struct{}
+// Service drives one per-user LaunchAgent. The collector and the backend are
+// separate agents so that restarting either leaves the other running: capture
+// must survive a backend restart, and the backend must survive a re-grant of
+// the collector's Accessibility permission.
+type Service struct{ label string }
 
-func New() *Service { return &Service{} }
+func New() *Service { return &Service{label: label} }
+
+// NewBackend drives the agent that keeps `tracker serve` listening, so the
+// collector always has somewhere to deliver its outbox.
+func NewBackend() *Service { return &Service{label: backendLabel} }
+
+func (s *Service) serviceTarget() (string, error) {
+	domainTarget, err := launchdDomainTarget()
+	if err != nil {
+		return "", err
+	}
+	return domainTarget + "/" + s.labelOrDefault(), nil
+}
+
+func (s *Service) labelOrDefault() string {
+	if s.label == "" {
+		return label
+	}
+	return s.label
+}
 
 func (s *Service) Install(context.Context) error {
 	if err := rejectSudoInstall(); err != nil {
@@ -107,7 +133,7 @@ func (s *Service) Stop(context.Context) error {
 
 func (s *Service) Status(context.Context) domain.LifecycleStatus {
 	st := domain.LifecycleStatus{State: "not_loaded"}
-	serviceTarget, err := launchdServiceTarget()
+	serviceTarget, err := s.serviceTarget()
 	if err != nil {
 		st.Raw = err.Error()
 		return st
@@ -188,7 +214,7 @@ func (s *Service) bootstrapWithRetry(plistPath string, attempts int, delay time.
 }
 
 func (s *Service) bootout() error {
-	serviceTarget, err := launchdServiceTarget()
+	serviceTarget, err := s.serviceTarget()
 	if err != nil {
 		return err
 	}
@@ -204,7 +230,7 @@ func (s *Service) bootout() error {
 }
 
 func (s *Service) kickstart() error {
-	serviceTarget, err := launchdServiceTarget()
+	serviceTarget, err := s.serviceTarget()
 	if err != nil {
 		return err
 	}
@@ -235,7 +261,7 @@ func (s *Service) kickstartWithRetry(attempts int, delay time.Duration) error {
 }
 
 func (s *Service) kill() error {
-	serviceTarget, err := launchdServiceTarget()
+	serviceTarget, err := s.serviceTarget()
 	if err != nil {
 		return err
 	}
@@ -262,14 +288,6 @@ func isLaunchctlServiceNotFoundMessage(msg string) bool {
 	return strings.Contains(msg, "could not find service") ||
 		strings.Contains(msg, "service not found") ||
 		strings.Contains(msg, "no such process")
-}
-
-func launchdServiceTarget() (string, error) {
-	domainTarget, err := launchdDomainTarget()
-	if err != nil {
-		return "", err
-	}
-	return domainTarget + "/" + label, nil
 }
 
 func launchdDomainTarget() (string, error) {

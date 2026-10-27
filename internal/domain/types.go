@@ -223,6 +223,10 @@ type Report struct {
 	ByWifi         []SummaryRow
 	ByWindow       []SummaryRow
 	MappedDetails  []ProjectDetail
+	// SummarizedDays lists days in range whose detail was deleted by
+	// retention. Their totals are included; their window detail, timeline and
+	// per-event review are not recoverable.
+	SummarizedDays []string
 }
 
 type Dashboard struct {
@@ -269,6 +273,9 @@ type TimelineDay struct {
 	VisibleEvents int64
 	TotalMS       int64
 	VisibleMS     int64
+	// DetailUnavailable marks a day whose events were summarised and deleted:
+	// its totals live in the report, but it has no timeline to draw.
+	DetailUnavailable bool
 }
 
 type LifecycleStatus struct {
@@ -276,4 +283,20 @@ type LifecycleStatus struct {
 	PID    string
 	State  string
 	Raw    string
+}
+
+// WindowSnapshot is the focused window the worker is reporting on, used to
+// answer "what would this map to" without writing anything.
+type WindowSnapshot struct {
+	AppName     string
+	WindowTitle string
+}
+
+// WorkerStatus is the cached state the menubar renders. The worker refreshes
+// it in the background, so opening the menu never waits on the backend.
+type WorkerStatus struct {
+	UnmatchedCount int64
+	Matched        bool
+	Project        string
+	Activity       string
 }
