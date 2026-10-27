@@ -36,6 +36,11 @@ pub const default_max_batch = 64;
 const base_retry_ms: u64 = 1000;
 const max_retry_ms: u64 = 60 * 1000;
 const max_body_len = default_max_batch * (outbox.max_text_len * 3 + 256) + 128;
+/// The backend permanently rejects a batch holding an interval outside
+/// (0, one day]. Such intervals come from sleep spans and wall-clock steps; sent
+/// as recorded, one would be resent forever and block every record behind it.
+const min_duration_ms: i64 = 1;
+const max_duration_ms: i64 = std.time.ms_per_day;
 
 pub const Delivery = struct {
     outbox: *outbox.Outbox,
@@ -100,7 +105,7 @@ fn encodeBatch(
         try stringify.write(.{
             .sequence = record.sequence,
             .timestamp_ms = record.timestamp_ms,
-            .duration_ms = record.duration_ms,
+            .duration_ms = std.math.clamp(record.duration_ms, min_duration_ms, max_duration_ms),
             .app_name = record.app_name,
             .window_title = record.window_title,
             .wifi_ssid = record.wifi_ssid,

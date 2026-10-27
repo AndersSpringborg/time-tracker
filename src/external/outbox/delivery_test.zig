@@ -259,3 +259,24 @@ test "window titles with quotes and newlines survive delivery" {
     defer parsed.deinit();
     try testing.expectEqualStrings("say \"hi\"\n\tand quit\\", parsed.value.intervals[0].window_title);
 }
+
+test "intervals outside the ingestion bounds are clamped so they cannot block delivery" {
+    const allocator = testing.allocator;
+    var fixture = try Fixture.init(allocator);
+    defer fixture.deinit(allocator);
+    // A laptop asleep for 34 hours, then a wall-clock step backwards.
+    _ = try fixture.box.append(event(1000, "Finder"), 34 * std.time.ms_per_hour);
+    _ = try fixture.box.append(event(2000, "Browser"), -44);
+    _ = try fixture.box.append(event(3000, "Editor"), 5000);
+
+    var backend = FakeBackend{ .allocator = allocator, .responses = &.{.{ .accepted = 3 }} };
+    defer backend.deinit();
+    var sender = delivery.Delivery{ .outbox = &fixture.box, .transport = backend.transport() };
+    try testing.expectEqual(delivery.Outcome.delivered, try sender.deliverPending());
+
+    const parsed = try parseBatch(allocator, backend.lastBody());
+    defer parsed.deinit();
+    try testing.expectEqual(@as(i64, std.time.ms_per_day), parsed.value.intervals[0].duration_ms);
+    try testing.expectEqual(@as(i64, 1), parsed.value.intervals[1].duration_ms);
+    try testing.expectEqual(@as(i64, 5000), parsed.value.intervals[2].duration_ms);
+}
