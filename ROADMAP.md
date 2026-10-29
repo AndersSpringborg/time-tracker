@@ -29,12 +29,10 @@ This project is **not** a greenfield Rust/Tauri app. The current production arch
 
 ### 2.2 In the old plan but currently missing
 
-- [ ] Polling-based 1s watcher loop (current implementation is event-driven callbacks).
+
 - [ ] AFK/idle detection based on keyboard/mouse inactivity threshold.
-- [ ] Private/incognito redaction at capture time.
-- [ ] Collector-side app blacklist (capture-time exclusion).
 - [ ] Time-proximity clustering auto-inference ("sandwiched" events).
-- [ ] Bayesian/ML classifier for project/activity prediction.
+- [ ] Bayesian/ML classifier for project/activity prediction. (should move to release 2)
 - [ ] Git branch scraper integration.
 - [ ] Calendar meeting inference integration.
 

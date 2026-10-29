@@ -138,3 +138,6 @@ zig-out/
 build/
 build-*/
 docgen_tmp/
+
+# Zig package cache
+zig-pkg/
